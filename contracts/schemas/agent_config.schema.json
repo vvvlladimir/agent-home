@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent_config.schema.json",
+  "title": "AgentConfig",
+  "description": "One room agent. Stored as YAML in /data/agents/<id>.yaml, editable in the GUI, exportable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "room"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$"},
+    "name": {"type": "string", "minLength": 1, "maxLength": 64},
+    "room": {"type": "string", "description": "HA area_id this agent is scoped to."},
+    "enabled": {"type": "boolean", "default": true},
+    "mode": {
+      "enum": ["shadow", "live"],
+      "default": "shadow",
+      "description": "shadow = log what it would do, never actuate. live only takes effect when the global mode is live too."
+    },
+    "entities": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
+      "maxItems": 25,
+      "default": [],
+      "description": "Entity allowlist. Empty = every entity of the room, capped at max_entities."
+    },
+    "max_entities": {"type": "integer", "minimum": 1, "maximum": 25, "default": 20},
+    "tier_overrides": {
+      "type": "object",
+      "description": "entity_id or glob -> tier. Can only make an entity stricter than the global policy; T3 can never be lowered here.",
+      "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
+      "default": {}
+    },
+    "system_prompt": {
+      "type": "string",
+      "maxLength": 4000,
+      "default": "",
+      "description": "Template. Variables: {{agent_name}} {{room_name}} {{entity_table}} {{tiers}}. Empty = built-in default."
+    },
+    "model_profile": {"type": "string", "default": "", "description": "Profile name from /data/profiles; empty = the active default profile."},
+    "wake_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "events": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["entities"],
+            "properties": {
+              "entities": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "entity ids or globs, must be inside the allowlist"},
+              "to": {"type": "array", "items": {"type": "string"}, "description": "only wake when the new state is one of these"},
+              "from": {"type": "array", "items": {"type": "string"}},
+              "min_change": {"type": "number", "minimum": 0, "description": "numeric states: minimum absolute change since the last wake"},
+              "above": {"type": "number"},
+              "below": {"type": "number"},
+              "debounce_s": {"type": "number", "minimum": 0, "default": 5, "description": "wait this long for the state to settle; later events restart the timer"},
+              "cooldown_s": {"type": "number", "minimum": 0, "default": 120, "description": "minimum time between two wakes caused by this rule"},
+              "priority": {"enum": ["alarm", "routine"], "default": "routine"},
+              "reason": {"type": "string", "maxLength": 120}
+            }
+          }
+        },
+        "cron": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["expr"],
+            "properties": {
+              "expr": {"type": "string", "description": "5-field cron expression, add-on local time"},
+              "reason": {"type": "string", "maxLength": 120}
+            }
+          }
+        },
+        "max_wakes_per_hour": {"type": "integer", "minimum": 0, "maximum": 120, "default": 12}
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "max_steps": {"type": "integer", "minimum": 1, "maximum": 12, "default": 5},
+        "max_output_tokens": {"type": "integer", "minimum": 32, "maximum": 4096, "default": 512},
+        "context_budget_tokens": {"type": "integer", "minimum": 512, "maximum": 16384, "default": 3000},
+        "timeout_s": {"type": "number", "minimum": 5, "maximum": 300, "default": 45},
+        "max_actions_per_minute": {"type": "integer", "minimum": 0, "maximum": 60, "default": 6}
+      }
+    },
+    "memory_cap_chars": {"type": "integer", "minimum": 0, "maximum": 4000, "default": 1200}
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "policy.schema.json",
+  "title": "Policy",
+  "description": "Global tier policy, stored in /data/policy.yaml. Deny by default: a domain that is not listed is T3. Tiers: T0 free, T1 act+notify, T2 act only after human approval, T3 never.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "domain_tiers": {
+      "type": "object",
+      "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
+      "default": {
+        "light": "T0", "media_player": "T0", "fan": "T0",
+        "scene": "T1", "input_boolean": "T1", "humidifier": "T1", "vacuum": "T1",
+        "climate": "T2", "cover": "T2", "switch": "T2", "water_heater": "T2", "input_number": "T2",
+        "lock": "T3", "alarm_control_panel": "T3", "valve": "T3", "siren": "T3", "camera": "T3"
+      }
+    },
+    "entity_tiers": {
+      "type": "object",
+      "description": "entity_id or glob -> tier; overrides the domain tier in either direction, except that reaching below T3 for a T3 domain additionally needs t3_whitelist.",
+      "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
+      "default": {"cover.*garage*": "T3"}
+    },
+    "t3_whitelist": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
+      "default": [],
+      "description": "Exact entity ids the owner explicitly allows despite a T3 domain. They become T2 (approval required), never lower. No globs."
+    },
+    "allowed_services": {
+      "type": "object",
+      "description": "domain -> services agents may call. A service that is not listed is denied whatever the tier.",
+      "additionalProperties": {"type": "array", "items": {"type": "string"}},
+      "default": {
+        "light": ["turn_on", "turn_off", "toggle"],
+        "media_player": ["turn_on", "turn_off", "media_play", "media_pause", "media_stop", "volume_set", "volume_mute"],
+        "fan": ["turn_on", "turn_off", "set_percentage"],
+        "scene": ["turn_on"],
+        "input_boolean": ["turn_on", "turn_off"],
+        "humidifier": ["turn_on", "turn_off", "set_humidity"],
+        "vacuum": ["start", "return_to_base"],
+        "climate": ["set_temperature", "set_hvac_mode", "turn_on", "turn_off"],
+        "cover": ["open_cover", "close_cover", "set_cover_position", "stop_cover"],
+        "switch": ["turn_on", "turn_off"],
+        "water_heater": ["set_temperature"],
+        "input_number": ["set_value"]
+      }
+    },
+    "rate_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "default": {},
+      "properties": {
+        "per_entity_per_minute": {"type": "integer", "minimum": 1, "default": 4},
+        "global_per_minute": {"type": "integer", "minimum": 1, "default": 30}
+      }
+    },
+    "approval_ttl_s": {"type": "integer", "minimum": 30, "default": 900, "description": "A pending T2 approval expires after this long."}
+  }
+}

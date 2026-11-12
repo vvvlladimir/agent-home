@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.agent-logs/
+.data/
+*.egg-info/
+node_modules/

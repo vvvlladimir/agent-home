@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent House</title>
+  <!-- Ingress rule: every URL in this GUI is relative. No leading slash, no CDN. -->
+  <link rel="stylesheet" href="static/app.css">
+  <script defer src="static/app.js"></script>
+  <script defer src="static/vendor/alpine.min.js"></script>
+</head>
+<body x-data="app()" x-init="init()" :class="{ 'killed': status?.kill_switch?.engaged }">
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">◈</span>
+    <span>Agent House</span>
+  </div>
+  <div class="topbar-right">
+    <span class="pill" :class="status?.mode === 'live' ? 'pill-warn' : 'pill-ok'"
+          x-text="status ? (status.mode === 'live' ? t('Live') : t('Shadow')) : '…'"
+          :title="t('Global mode')"></span>
+    <span class="pill" :class="haPill().cls" x-text="haPill().text" :title="status?.ha?.last_error || ''"></span>
+    <button class="btn btn-kill" :class="{ 'engaged': status?.kill_switch?.engaged }" @click="toggleKill()"
+            :disabled="!status"
+            x-text="status?.kill_switch?.engaged ? t('Kill switch engaged — release') : t('Kill switch')"></button>
+    <button class="btn btn-ghost icon" @click="toggleTheme()" :title="t('Toggle dark / light')" aria-label="theme">◐</button>
+  </div>
+</header>
+
+<nav class="nav" aria-label="Main">
+  <template x-for="p in pages" :key="p.id">
+    <a :href="'#' + p.id" :class="{ active: page === p.id }">
+      <span x-text="t(p.label)"></span>
+      <span class="badge" x-show="p.milestone" x-text="p.milestone"></span>
+    </a>
+  </template>
+</nav>
+
+<main>
+  <div class="banner banner-error" x-show="apiError" x-cloak>
+    <strong x-text="t('Backend not reachable')"></strong> — <span x-text="apiError"></span>
+  </div>
+  <div class="banner banner-warn" x-show="status?.kill_switch?.engaged" x-cloak>
+    <strong x-text="t('Kill switch engaged')"></strong> —
+    <span x-text="t('no service call and no deploy leaves the add-on.')"></span>
+    <span class="muted" x-text="status?.kill_switch?.reason || ''"></span>
+  </div>
+
+  <!-- ───────────────────────── Dashboard ───────────────────────── -->
+  <section x-show="page === 'dashboard'" x-cloak>
+    <h1 x-text="t('Dashboard')"></h1>
+    <div class="grid cards">
+      <article class="card">
+        <h2 x-text="t('Mode')"></h2>
+        <div class="seg">
+          <button :class="{ on: status?.mode === 'shadow' }" @click="setMode('shadow')" x-text="t('Shadow')"></button>
+          <button :class="{ on: status?.mode === 'live', warn: true }" @click="setMode('live')" x-text="t('Live')"></button>
+        </div>
+        <p class="muted" x-show="status?.mode === 'shadow'"
+           x-text="t('Agents observe and log what they would do. Nothing is actuated.')"></p>
+        <p class="muted" x-show="status?.mode === 'live'"
+           x-text="t('Agents whose own mode is live may actuate, within their tiers.')"></p>
+      </article>
+
+      <article class="card">
+        <h2>Home Assistant</h2>
+        <dl class="kv">
+          <dt x-text="t('Connection')"></dt>
+          <dd><span class="dot" :class="status?.ha?.connected ? 'ok' : 'bad'"></span>
+              <span x-text="status?.ha?.state || '…'"></span>
+              <span class="muted" x-show="status?.ha?.via_supervisor" x-text="'· ' + t('via Supervisor')"></span></dd>
+          <dt x-text="t('Version')"></dt><dd x-text="status?.ha?.version || '—'"></dd>
+          <dt x-text="t('Areas / entities')"></dt>
+          <dd x-text="(status?.ha?.areas ?? '—') + ' / ' + (status?.ha?.entities ?? '—')"></dd>
+          <dt x-text="t('Last event')"></dt><dd x-text="ago(status?.ha?.last_event_ts)"></dd>
+          <dt x-text="t('Reconnects')"></dt><dd x-text="status?.ha?.reconnects ?? '—'"></dd>
+        </dl>
+        <p class="error" x-show="status?.ha?.last_error" x-text="status?.ha?.last_error"></p>
+      </article>
+
+      <article class="card">
+        <h2 x-text="t('Jetson')"></h2>
+        <dl class="kv">
+          <dt x-text="t('Inference server')"></dt>
+          <dd><span class="dot" :class="llmDot()"></span> <span x-text="status?.llm?.state || '…'"></span></dd>
+          <dt x-text="t('Model')"></dt>
+          <dd x-text="status?.llm?.model || status?.llm?.active_profile || '—'"></dd>
+          <dt x-text="t('Metrics endpoint')"></dt>
+          <dd><span class="dot" :class="status?.jetson?.reachable ? 'ok' : (status?.jetson?.configured ? 'bad' : 'off')"></span>
+              <span x-text="status?.jetson?.reachable ? t('reachable') : (status?.jetson?.configured ? t('unreachable') : t('not configured'))"></span></dd>
+          <template x-if="status?.jetson?.metrics">
+            <div class="kv-rows">
+              <dt x-text="t('Memory')"></dt>
+              <dd>
+                <span x-text="mb(status.jetson.metrics.ram_used_mb) + ' / ' + mb(status.jetson.metrics.ram_total_mb)"></span>
+                <span class="bar"><span :style="'width:' + pct(status.jetson.metrics.ram_used_mb, status.jetson.metrics.ram_total_mb) + '%'"></span></span>
+              </dd>
+              <dt x-text="t('Temperature')"></dt>
+              <dd><span x-text="deg(status.jetson.metrics.temp_tj_c ?? status.jetson.metrics.temp_cpu_c)"></span>
+                  <span class="pill pill-warn" x-show="status.jetson.metrics.throttled" x-text="t('throttling')"></span></dd>
+              <dt x-text="t('Power mode')"></dt><dd x-text="status.jetson.metrics.power_mode || '—'"></dd>
+            </div>
+          </template>
+        </dl>
+        <p class="error" x-show="status?.llm?.last_error" x-text="status?.llm?.last_error"></p>
+      </article>
+
+      <article class="card">
+        <h2 x-text="t('Orchestrator')"></h2>
+        <dl class="kv">
+          <dt x-text="t('Provider')"></dt>
+          <dd><span x-text="status?.orchestrator?.provider || '…'"></span>
+              <span class="muted" x-text="'→ ' + (status?.orchestrator?.effective || '…')"></span></dd>
+          <dt x-text="t('Model')"></dt><dd x-text="status?.orchestrator?.model || '—'"></dd>
+          <dt x-text="t('Budget today')"></dt>
+          <dd x-text="'€' + (status?.orchestrator?.budget?.spent_today_eur ?? 0).toFixed(2) + ' / €' + (status?.orchestrator?.budget?.daily_limit_eur ?? 0).toFixed(2)"></dd>
+        </dl>
+        <p class="muted" x-text="t('The orchestrator arrives in M4; this card shows configuration only.')"></p>
+      </article>
+    </div>
+
+    <h2 class="section" x-text="t('Rooms')"></h2>
+    <p class="muted" x-show="!areas.length" x-text="status?.ha?.connected ? t('Home Assistant has no areas yet.') : t('Waiting for Home Assistant…')"></p>
+    <div class="grid rooms">
+      <template x-for="a in areas" :key="a.area_id">
+        <a class="card room" :href="'#agents'" @click="selectArea(a.area_id)">
+          <h3 x-text="a.name"></h3>
+          <p class="muted"><span x-text="a.entity_count"></span> <span x-text="t('entities')"></span></p>
+          <p class="muted small" x-text="a.agent_id ? a.agent_id : t('no agent yet')"></p>
+        </a>
+      </template>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── Live feed ───────────────────────── -->
+  <section x-show="page === 'feed'" x-cloak>
+    <h1 x-text="t('Live feed & traces')"></h1>
+    <div class="toolbar">
+      <label><span x-text="t('Kind')"></span>
+        <select x-model="feedKind">
+          <option value="" x-text="t('all')"></option>
+          <template x-for="k in feedKinds" :key="k"><option :value="k" x-text="k"></option></template>
+        </select>
+      </label>
+      <label><span x-text="t('Filter')"></span>
+        <input type="search" x-model="feedFilter" :placeholder="t('entity, agent, text…')"></label>
+      <label class="check"><input type="checkbox" x-model="feedPaused"> <span x-text="t('Pause')"></span></label>
+      <span class="pill" :class="streamOk ? 'pill-ok' : 'pill-bad'" x-text="streamOk ? t('streaming') : t('reconnecting…')"></span>
+    </div>
+    <p class="muted" x-show="!filteredFeed().length" x-text="t('Nothing yet. State changes and agent activity show up here as they happen.')"></p>
+    <ul class="feed">
+      <template x-for="e in filteredFeed()" :key="e.id">
+        <li :class="'lvl-' + e.level">
+          <time x-text="clock(e.ts)"></time>
+          <span class="tag" x-text="e.kind"></span>
+          <span class="msg" x-text="e.summary"></span>
+        </li>
+      </template>
+    </ul>
+    <p class="muted small" x-text="t('Per-run traces (prompt, tool calls, latency, tokens) and replay arrive with room agents in M3.')"></p>
+  </section>
+
+  <!-- ───────────────────────── Agents (rooms & entities for now) ───────────────────────── -->
+  <section x-show="page === 'agents'" x-cloak>
+    <h1 x-text="t('Agents')"></h1>
+    <p class="muted" x-text="t('Room agents arrive in M3. Until then this page shows what an agent would see: rooms, their entities and each entity\'s permission tier.')"></p>
+    <div class="toolbar">
+      <label><span x-text="t('Room')"></span>
+        <select x-model="areaSel" @change="loadEntities()">
+          <option value="" x-text="t('all rooms')"></option>
+          <template x-for="a in areas" :key="a.area_id"><option :value="a.area_id" x-text="a.name"></option></template>
+          <option value="none" x-text="t('without a room')"></option>
+        </select>
+      </label>
+      <label><span x-text="t('Filter')"></span><input type="search" x-model="entityFilter" :placeholder="t('entity id or name…')"></label>
+      <span class="muted" x-text="filteredEntities().length + ' ' + t('entities')"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th x-text="t('Entity')"></th><th x-text="t('Name')"></th><th x-text="t('Room')"></th>
+          <th x-text="t('State')"></th><th x-text="t('Tier')"></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="e in filteredEntities()" :key="e.entity_id">
+            <tr :class="{ dim: e.hidden }">
+              <td class="mono" x-text="e.entity_id"></td>
+              <td x-text="e.name || ''"></td>
+              <td x-text="areaName(e.area_id)"></td>
+              <td><span x-text="e.state"></span> <span class="muted" x-text="e.unit || ''"></span></td>
+              <td><span class="tier" :class="e.read_only ? '' : 'tier-' + e.tier" x-text="e.read_only ? t('read-only') : e.tier"
+                        :title="e.read_only ? t('nothing to actuate') : tierHelp(e.tier)"></span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small">
+      <span class="tier tier-T0">T0</span> <span x-text="t('free')"></span> ·
+      <span class="tier tier-T1">T1</span> <span x-text="t('act + notify')"></span> ·
+      <span class="tier tier-T2">T2</span> <span x-text="t('only after your approval')"></span> ·
+      <span class="tier tier-T3">T3</span> <span x-text="t('never')"></span>
+    </p>
+  </section>
+
+  <!-- ───────────────────────── Placeholders for later milestones ───────────────────────── -->
+  <template x-for="p in pages.filter(p => p.todo)" :key="p.id">
+    <section x-show="page === p.id" x-cloak>
+      <h1 x-text="t(p.label)"></h1>
+      <div class="card empty">
+        <p><span class="badge" x-text="p.milestone"></span> <span x-text="t('Not built yet.')"></span></p>
+        <p class="muted" x-text="t(p.todo)"></p>
+      </div>
+    </section>
+  </template>
+
+  <!-- ───────────────────────── Settings & logs ───────────────────────── -->
+  <section x-show="page === 'settings'" x-cloak>
+    <h1 x-text="t('Settings & Logs')"></h1>
+    <div class="grid cards">
+      <article class="card">
+        <h2 x-text="t('Add-on options')"></h2>
+        <p class="muted" x-text="t('Edit these in Home Assistant → Settings → Add-ons → Agent House → Configuration. Secrets are masked.')"></p>
+        <dl class="kv wide">
+          <template x-for="[k, v] in Object.entries(settings?.options || {})" :key="k">
+            <div class="kv-rows"><dt class="mono" x-text="k"></dt><dd class="mono" x-text="fmt(v)"></dd></div>
+          </template>
+        </dl>
+      </article>
+      <article class="card">
+        <h2 x-text="t('Diagnostics bundle')"></h2>
+        <p class="muted" x-text="t('A zip with status, redacted settings, registry summary, recent feed and log. No tokens or API keys. Commit it to owner-reports/diagnostics/ when reporting a problem.')"></p>
+        <a class="btn" href="api/diagnostics" download x-text="t('Download diagnostics bundle')"></a>
+        <h2 class="section" x-text="t('About')"></h2>
+        <dl class="kv">
+          <dt x-text="t('Version')"></dt><dd x-text="status?.version || '—'"></dd>
+          <dt x-text="t('Database')"></dt><dd class="mono" x-text="settings?.paths?.database || '—'"></dd>
+        </dl>
+      </article>
+    </div>
+    <h2 class="section" x-text="t('Log')"></h2>
+    <div class="toolbar">
+      <label><span x-text="t('Level')"></span>
+        <select x-model="logLevel" @change="loadLogs()">
+          <option>debug</option><option>info</option><option>warning</option><option>error</option>
+        </select></label>
+      <button class="btn btn-ghost" @click="loadLogs()" x-text="t('Refresh')"></button>
+    </div>
+    <pre class="log"><template x-for="(l, i) in logs" :key="i"><span :class="'lvl-' + l.level" x-text="clock(l.ts) + ' ' + l.level.toUpperCase().padEnd(7) + ' ' + l.logger + ': ' + l.message + '\n'"></span></template></pre>
+  </section>
+</main>
+
+<footer class="muted small">
+  <span x-text="'Agent House ' + (status?.version || '')"></span> ·
+  <label><span x-text="t('Language')"></span>
+    <select x-model="lang" @change="setLang(lang)"><option value="en">English</option></select></label>
+</footer>
+</body>
+</html>

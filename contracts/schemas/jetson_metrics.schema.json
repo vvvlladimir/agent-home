@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "jetson_metrics.schema.json",
+  "title": "JetsonMetrics",
+  "description": "GET /metrics.json of jetson/metrics/server.py (tegrastats -> HTTP). Every hardware field is nullable: the parser must never fail on an unknown tegrastats layout.",
+  "type": "object",
+  "required": ["schema_version", "ts", "source"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ts": {"type": "number", "description": "unix seconds of the sample"},
+    "source": {"enum": ["tegrastats", "procfs", "sim"], "description": "procfs = tegrastats unavailable, RAM/temps read from /proc and /sys"},
+    "hostname": {"type": ["string", "null"]},
+    "module": {"type": ["string", "null"], "description": "contents of /proc/device-tree/model"},
+    "l4t_version": {"type": ["string", "null"]},
+    "jetpack_major": {"type": ["integer", "null"]},
+    "power_mode": {"type": ["string", "null"], "description": "nvpmodel -q mode name, e.g. MAXN_SUPER"},
+    "ram_used_mb": {"type": ["number", "null"]},
+    "ram_total_mb": {"type": ["number", "null"]},
+    "swap_used_mb": {"type": ["number", "null"]},
+    "swap_total_mb": {"type": ["number", "null"]},
+    "cpu_percent": {"type": ["number", "null"], "description": "mean over cores"},
+    "gpu_percent": {"type": ["number", "null"], "description": "GR3D_FREQ"},
+    "temp_cpu_c": {"type": ["number", "null"]},
+    "temp_gpu_c": {"type": ["number", "null"]},
+    "temp_tj_c": {"type": ["number", "null"]},
+    "power_mw": {"type": ["number", "null"], "description": "VDD_IN"},
+    "throttled": {"type": ["boolean", "null"], "description": "true when a thermal zone is at or above its passive trip point"},
+    "llama": {
+      "type": ["object", "null"],
+      "properties": {
+        "active_profile": {"type": ["string", "null"]},
+        "service_state": {"type": ["string", "null"], "description": "systemctl is-active llama-server"},
+        "health": {"enum": ["ok", "loading", "down", null]}
+      }
+    },
+    "raw": {"type": ["string", "null"], "description": "last raw tegrastats line, for debugging the parser"}
+  }
+}

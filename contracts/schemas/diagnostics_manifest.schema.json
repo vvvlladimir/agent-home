@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "diagnostics_manifest.schema.json",
+  "title": "DiagnosticsManifest",
+  "description": "manifest.json inside the diagnostics bundle (zip) from GUI → Settings → Diagnostics bundle. The owner commits the zip to owner-reports/diagnostics/. Secrets are never included: tokens and API keys are replaced by \"***\".",
+  "type": "object",
+  "required": ["schema_version", "kind", "created", "app_version", "files"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "diagnostics_bundle"},
+    "created": {"type": "string", "format": "date-time"},
+    "app_version": {"type": "string"},
+    "python": {"type": "string"},
+    "arch": {"type": "string"},
+    "ha": {
+      "type": "object",
+      "properties": {
+        "connected": {"type": "boolean"},
+        "version": {"type": ["string", "null"]},
+        "via_supervisor": {"type": "boolean"},
+        "areas": {"type": "integer"},
+        "entities": {"type": "integer"}
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "last_ingress_path": {"type": ["string", "null"]},
+        "last_peer": {"type": ["string", "null"]},
+        "rejected_peers": {"type": "integer"}
+      }
+    },
+    "jetson": {"type": ["object", "null"]},
+    "files": {
+      "type": "array",
+      "description": "bundle contents, e.g. status.json, settings.redacted.json, log.txt, runs.jsonl, registry_summary.json",
+      "items": {"type": "string"}
+    }
+  }
+}

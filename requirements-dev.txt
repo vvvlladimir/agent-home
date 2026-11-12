@@ -1,0 +1,8 @@
+-r agent_house/requirements.txt
+pytest>=8
+pytest-asyncio>=0.24
+ruff>=0.8
+jsonschema>=4.23
+openapi-spec-validator>=0.7
+yamllint>=1.35
+shellcheck-py>=0.10

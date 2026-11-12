@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "toolcall_eval.schema.json",
+  "title": "ToolcallEval",
+  "description": "jetson/bench/toolcall_eval.yaml: home-control scenarios scored without a human. Shared by the Jetson bench, the GUI benchmark and tests/eval.",
+  "type": "object",
+  "required": ["version", "room", "scenarios"],
+  "properties": {
+    "version": {"const": 1},
+    "room": {
+      "type": "object",
+      "description": "The fixed room every scenario runs in (stable prompt prefix, like production).",
+      "required": ["name", "entities"],
+      "properties": {
+        "name": {"type": "string"},
+        "entities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entity_id", "state", "tier"],
+            "properties": {
+              "entity_id": {"type": "string"},
+              "name": {"type": "string"},
+              "state": {"type": "string"},
+              "attributes": {"type": "object"},
+              "tier": {"enum": ["T0", "T1", "T2", "T3"]}
+            }
+          }
+        }
+      }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 30,
+      "items": {
+        "type": "object",
+        "required": ["id", "category", "wake", "expect"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "category": {"enum": ["valid_call", "correct_entity", "refuse_t3", "escalate", "no_action", "multi_step"]},
+          "wake": {"type": "string", "description": "the wake reason / user message"},
+          "state_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "All listed conditions must hold over the whole run.",
+            "properties": {
+              "calls": {
+                "type": "array",
+                "description": "each entry must be matched by at least one tool call",
+                "items": {
+                  "type": "object",
+                  "required": ["tool"],
+                  "properties": {
+                    "tool": {"type": "string"},
+                    "args": {"type": "object", "description": "subset match; a list value means any-of"}
+                  }
+                }
+              },
+              "forbid_calls": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["tool"],
+                  "properties": {"tool": {"type": "string"}, "args": {"type": "object"}}
+                }
+              },
+              "no_actuation": {"type": "boolean", "description": "no call_service at all"},
+              "max_steps": {"type": "integer"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

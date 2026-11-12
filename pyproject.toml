@@ -1,0 +1,24 @@
+[project]
+name = "agent-house"
+version = "0.1.0.dev0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["agent_house", "."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q -m 'not realha'"
+markers = ["realha: integration test against a real headless Home Assistant Core (slow, opt-in)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["agent_house/app/web/static/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+ignore = ["B008", "ASYNC109"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "sim"]

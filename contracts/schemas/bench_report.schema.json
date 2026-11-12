@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bench_report.schema.json",
+  "title": "BenchReport",
+  "description": "One file per profile, written by jetson/bench/bench.py to owner-reports/bench/<date>_<profile>.json. Also produced by the GUI benchmark (source=addon). Numbers from source=sim are not hardware measurements.",
+  "type": "object",
+  "required": ["schema_version", "kind", "created", "source", "profile", "server", "speed", "toolcall"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "bench_report"},
+    "created": {"type": "string", "format": "date-time"},
+    "source": {"enum": ["jetson", "addon", "sim"]},
+    "profile": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "model": {"type": ["string", "null"]},
+        "ctx_size": {"type": ["integer", "null"]},
+        "flags": {"type": ["string", "null"], "description": "llama-server command line of the profile"}
+      }
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "module": {"type": ["string", "null"]},
+        "l4t_version": {"type": ["string", "null"]},
+        "jetpack_major": {"type": ["integer", "null"]},
+        "power_mode": {"type": ["string", "null"]},
+        "llama_cpp_build": {"type": ["string", "null"]}
+      }
+    },
+    "server": {
+      "type": "object",
+      "required": ["url"],
+      "properties": {
+        "url": {"type": "string"},
+        "model_reported": {"type": ["string", "null"]},
+        "cold_load_s": {"type": ["number", "null"]}
+      }
+    },
+    "speed": {
+      "type": "object",
+      "required": ["runs"],
+      "properties": {
+        "runs": {"type": "integer", "minimum": 0},
+        "prompt_tokens": {"type": ["number", "null"]},
+        "prefill_tps": {"type": ["number", "null"], "description": "prompt-processing tokens/s, cold cache, median"},
+        "prefill_tps_warm": {"type": ["number", "null"], "description": "same prompt prefix again (prompt cache reused), median"},
+        "decode_tps": {"type": ["number", "null"]},
+        "ttft_ms_cold": {"type": ["number", "null"]},
+        "ttft_ms_warm": {"type": ["number", "null"]},
+        "e2e_wake_ms_warm": {"type": ["number", "null"], "description": "a typical room-agent wake: ~1.5k token prompt with tools, one tool call, one final answer"}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "ram_peak_mb": {"type": ["number", "null"]},
+        "ram_total_mb": {"type": ["number", "null"]},
+        "ram_free_min_mb": {"type": ["number", "null"]},
+        "swap_peak_mb": {"type": ["number", "null"]},
+        "temp_max_c": {"type": ["number", "null"]},
+        "throttled": {"type": ["boolean", "null"]},
+        "power_avg_mw": {"type": ["number", "null"]}
+      }
+    },
+    "toolcall": {
+      "type": "object",
+      "required": ["total", "passed"],
+      "properties": {
+        "eval_file": {"type": "string"},
+        "total": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "json_valid": {"type": "integer", "minimum": 0, "description": "scenarios whose tool-call arguments parsed as JSON without repair"},
+        "by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["total", "passed"],
+            "properties": {"total": {"type": "integer"}, "passed": {"type": "integer"}}
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "reason"],
+            "properties": {"id": {"type": "string"}, "reason": {"type": "string"}, "got": {}}
+          }
+        }
+      }
+    },
+    "errors": {"type": "array", "items": {"type": "string"}}
+  }
+}

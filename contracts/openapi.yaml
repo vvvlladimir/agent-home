@@ -1,0 +1,880 @@
+openapi: 3.1.0
+info:
+  title: Agent House internal API
+  version: 0.1.0
+  description: |
+    JSON API between the add-on backend and its GUI. All paths are RELATIVE to the ingress
+    root (the GUI calls `api/status`, never `/api/status`). `x-milestone` says in which
+    milestone an operation is implemented; until then it answers 501 `not_implemented`.
+    File formats (agent config, policy, bench reports, …) live in `schemas/*.schema.json`.
+servers:
+  - url: .
+tags:
+  - {name: system}
+  - {name: house}
+  - {name: agents}
+  - {name: traces}
+  - {name: safety}
+  - {name: automations}
+  - {name: migration}
+  - {name: chat}
+  - {name: models}
+  - {name: settings}
+
+paths:
+  /api/status:
+    get:
+      tags: [system]
+      operationId: getStatus
+      x-milestone: M1
+      summary: Everything the dashboard header needs, in one cheap call
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
+  /api/mode:
+    put:
+      tags: [safety]
+      operationId: setMode
+      x-milestone: M1
+      summary: Switch the global mode. `live` only affects agents whose own mode is live.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [mode], properties: {mode: {$ref: "#/components/schemas/Mode"}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
+  /api/kill-switch:
+    put:
+      tags: [safety]
+      operationId: setKillSwitch
+      x-milestone: M1
+      summary: Engage or release the global kill switch. Engaged = no service call and no deploy leaves the add-on.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [engaged], properties: {engaged: {type: boolean}, reason: {type: string}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
+
+  /api/areas:
+    get:
+      tags: [house]
+      operationId: listAreas
+      x-milestone: M1
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Area"}}}}}
+  /api/entities:
+    get:
+      tags: [house]
+      operationId: listEntities
+      x-milestone: M1
+      parameters:
+        - {name: area, in: query, schema: {type: string}, description: "area_id; `none` = entities without an area"}
+        - {name: domain, in: query, schema: {type: string}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Entity"}}}}}
+  /api/events:
+    get:
+      tags: [traces]
+      operationId: listEvents
+      x-milestone: M1
+      summary: Recent feed items, newest first
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, default: 100, maximum: 500}}
+        - {name: kind, in: query, schema: {type: string}}
+        - {name: before, in: query, schema: {type: integer}, description: feed id to page from}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/FeedItem"}}}}}
+  /api/events/stream:
+    get:
+      tags: [traces]
+      operationId: streamEvents
+      x-milestone: M1
+      summary: Server-Sent Events; each `data:` line is one FeedItem. A comment line is sent every 15 s as keep-alive.
+      responses:
+        "200": {description: event stream, content: {text/event-stream: {schema: {type: string}}}}
+
+  /api/agents:
+    get:
+      tags: [agents]
+      operationId: listAgents
+      x-milestone: M3
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AgentSummary"}}}}}
+    post:
+      tags: [agents]
+      operationId: createAgent
+      x-milestone: M3
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+      responses:
+        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/agents/{agent_id}:
+    parameters: [{$ref: "#/components/parameters/agent_id"}]
+    get:
+      tags: [agents]
+      operationId: getAgent
+      x-milestone: M3
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+    put:
+      tags: [agents]
+      operationId: updateAgent
+      x-milestone: M3
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+    delete:
+      tags: [agents]
+      operationId: deleteAgent
+      x-milestone: M3
+      responses:
+        "204": {description: deleted}
+  /api/agents/{agent_id}/wake:
+    parameters: [{$ref: "#/components/parameters/agent_id"}]
+    post:
+      tags: [agents]
+      operationId: wakeAgent
+      x-milestone: M3
+      summary: Manual wake (queued like any other wake); returns the run id
+      requestBody: {content: {application/json: {schema: {type: object, properties: {reason: {type: string}}}}}}
+      responses:
+        "202": {description: queued, content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}}
+  /api/agents/{agent_id}/prompt-preview:
+    parameters: [{$ref: "#/components/parameters/agent_id"}]
+    post:
+      tags: [agents]
+      operationId: previewPrompt
+      x-milestone: M3
+      summary: Render the prompt for a (possibly unsaved) config against the current state; no LLM call
+      requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [system, user, tokens_estimate]
+                properties:
+                  system: {type: string}
+                  user: {type: string}
+                  tokens_estimate: {type: integer, description: "≈ chars/3.5; not the model tokenizer"}
+                  budget: {type: integer}
+                  entities_included: {type: integer}
+                  entities_dropped: {type: array, items: {type: string}}
+
+  /api/runs:
+    get:
+      tags: [traces]
+      operationId: listRuns
+      x-milestone: M3
+      parameters:
+        - {name: agent, in: query, schema: {type: string}}
+        - {name: status, in: query, schema: {$ref: "#/components/schemas/RunStatus"}}
+        - {name: limit, in: query, schema: {type: integer, default: 50, maximum: 200}}
+        - {name: before, in: query, schema: {type: string}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/RunSummary"}}}}}
+  /api/runs/{run_id}:
+    parameters: [{$ref: "#/components/parameters/run_id"}]
+    get:
+      tags: [traces]
+      operationId: getRun
+      x-milestone: M3
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/runs/{run_id}/replay:
+    parameters: [{$ref: "#/components/parameters/run_id"}]
+    post:
+      tags: [traces]
+      operationId: replayRun
+      x-milestone: M3
+      summary: Re-run the recorded context against the current model. Replays are always shadow, whatever the mode.
+      responses:
+        "202": {description: queued, content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}}
+  /api/runs/{run_id}/testcase:
+    parameters: [{$ref: "#/components/parameters/run_id"}]
+    get:
+      tags: [traces]
+      operationId: runAsTestcase
+      x-milestone: M3
+      summary: The run as a YAML eval scenario (copy-as-test-case)
+      responses:
+        "200": {description: ok, content: {text/yaml: {schema: {type: string}}}}
+
+  /api/policy:
+    get:
+      tags: [safety]
+      operationId: getPolicy
+      x-milestone: M3
+      responses:
+        "200": {description: "see schemas/policy.schema.json", content: {application/json: {schema: {type: object}}}}
+    put:
+      tags: [safety]
+      operationId: putPolicy
+      x-milestone: M3
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object}}}}
+        "422": {$ref: "#/components/responses/Error"}
+  /api/actions:
+    get:
+      tags: [safety]
+      operationId: listActions
+      x-milestone: M3
+      summary: Every policy decision about a service call (executed, shadow, denied, pending approval)
+      parameters:
+        - {name: agent, in: query, schema: {type: string}}
+        - {name: verdict, in: query, schema: {$ref: "#/components/schemas/Verdict"}}
+        - {name: limit, in: query, schema: {type: integer, default: 100}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Action"}}}}}
+  /api/approvals/{action_id}:
+    parameters: [{name: action_id, in: path, required: true, schema: {type: string}}]
+    post:
+      tags: [safety]
+      operationId: decideApproval
+      x-milestone: M3
+      summary: Approve or deny a pending T2 action. Approval re-runs the policy check before executing.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [approve], properties: {approve: {type: boolean}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Action"}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/inbox:
+    get:
+      tags: [agents]
+      operationId: listInbox
+      x-milestone: M3
+      summary: Agent reports waiting for (or handled by) the orchestrator
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/InboxItem"}}}}}
+
+  /api/proposals:
+    get:
+      tags: [automations]
+      operationId: listProposals
+      x-milestone: M4
+      parameters: [{name: status, in: query, schema: {$ref: "#/components/schemas/ProposalStatus"}}]
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Proposal"}}}}}
+  /api/proposals/{proposal_id}:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    get:
+      tags: [automations]
+      operationId: getProposal
+      x-milestone: M4
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+    put:
+      tags: [automations]
+      operationId: editProposal
+      x-milestone: M4
+      summary: Owner edits the draft YAML; re-runs validation and the policy scan
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [yaml], properties: {yaml: {type: string}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+  /api/proposals/{proposal_id}/approve:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    post:
+      tags: [automations]
+      operationId: approveProposal
+      x-milestone: M4
+      summary: Validate again, deploy to HA as `agent_house_<slug>`, write a version row
+      responses:
+        "200": {description: deployed, content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/proposals/{proposal_id}/reject:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    post:
+      tags: [automations]
+      operationId: rejectProposal
+      x-milestone: M4
+      requestBody: {content: {application/json: {schema: {type: object, properties: {note: {type: string}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+  /api/proposals/{proposal_id}/evidence:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    post:
+      tags: [automations]
+      operationId: computeEvidence
+      x-milestone: M4
+      summary: Simulate the draft's triggers against HA history ("what would this have done in the last N days")
+      requestBody: {content: {application/json: {schema: {type: object, properties: {days: {type: integer, default: 7, maximum: 30}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Evidence"}}}}
+  /api/automations:
+    get:
+      tags: [automations]
+      operationId: listDeployed
+      x-milestone: M4
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/DeployedAutomation"}}}}}
+  /api/automations/{ha_id}:
+    parameters: [{$ref: "#/components/parameters/ha_id"}]
+    get:
+      tags: [automations]
+      operationId: getDeployed
+      x-milestone: M4
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/DeployedAutomation"}}}}
+    delete:
+      tags: [automations]
+      operationId: removeDeployed
+      x-milestone: M4
+      summary: Remove an agent_house_ automation from HA (versions are kept for the record)
+      responses:
+        "204": {description: removed}
+  /api/automations/{ha_id}/rollback:
+    parameters: [{$ref: "#/components/parameters/ha_id"}]
+    post:
+      tags: [automations]
+      operationId: rollbackDeployed
+      x-milestone: M4
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [version], properties: {version: {type: integer}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/DeployedAutomation"}}}}
+  /api/automations/{ha_id}/enabled:
+    parameters: [{$ref: "#/components/parameters/ha_id"}]
+    put:
+      tags: [automations]
+      operationId: setDeployedEnabled
+      x-milestone: M4
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [enabled], properties: {enabled: {type: boolean}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/DeployedAutomation"}}}}
+
+  /api/migration/import:
+    post:
+      tags: [migration]
+      operationId: importOriginals
+      x-milestone: M5
+      summary: Read-only import of the owner's HA automations/scripts and Node-RED exports in /share/agent_house/nodered
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {imported: {type: integer}, updated: {type: integer}}}}}}
+  /api/migration/originals:
+    get:
+      tags: [migration]
+      operationId: listOriginals
+      x-milestone: M5
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Original"}}}}}
+  /api/migration/originals/{original_id}/propose:
+    parameters: [{$ref: "#/components/parameters/original_id"}]
+    post:
+      tags: [migration]
+      operationId: proposeReplacement
+      x-milestone: M5
+      summary: Ask the orchestrator for an equivalent agent-managed automation (creates a proposal)
+      responses:
+        "202": {description: queued, content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}}
+  /api/migration/originals/{original_id}/parity:
+    parameters: [{$ref: "#/components/parameters/original_id"}]
+    get:
+      tags: [migration]
+      operationId: getParity
+      x-milestone: M5
+      parameters: [{name: days, in: query, schema: {type: integer, default: 7}}]
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Parity"}}}}
+  /api/migration/originals/{original_id}/enabled:
+    parameters: [{$ref: "#/components/parameters/original_id"}]
+    put:
+      tags: [migration]
+      operationId: setOriginalEnabled
+      x-milestone: M5
+      summary: Explicit owner action. Uses automation.turn_off / turn_on; never edits or deletes the original.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [enabled], properties: {enabled: {type: boolean}}}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Original"}}}}
+
+  /api/chat:
+    post:
+      tags: [chat]
+      operationId: chat
+      x-milestone: M5
+      summary: One chat turn with the orchestrator or a room agent; answers when the run finishes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target, message]
+              properties:
+                target: {type: string, description: "`orchestrator` or an agent id"}
+                message: {type: string, maxLength: 4000}
+                session_id: {type: string}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, run]
+                properties:
+                  session_id: {type: string}
+                  reply: {type: string}
+                  run: {$ref: "#/components/schemas/Run"}
+
+  /api/models/profiles:
+    get:
+      tags: [models]
+      operationId: listProfiles
+      x-milestone: M2
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ModelProfile"}}}}}
+  /api/models/active:
+    put:
+      tags: [models]
+      operationId: setActiveProfile
+      x-milestone: M2
+      summary: Ask the Jetson to make this profile the resident model; state goes `warming` until healthy
+      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [profile], properties: {profile: {type: string}}}}}}
+      responses:
+        "202": {description: swapping, content: {application/json: {schema: {$ref: "#/components/schemas/LlmStatus"}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/benchmarks:
+    get:
+      tags: [models]
+      operationId: listBenchmarks
+      x-milestone: M2
+      responses:
+        "200":
+          description: "newest first; `report` follows schemas/bench_report.schema.json"
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, created, profile, source, report]
+                  properties:
+                    id: {type: string}
+                    created: {type: string, format: date-time}
+                    profile: {type: string}
+                    source: {type: string}
+                    report: {type: object}
+    post:
+      tags: [models]
+      operationId: runBenchmark
+      x-milestone: M2
+      summary: Run speed + tool-call eval against the current server (low priority, one at a time)
+      requestBody: {content: {application/json: {schema: {type: object, properties: {profile: {type: string}, quick: {type: boolean, default: false}}}}}}
+      responses:
+        "202": {description: started, content: {application/json: {schema: {type: object, required: [id], properties: {id: {type: string}}}}}}
+        "409": {$ref: "#/components/responses/Error"}
+
+  /api/settings:
+    get:
+      tags: [settings]
+      operationId: getSettings
+      x-milestone: M1
+      summary: Effective settings, secrets replaced by "***"
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Settings"}}}}
+    put:
+      tags: [settings]
+      operationId: putSettings
+      x-milestone: M2
+      summary: Change GUI-editable settings (stored in /data/settings.yaml). Add-on options (HA Configuration tab) stay read-only here.
+      requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Settings"}}}}
+  /api/logs:
+    get:
+      tags: [settings]
+      operationId: getLogs
+      x-milestone: M1
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, default: 200, maximum: 2000}}
+        - {name: level, in: query, schema: {type: string, enum: [debug, info, warning, error]}}
+      responses:
+        "200":
+          description: in-memory ring buffer, newest last
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [ts, level, logger, message]
+                  properties:
+                    ts: {type: number}
+                    level: {type: string}
+                    logger: {type: string}
+                    message: {type: string}
+  /api/diagnostics:
+    get:
+      tags: [settings]
+      operationId: getDiagnostics
+      x-milestone: M1
+      summary: "Diagnostics bundle (zip) with manifest.json per schemas/diagnostics_manifest.schema.json; no secrets"
+      responses:
+        "200": {description: zip, content: {application/zip: {schema: {type: string, format: binary}}}}
+  /api/config/export:
+    get:
+      tags: [settings]
+      operationId: exportConfig
+      x-milestone: M5
+      responses:
+        "200": {description: "YAML with agents, policy, profiles, settings (no secrets)", content: {text/yaml: {schema: {type: string}}}}
+  /api/config/import:
+    post:
+      tags: [settings]
+      operationId: importConfig
+      x-milestone: M5
+      requestBody: {required: true, content: {text/yaml: {schema: {type: string}}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object}}}}
+        "422": {$ref: "#/components/responses/Error"}
+
+components:
+  parameters:
+    agent_id: {name: agent_id, in: path, required: true, schema: {type: string}}
+    run_id: {name: run_id, in: path, required: true, schema: {type: string}}
+    proposal_id: {name: proposal_id, in: path, required: true, schema: {type: string}}
+    ha_id: {name: ha_id, in: path, required: true, schema: {type: string, pattern: "^agent_house_[a-z0-9_]+$"}}
+    original_id: {name: original_id, in: path, required: true, schema: {type: string}}
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: {type: string, description: "machine code, e.g. not_implemented, not_found, kill_switch, policy_blocked"}
+        detail: {type: string}
+    Mode: {type: string, enum: [shadow, live]}
+    Tier: {type: string, enum: [T0, T1, T2, T3]}
+    Verdict:
+      type: string
+      enum: [executed, shadow, denied, pending, approved, expired, failed]
+      description: |
+        executed = sent to HA; shadow = would have been sent; denied = policy refused;
+        pending = waiting for human approval (T2); approved = approved and executed;
+        expired = approval timed out or was denied by the owner; failed = HA returned an error.
+    RunStatus: {type: string, enum: [queued, running, ok, error, timeout, dropped, escalated]}
+    ProposalStatus: {type: string, enum: [draft, blocked, approved, deployed, rejected, superseded, rolled_back]}
+    Status:
+      type: object
+      required: [version, mode, kill_switch, ha, llm, jetson, orchestrator, counts]
+      properties:
+        version: {type: string}
+        time: {type: string, format: date-time}
+        mode: {$ref: "#/components/schemas/Mode"}
+        kill_switch:
+          type: object
+          required: [engaged]
+          properties:
+            engaged: {type: boolean}
+            since: {type: [string, "null"], format: date-time}
+            reason: {type: [string, "null"]}
+        ha: {$ref: "#/components/schemas/HaStatus"}
+        llm: {$ref: "#/components/schemas/LlmStatus"}
+        jetson: {$ref: "#/components/schemas/JetsonStatus"}
+        orchestrator: {$ref: "#/components/schemas/OrchestratorStatus"}
+        counts:
+          type: object
+          properties:
+            agents: {type: integer}
+            pending_approvals: {type: integer}
+            draft_proposals: {type: integer}
+            deployed_automations: {type: integer}
+            runs_today: {type: integer}
+    HaStatus:
+      type: object
+      required: [connected, state]
+      properties:
+        connected: {type: boolean}
+        state: {type: string, enum: [connecting, connected, auth_failed, unreachable]}
+        via_supervisor: {type: boolean}
+        version: {type: [string, "null"]}
+        location_name: {type: [string, "null"]}
+        last_error: {type: [string, "null"]}
+        last_event_ts: {type: [number, "null"]}
+        reconnects: {type: integer}
+        areas: {type: integer}
+        entities: {type: integer}
+    LlmStatus:
+      type: object
+      required: [state]
+      properties:
+        state: {type: string, enum: [unconfigured, ok, warming, busy, unreachable, degraded]}
+        url: {type: [string, "null"]}
+        active_profile: {type: [string, "null"]}
+        model: {type: [string, "null"]}
+        queue_depth: {type: integer}
+        in_flight: {type: [string, "null"], description: priority class of the request being served}
+        last_error: {type: [string, "null"]}
+        decode_tps: {type: [number, "null"], description: rolling median}
+        prefill_tps: {type: [number, "null"]}
+        ttft_ms: {type: [number, "null"]}
+        requests_total: {type: integer}
+        dropped_total: {type: integer}
+    JetsonStatus:
+      type: object
+      required: [reachable]
+      properties:
+        reachable: {type: boolean}
+        configured: {type: boolean}
+        last_seen: {type: [number, "null"]}
+        metrics: {type: [object, "null"], description: "schemas/jetson_metrics.schema.json"}
+    OrchestratorStatus:
+      type: object
+      required: [provider]
+      properties:
+        provider: {type: string, enum: [anthropic, local, auto]}
+        effective: {type: string, enum: [anthropic, local, none], description: what a request would use right now}
+        model: {type: [string, "null"]}
+        budget:
+          type: object
+          properties:
+            daily_limit_eur: {type: number}
+            spent_today_eur: {type: number}
+            tokens_in_today: {type: integer}
+            tokens_out_today: {type: integer}
+            exhausted: {type: boolean}
+    Area:
+      type: object
+      required: [area_id, name, entity_count]
+      properties:
+        area_id: {type: string}
+        name: {type: string}
+        entity_count: {type: integer}
+        agent_id: {type: [string, "null"]}
+    Entity:
+      type: object
+      required: [entity_id, domain, state, tier]
+      properties:
+        entity_id: {type: string}
+        domain: {type: string}
+        name: {type: [string, "null"]}
+        area_id: {type: [string, "null"]}
+        state: {type: [string, "null"]}
+        unit: {type: [string, "null"]}
+        device_class: {type: [string, "null"]}
+        tier: {$ref: "#/components/schemas/Tier"}
+        read_only: {type: boolean, description: "sensor-like domain with nothing to actuate (tier is T3)"}
+        last_changed: {type: [string, "null"]}
+        hidden: {type: boolean}
+    FeedItem:
+      type: object
+      required: [id, ts, kind, summary]
+      properties:
+        id: {type: integer}
+        ts: {type: number}
+        kind:
+          type: string
+          description: "state | wake | gate_drop | run | action | approval | report | proposal | deploy | system"
+        summary: {type: string}
+        agent_id: {type: [string, "null"]}
+        entity_id: {type: [string, "null"]}
+        run_id: {type: [string, "null"]}
+        level: {type: string, enum: [debug, info, warning, error], default: info}
+        data: {type: [object, "null"]}
+    AgentConfig:
+      type: object
+      description: "see schemas/agent_config.schema.json (the single source of truth)"
+      required: [id, name, room]
+    AgentSummary:
+      type: object
+      required: [id, name, room, enabled, mode]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        room: {type: string}
+        enabled: {type: boolean}
+        mode: {$ref: "#/components/schemas/Mode"}
+        effective_mode: {$ref: "#/components/schemas/Mode"}
+        entity_count: {type: integer}
+        last_run: {oneOf: [{$ref: "#/components/schemas/RunSummary"}, {type: "null"}]}
+        wakes_last_hour: {type: integer}
+    RunSummary:
+      type: object
+      required: [id, agent_id, status, started]
+      properties:
+        id: {type: string}
+        agent_id: {type: string, description: "agent id or `orchestrator`"}
+        status: {$ref: "#/components/schemas/RunStatus"}
+        wake_source: {type: string, enum: [event, cron, poke, chat, manual, replay, schedule]}
+        wake_reason: {type: [string, "null"]}
+        started: {type: number}
+        ended: {type: [number, "null"]}
+        latency_ms: {type: [integer, "null"]}
+        steps: {type: integer}
+        tokens_in: {type: integer}
+        tokens_out: {type: integer}
+        provider: {type: [string, "null"]}
+        profile: {type: [string, "null"]}
+        summary: {type: [string, "null"]}
+        error: {type: [string, "null"]}
+        shadow: {type: boolean}
+        replay_of: {type: [string, "null"]}
+    Run:
+      allOf:
+        - {$ref: "#/components/schemas/RunSummary"}
+        - type: object
+          required: [trace]
+          properties:
+            trace:
+              type: array
+              items: {$ref: "#/components/schemas/Step"}
+    Step:
+      type: object
+      required: [idx, type, ts]
+      properties:
+        idx: {type: integer}
+        ts: {type: number}
+        type: {type: string, enum: [context, llm, tool, policy, repair, error, final]}
+        latency_ms: {type: [integer, "null"]}
+        tokens_in: {type: [integer, "null"]}
+        tokens_out: {type: [integer, "null"]}
+        data:
+          type: object
+          description: |
+            context: {system, user, tools}; llm: {request_messages_added, content, tool_calls, timings, finish_reason};
+            tool: {name, arguments, result, ok}; policy: an Action; repair: {raw, repaired, method};
+            error: {message}; final: {text}
+    Action:
+      type: object
+      required: [id, ts, agent_id, domain, service, entity_ids, tier, verdict, reason]
+      properties:
+        id: {type: string}
+        ts: {type: number}
+        run_id: {type: [string, "null"]}
+        agent_id: {type: string}
+        domain: {type: string}
+        service: {type: string}
+        entity_ids: {type: array, items: {type: string}}
+        data: {type: object}
+        tier: {$ref: "#/components/schemas/Tier"}
+        verdict: {$ref: "#/components/schemas/Verdict"}
+        reason: {type: string}
+        decided_by: {type: [string, "null"], description: "`owner` once an approval was answered"}
+        expires: {type: [number, "null"]}
+    InboxItem:
+      type: object
+      required: [id, ts, agent_id, severity, summary, status]
+      properties:
+        id: {type: integer}
+        ts: {type: number}
+        agent_id: {type: string}
+        run_id: {type: [string, "null"]}
+        severity: {type: string, enum: [info, warning, alarm]}
+        summary: {type: string}
+        status: {type: string, enum: [new, seen, handled]}
+    Proposal:
+      type: object
+      required: [id, created, status, title, yaml]
+      properties:
+        id: {type: string}
+        created: {type: number}
+        status: {$ref: "#/components/schemas/ProposalStatus"}
+        title: {type: string}
+        yaml: {type: string}
+        rationale: {type: [string, "null"]}
+        expected_triggers: {type: [string, "null"]}
+        origin_agent: {type: [string, "null"]}
+        run_id: {type: [string, "null"]}
+        ha_id: {type: [string, "null"], description: "agent_house_<slug>; set at creation, used at deploy"}
+        replaces_original: {type: [string, "null"]}
+        diff: {type: [string, "null"], description: unified diff against the currently deployed version (or against nothing)}
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok]
+            properties:
+              name: {type: string, description: "yaml | schema | policy | ha_validate"}
+              ok: {type: boolean}
+              detail: {type: [string, "null"]}
+        evidence: {oneOf: [{$ref: "#/components/schemas/Evidence"}, {type: "null"}]}
+        note: {type: [string, "null"]}
+    Evidence:
+      type: object
+      required: [days, would_fire, supported]
+      properties:
+        days: {type: integer}
+        supported: {type: boolean, description: false when a trigger type cannot be simulated from history}
+        unsupported: {type: array, items: {type: string}}
+        would_fire: {type: integer}
+        samples: {type: array, items: {type: object, properties: {ts: {type: number}, trigger: {type: string}}}}
+        computed: {type: number}
+    DeployedAutomation:
+      type: object
+      required: [ha_id, title, current_version, enabled, versions]
+      properties:
+        ha_id: {type: string}
+        entity_id: {type: [string, "null"]}
+        title: {type: string}
+        current_version: {type: integer}
+        enabled: {type: boolean}
+        present_in_ha: {type: boolean}
+        origin_agent: {type: [string, "null"]}
+        run_id: {type: [string, "null"]}
+        versions:
+          type: array
+          items:
+            type: object
+            required: [version, created, yaml]
+            properties:
+              version: {type: integer}
+              created: {type: number}
+              yaml: {type: string}
+              proposal_id: {type: [string, "null"]}
+              note: {type: [string, "null"]}
+    Original:
+      type: object
+      required: [id, source, title, enabled]
+      properties:
+        id: {type: string}
+        source: {type: string, enum: [ha_automation, ha_script, node_red]}
+        entity_id: {type: [string, "null"]}
+        title: {type: string}
+        enabled: {type: [boolean, "null"]}
+        summary: {type: [string, "null"]}
+        config: {type: [object, "null"]}
+        replacement_proposal_id: {type: [string, "null"]}
+        replacement_ha_id: {type: [string, "null"]}
+        disabled_by_us: {type: boolean}
+    Parity:
+      type: object
+      required: [days, original_fired, replacement_would_fire, diffs]
+      properties:
+        days: {type: integer}
+        original_fired: {type: integer}
+        replacement_would_fire: {type: integer}
+        matched: {type: integer}
+        supported: {type: boolean}
+        diffs:
+          type: array
+          items:
+            type: object
+            properties:
+              ts: {type: number}
+              side: {type: string, enum: [original_only, replacement_only]}
+              detail: {type: string}
+    ModelProfile:
+      type: object
+      required: [name, model]
+      properties:
+        name: {type: string}
+        model: {type: string}
+        ctx_size: {type: integer}
+        max_output_tokens: {type: integer}
+        temperature: {type: number}
+        top_p: {type: number}
+        top_k: {type: integer}
+        presence_penalty: {type: number}
+        thinking: {type: boolean}
+        provisional: {type: boolean, description: true until an owner benchmark confirmed it}
+        experimental: {type: boolean}
+        active: {type: boolean}
+        notes: {type: string}
+    Settings:
+      type: object
+      properties:
+        options: {type: object, description: add-on options (read-only here), secrets masked}
+        runtime: {type: object, description: GUI-editable settings}
+        paths: {type: object}
