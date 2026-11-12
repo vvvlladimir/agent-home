@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Lint and tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: make install
+      - run: make ci
+
+  addon-lint:
+    name: Add-on linters
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Home Assistant app linter
+        uses: frenck/action-addon-linter@v2
+        with:
+          path: ./agent_house
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: agent_house/Dockerfile
+          failure-threshold: warning
+
+  image:
+    name: Build image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, platform: linux/amd64, runner: ubuntu-latest}
+          # native arm64 runner: the same CPU architecture as the Raspberry Pi 5, no emulation
+          - {arch: aarch64, platform: linux/arm64, runner: ubuntu-24.04-arm}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: agent_house
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: local/agent_house:ci
+          build-args: |
+            BUILD_ARCH=${{ matrix.arch }}
+            BUILD_VERSION=ci
+      - name: Smoke test the container
+        run: |
+          docker run -d --name ah -e AH_ALLOWED_PEERS='*' -e SUPERVISOR_TOKEN=ci-token \
+            -p 127.0.0.1:8099:8099 local/agent_house:ci
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8099/api/status >/tmp/status.json && break
+            sleep 1
+          done
+          docker logs ah
+          # the app is up, serves the GUI, and the environment reached it (token masked, not empty)
+          python3 -c "import json; s = json.load(open('/tmp/status.json')); assert s['mode'] == 'shadow', s"
+          curl -fsS http://127.0.0.1:8099/ | grep -q "Agent House"
+          curl -fsS http://127.0.0.1:8099/api/settings | grep -q '"ha_token":"\*\*\*"'
+          docker exec ah uname -m
+
+  real-ha:
+    name: HA client against real Home Assistant Core
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: make install
+      - name: Install Home Assistant Core in its own environment
+        run: |
+          python -m venv /tmp/hass
+          /tmp/hass/bin/pip install -q homeassistant
+          /tmp/hass/bin/hass --version
+      - run: make test-realha
+        env:
+          AH_HASS_BIN: /tmp/hass/bin/hass
+      - name: Keep the Home Assistant log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hass-log
+          path: /tmp/pytest-of-*/**/hass.log
+          if-no-files-found: ignore

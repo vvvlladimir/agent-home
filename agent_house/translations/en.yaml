@@ -1,0 +1,34 @@
+configuration:
+  log_level:
+    name: Log level
+    description: How much the add-on writes to its log.
+  jetson_llm_url:
+    name: Jetson inference URL
+    description: >-
+      Base URL of llama-server on the Jetson, for example http://192.168.1.50:8080.
+      Leave empty until the Jetson is set up.
+  jetson_metrics_url:
+    name: Jetson metrics URL
+    description: >-
+      Base URL of the small metrics endpoint from jetson/metrics, for example
+      http://192.168.1.50:9100. Optional.
+  jetson_token:
+    name: Jetson token
+    description: Shared secret for the metrics endpoint's model-switch call. Optional.
+  orchestrator_provider:
+    name: Orchestrator provider
+    description: >-
+      auto uses Claude when an API key is set and the daily budget is not used up, and
+      falls back to the local model otherwise.
+  anthropic_api_key:
+    name: Anthropic API key
+    description: Only needed when the orchestrator may use Claude. Stored by Home Assistant, never shown in the GUI.
+  anthropic_model:
+    name: Claude model
+    description: Model id for the orchestrator, for example claude-opus-5-5.
+  daily_budget_eur:
+    name: Daily cloud budget (EUR)
+    description: Hard stop for Claude API spending per day. 0 disables cloud calls.
+  redact_cloud:
+    name: Redact cloud prompts
+    description: Remove names, coordinates and camera or media entities from anything sent to the cloud.

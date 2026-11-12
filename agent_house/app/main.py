@@ -50,6 +50,8 @@ class PeerGuard:
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
         peer = (scope.get("client") or ("?", 0))[0]
+        if scope["path"] == "/healthz" and peer in ("127.0.0.1", "::1"):
+            return await self.app(scope, receive, send)  # the container's own HEALTHCHECK
         if "*" not in self.allowed and peer not in self.allowed:
             self.ctx.ingress_stats["rejected_peers"] += 1
             log.warning("rejected connection from %s (allowed: %s)", peer, ", ".join(sorted(self.allowed)))
@@ -106,6 +108,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Agent House", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
     app.include_router(router)
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz() -> dict:
+        return {"ok": True, "version": __version__}
 
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:

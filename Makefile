@@ -1,7 +1,7 @@
 .PHONY: help install lint contracts test test-realha sim addon-lint shellcheck analyze-report ci
 PY ?= python3
 PORT ?= 8099
-SH_FILES := $(shell git ls-files '*.sh')
+SH_FILES := $(shell git ls-files -co --exclude-standard '*.sh')
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
