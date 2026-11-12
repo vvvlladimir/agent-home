@@ -48,17 +48,24 @@ async def test_client_connects_and_maps_areas(ha, tmp_path):
         assert client.connected and client.version
         assert "input_boolean.hallway_motion" in client.states
 
-        area = await client.command("config/area_registry/create", name="Hallway")
+        # test setup only: registry edits are not on the client's read-only allowlist
+        area = await client._send("config/area_registry/create", name="Hallway")
         assert {"area_id", "name"} <= set(area)
-        updated = await client.command(
+        updated = await client._send(
             "config/entity_registry/update", entity_id="input_boolean.hallway_light", area_id=area["area_id"]
         )
         assert updated["entity_entry"]["area_id"] == area["area_id"]
 
         entries = await client.command("config/entity_registry/list")
-        assert {"entity_id", "area_id", "device_id", "disabled_by", "hidden_by", "name", "original_name"} <= set(
-            entries[0]
-        )
+        assert {
+            "entity_id",
+            "area_id",
+            "device_id",
+            "disabled_by",
+            "hidden_by",
+            "name",
+            "original_name",
+        } <= set(entries[0])
         assert isinstance(await client.command("config/device_registry/list"), list)
 
         await client.refresh_registry()
@@ -112,7 +119,9 @@ def test_probe_automation_config_roundtrip(rest):
         "description": "created by tests",
         "triggers": [{"trigger": "state", "entity_id": "input_boolean.hallway_motion", "to": "off"}],
         "conditions": [],
-        "actions": [{"action": "input_boolean.turn_off", "target": {"entity_id": "input_boolean.hallway_light"}}],
+        "actions": [
+            {"action": "input_boolean.turn_off", "target": {"entity_id": "input_boolean.hallway_light"}}
+        ],
         "mode": "single",
     }
     created = rest.post(path, json=config)
@@ -151,7 +160,9 @@ async def test_probe_validate_config_over_websocket(ha, tmp_path):
         good = await client.command(
             "validate_config",
             triggers=[{"trigger": "state", "entity_id": "input_boolean.hallway_motion"}],
-            actions=[{"action": "input_boolean.turn_on", "target": {"entity_id": "input_boolean.hallway_light"}}],
+            actions=[
+                {"action": "input_boolean.turn_on", "target": {"entity_id": "input_boolean.hallway_light"}}
+            ],
         )
         assert good["triggers"]["valid"] is True and good["actions"]["valid"] is True
         bad = await client.command("validate_config", triggers=[{"trigger": "no_such_platform"}])

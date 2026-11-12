@@ -10,6 +10,7 @@ in M3 on top of `resolve_tier`; changes to this file need a `reviewer` pass.
 from __future__ import annotations
 
 import json
+import re
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -47,20 +48,29 @@ DEFAULT_POLICY: dict = {
 }
 
 
+_ENTITY_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+
 def _rank(tier: str) -> int:
     return TIERS.index(tier)
 
 
-def _stricter(a: str, b: str) -> str:
-    return a if _rank(a) >= _rank(b) else b
+def _tier(value: object) -> str:
+    """Anything that is not exactly T0..T3 (typo, wrong case, wrong type) fails closed to T3."""
+    return value if isinstance(value, str) and value in TIERS else "T3"
 
 
-def _match(patterns: dict[str, str], entity_id: str) -> str | None:
-    """Exact id wins; otherwise the strictest matching glob (order in the file must not matter)."""
-    if entity_id in patterns:
-        return patterns[entity_id]
-    hits = [tier for pattern, tier in patterns.items() if fnmatchcase(entity_id, pattern)]
-    return max(hits, key=_rank) if hits else None
+def _matches(patterns: object, entity_id: str) -> tuple[str | None, list[str]]:
+    """(exact entry, tiers of all matching globs), every value normalised by `_tier`."""
+    if not isinstance(patterns, dict):
+        return None, []
+    exact = _tier(patterns[entity_id]) if entity_id in patterns else None
+    globs = [
+        _tier(tier)
+        for pattern, tier in patterns.items()
+        if pattern != entity_id and isinstance(pattern, str) and fnmatchcase(entity_id, pattern)
+    ]
+    return exact, globs
 
 
 def resolve_tier(
@@ -68,32 +78,43 @@ def resolve_tier(
 ) -> str:
     """Tier of one entity under the global policy plus an agent's overrides.
 
-    Invariants (tested):
-    - unknown domain → T3;
-    - an entity whose *domain* is T3 can only leave T3 through `t3_whitelist` (exact id), and
-      then lands on T2 at best — never on T0/T1, whatever `entity_tiers` says;
+    Invariants (tested in tests/unit/test_policy_tiers.py):
+    - anything unexpected fails closed: unknown domain, malformed entity id, malformed tier value,
+      malformed policy → T3;
+    - if the domain, an exact `entity_tiers` entry or ANY matching glob says T3, the entity is T3.
+      The only way out is `t3_whitelist` (a list of exact ids), and it leads to T2, never lower;
+    - otherwise: exact `entity_tiers` entry, else the strictest matching glob, else the domain tier;
     - agent overrides can only make an entity stricter.
     """
-    policy = policy or DEFAULT_POLICY
-    if "." not in entity_id:
+    try:
+        return _resolve(entity_id, DEFAULT_POLICY if policy is None else policy, agent_overrides or {})
+    except Exception:  # noqa: BLE001 - the safety layer never fails open
+        return "T3"
+
+
+def _resolve(entity_id: str, policy: dict, agent_overrides: dict) -> str:
+    if not isinstance(entity_id, str) or not _ENTITY_ID.fullmatch(entity_id):
         return "T3"
     domain = entity_id.split(".", 1)[0]
-    domain_tier = policy.get("domain_tiers", {}).get(domain, "T3")
-    entity_tier = _match(policy.get("entity_tiers", {}), entity_id)
+    domain_tiers = policy.get("domain_tiers")
+    domain_tier = _tier(domain_tiers.get(domain)) if isinstance(domain_tiers, dict) else "T3"
+    exact, globs = _matches(policy.get("entity_tiers"), entity_id)
 
-    if domain_tier == "T3":
-        if entity_id in policy.get("t3_whitelist", []):
-            tier = _stricter("T2", entity_tier) if entity_tier in TIERS else "T2"
-        else:
-            tier = "T3"
-    elif entity_tier == "T3" and entity_id in policy.get("t3_whitelist", []):
-        tier = "T2"  # e.g. a garage cover the owner explicitly whitelisted
+    if "T3" in (domain_tier, exact, *globs):
+        whitelist = policy.get("t3_whitelist")
+        whitelisted = isinstance(whitelist, list | tuple | set | frozenset) and entity_id in whitelist
+        tier = "T2" if whitelisted else "T3"
+    elif exact is not None:
+        tier = exact
+    elif globs:
+        tier = max(globs, key=_rank)
     else:
-        tier = entity_tier if entity_tier in TIERS else domain_tier
+        tier = domain_tier
 
-    override = _match(agent_overrides or {}, entity_id)
-    if override in TIERS:
-        tier = _stricter(tier, override)
+    override_exact, override_globs = _matches(agent_overrides, entity_id)
+    for override in (override_exact, *override_globs):
+        if override is not None and _rank(override) > _rank(tier):
+            tier = override
     return tier
 
 

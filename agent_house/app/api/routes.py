@@ -12,9 +12,10 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import __version__
+from ..config import redact_url
 from ..core.policy import READ_ONLY_DOMAINS, resolve_tier
 from ..logbuf import ring
 
@@ -91,7 +92,7 @@ async def set_mode(body: ModeBody, request: Request):
 
 class KillBody(BaseModel):
     engaged: bool
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=200)
 
 
 @router.put("/kill-switch")
@@ -227,7 +228,7 @@ async def get_diagnostics(request: Request) -> Response:
             "entities_without_area": sum(1 for e in ha.states if ha.registry.area_of(e) is None),
             "domains": domains,
             "rest_api_alive": rest_alive,
-            "websocket_url": ctx.settings.ha_websocket_url,
+            "websocket_url": redact_url(ctx.settings.ha_websocket_url),
         },
         "feed.json": ctx.feed.recent(limit=300),
     }

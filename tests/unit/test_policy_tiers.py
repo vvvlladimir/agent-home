@@ -86,3 +86,52 @@ def test_no_combination_of_agent_overrides_ever_loosens():
         base = resolve_tier(entity)
         got = resolve_tier(entity, agent_overrides={entity: override})
         assert TIERS.index(got) >= TIERS.index(base)
+
+
+# --- findings of the M1 safety review -------------------------------------------------------
+
+
+def test_exact_entry_cannot_lower_an_entity_that_a_glob_makes_t3():
+    p = policy(entity_tiers={"cover.*garage*": "T3", "cover.garage_door": "T0"})
+    assert resolve_tier("cover.garage_door", p) == "T3"
+    p["t3_whitelist"] = ["cover.garage_door"]
+    assert resolve_tier("cover.garage_door", p) == "T2"
+
+
+def test_exact_t3_entry_on_a_free_domain_is_lifted_only_by_the_whitelist():
+    p = policy(entity_tiers={"light.server_rack": "T3"})
+    assert resolve_tier("light.server_rack", p) == "T3"
+    p["t3_whitelist"] = ["light.server_rack"]
+    assert resolve_tier("light.server_rack", p) == "T2"
+
+
+@pytest.mark.parametrize("bad", ["t3", "T4", "", None, 3, ["T0"]])
+def test_malformed_tier_values_fail_closed(bad):
+    assert resolve_tier("cover.blinds", policy(entity_tiers={"cover.blinds": bad})) == "T3"
+    assert resolve_tier("cover.blinds", policy(entity_tiers={"cover.*": bad})) == "T3"
+    assert resolve_tier("light.a", policy(domain_tiers={"light": bad})) == "T3"
+    assert resolve_tier("light.a", agent_overrides={"light.a": bad}) == "T3"
+    assert resolve_tier("light.a", agent_overrides={"light.*": bad}) == "T3"
+
+
+@pytest.mark.parametrize("whitelist", ["lock.front_door", None, 7, {"lock.front": True}])
+def test_malformed_whitelist_lifts_nothing(whitelist):
+    p = policy(t3_whitelist=whitelist)
+    assert resolve_tier("lock.front", p) == "T3"
+    assert resolve_tier("lock.front_door", p) == "T3"
+
+
+@pytest.mark.parametrize(
+    "entity", ["cover.Garage_Door", " light.a", "light.a ", "light.a.b", "light.", ".a", "LIGHT.a", None, 5]
+)
+def test_malformed_entity_ids_are_t3(entity):
+    assert resolve_tier(entity) == "T3"
+
+
+@pytest.mark.parametrize(
+    "broken", [{}, {"domain_tiers": None}, {"domain_tiers": "light"}, {"entity_tiers": []}]
+)
+def test_incomplete_or_broken_policy_never_loosens(broken):
+    assert resolve_tier("lock.front_door", broken) == "T3"
+    assert resolve_tier("light.a", broken) in ("T3", "T0")
+    assert resolve_tier("light.a", {}) == "T3", "an empty policy allows nothing"

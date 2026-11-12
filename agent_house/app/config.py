@@ -21,6 +21,24 @@ SUPERVISOR_INGRESS_IP = "172.30.32.2"  # the only peer HA ingress connects from
 SECRET_FIELDS = ("ha_token", "anthropic_api_key", "jetson_token")
 
 
+URL_FIELDS = ("ha_url", "ha_ws_url", "jetson_llm_url", "jetson_metrics_url", "anthropic_base_url")
+
+
+def redact_url(url: str) -> str:
+    """Keep scheme, host, port and path; drop credentials, query and fragment."""
+    if not url:
+        return url
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    hidden = "?***" if parts.query or parts.fragment else ""
+    return (
+        f"{parts.scheme}://{'***@' if parts.username or parts.password else ''}{netloc}{parts.path}{hidden}"
+    )
+
+
 class Settings(BaseModel):
     data_dir: Path = Path("/data")
     port: int = 8099
@@ -69,6 +87,8 @@ class Settings(BaseModel):
         data = self.model_dump(mode="json")
         for key in SECRET_FIELDS:
             data[key] = "***" if data.get(key) else ""
+        for key in URL_FIELDS:
+            data[key] = redact_url(data.get(key) or "")
         return data
 
 

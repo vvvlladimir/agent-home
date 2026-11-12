@@ -18,7 +18,7 @@
     },
     "entity_tiers": {
       "type": "object",
-      "description": "entity_id or glob -> tier; overrides the domain tier in either direction, except that reaching below T3 for a T3 domain additionally needs t3_whitelist.",
+      "description": "entity_id or glob -> tier. An exact id beats globs; among globs the strictest wins. If the domain, the exact entry or any matching glob says T3, the entity is T3 and only t3_whitelist can lift it (to T2).",
       "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
       "default": {"cover.*garage*": "T3"}
     },

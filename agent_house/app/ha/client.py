@@ -27,6 +27,19 @@ from .registry import Registry
 log = logging.getLogger(__name__)
 
 REGISTRY_EVENTS = ("area_registry_updated", "device_registry_updated", "entity_registry_updated")
+# The only WebSocket commands this client sends until the policy engine (M3) and the automation
+# lifecycle (M4) add their own guarded write paths. `call_service` is deliberately absent.
+READ_COMMANDS = frozenset(
+    {
+        "get_states",
+        "get_config",
+        "subscribe_events",
+        "config/area_registry/list",
+        "config/device_registry/list",
+        "config/entity_registry/list",
+        "validate_config",
+    }
+)
 
 
 class HAError(Exception):
@@ -58,6 +71,7 @@ class HAClient:
         self._task: asyncio.Task | None = None
         self._registry_refresh: asyncio.Task | None = None
         self._ready = asyncio.Event()
+        self._was_connected = False
 
     # --- lifecycle -----------------------------------------------------------------
     @property
@@ -94,9 +108,9 @@ class HAClient:
     async def _run(self) -> None:
         backoff = 1.0
         while True:
+            self._was_connected = False
             try:
                 await self._session()
-                backoff = 1.0
             except asyncio.CancelledError:
                 raise
             except _AuthFailed as err:
@@ -110,6 +124,8 @@ class HAClient:
                 self._ready.clear()
                 self._fail_pending("connection closed")
             self.reconnects += 1
+            if self._was_connected:
+                backoff = 1.0  # it worked until just now: retry quickly, then back off again
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
 
@@ -122,11 +138,14 @@ class HAClient:
             try:
                 await self._load_config()
                 await self.refresh_registry()
-                for state in await self.command("get_states"):
-                    self.states[state["entity_id"]] = state
+                # Subscribe before the snapshot so no change falls into the gap between the two;
+                # an event that arrives early is simply overwritten by the (newer) snapshot.
                 for event_type in ("state_changed", *REGISTRY_EVENTS, *self._event_listeners):
-                    await self._subscribe(event_type)
+                    await self.command("subscribe_events", event_type=event_type)
+                # Replace, do not merge: entities removed while we were away must disappear.
+                self.states = {s["entity_id"]: s for s in await self.command("get_states")}
                 self.state, self.last_error = "connected", None
+                self._was_connected = True
                 self._ready.set()
                 log.info(
                     "connected to Home Assistant %s (%d areas, %d entities)",
@@ -166,6 +185,12 @@ class HAClient:
         self.registry = Registry.build(areas, devices, entities)
 
     async def _reader(self, ws: Any) -> None:
+        try:
+            await self._read(ws)
+        finally:
+            self._fail_pending("connection closed")  # do not let callers wait out their timeout
+
+    async def _read(self, ws: Any) -> None:
         async for raw in ws:
             msg = json.loads(raw)
             kind = msg.get("type")
@@ -219,6 +244,13 @@ class HAClient:
 
     # --- websocket commands ----------------------------------------------------------
     async def command(self, type_: str, timeout: float = 20.0, **payload: Any) -> Any:
+        """Send a read-only WebSocket command. Never await this from inside an event listener:
+        the listener runs on the reader task, which is the one that would deliver the answer."""
+        if type_ not in READ_COMMANDS:
+            raise HAError(f"command {type_!r} is not on the read-only allowlist")
+        return await self._send(type_, timeout, **payload)
+
+    async def _send(self, type_: str, timeout: float = 20.0, **payload: Any) -> Any:
         ws = self._ws
         if ws is None:
             raise HAError("not connected")
@@ -226,16 +258,13 @@ class HAClient:
         msg_id = self._msg_id
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[msg_id] = future
-        await ws.send(json.dumps({"id": msg_id, "type": type_, **payload}))
         try:
+            await ws.send(json.dumps({"id": msg_id, "type": type_, **payload}))
             return await asyncio.wait_for(future, timeout)
         except TimeoutError as err:
             raise HAError(f"timeout waiting for {type_}") from err
         finally:
             self._pending.pop(msg_id, None)
-
-    async def _subscribe(self, event_type: str) -> None:
-        await self.command("subscribe_events", event_type=event_type)
 
     def _fail_pending(self, reason: str) -> None:
         for future in self._pending.values():

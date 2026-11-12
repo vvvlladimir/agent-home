@@ -43,9 +43,13 @@ Docs moved: `developers.home-assistant.io/docs/add-ons/*` redirects to
 - **Translations** [DOC] `translations/en.yaml` → `configuration: <option>: {name, description}`.
 - **CI** [DOC] the legacy `home-assistant/builder` action is deprecated; we use plain
   `docker/build-push-action` on native amd64 and arm64 runners. Linter: `frenck/action-addon-linter@v2`
-  (docs now call it the app linter). [UNVERIFIED] exact latest tag: the first CI run settles it.
+  (docs now call it the app linter). [VERIFIED-LOCAL: CI] `@v2` resolves; it accepts our `schema`
+  (including `float(0,100)` and `password?`) and **rejects keys that restate a default** (`boot`,
+  `startup`, `ingress_port: 8099`, `panel_admin`, `hassio_api: false`).
+- [VERIFIED-LOCAL: CI] the unmodified image builds on a native arm64 runner and on amd64, and the
+  container starts and answers (`.github/workflows/ci.yaml`, job "Build image").
 - [UNVERIFIED] `repository.yaml` field list (we use `name`, `url`, `maintainer`), icon/logo sizes
-  (we ship 128×128 and 250×100), `float(min,max)` range syntax in `schema`.
+  (we ship 128×128 and 250×100).
 
 ## 2. Ingress
 
@@ -74,7 +78,7 @@ Docs moved: `developers.home-assistant.io/docs/add-ons/*` redirects to
   registry lists.
 
 Shapes confirmed against a real, headless **Home Assistant Core 2026.2.3** (the newest release that
-installs on the sandbox's Python 3.13; current is 2026.11.x and needs Python ≥ 3.14.2, which CI uses).
+installs on the sandbox's Python 3.13) and, in CI, against the current release on Python 3.14.
 `tests/integration/test_real_ha.py`, 8 tests, all passing: **[VERIFIED-LOCAL]**
 
 - `config/area_registry/create|list` → `area_id`, `name`; `config/entity_registry/list` entries have

@@ -99,7 +99,8 @@ def test_ingress_path_header_is_recorded(ingress):
     connected(ingress.base)
     bundle = httpx.get(f"{ingress.base}/api/diagnostics")
     manifest = json.loads(zipfile.ZipFile(io.BytesIO(bundle.content)).read("manifest.json"))
-    assert manifest["ingress"]["last_ingress_path"] == "/api/hassio_ingress/simtoken"
+    assert manifest["ingress"]["last_ingress_path"] == "/api/hassio_ingress/<8 chars>"
+    assert b"simtoken" not in bundle.content
 
 
 def test_only_the_ingress_peer_may_connect(settings):
@@ -273,3 +274,27 @@ def test_logs_endpoint(ingress):
     connected(ingress.base)
     logs = httpx.get(f"{ingress.base}/api/logs", params={"level": "info"}).json()
     assert any("connected to Home Assistant" in entry["message"] for entry in logs)
+
+
+def test_entities_removed_while_disconnected_disappear_after_reconnect(ingress, ha_state):
+    connected(ingress.base)
+    assert any(
+        e["entity_id"] == "fan.living_room_fan" for e in httpx.get(f"{ingress.base}/api/entities").json()
+    )
+    before = status(ingress.base)["ha"]["reconnects"]
+    ha_state.states.pop("fan.living_room_fan")  # removed in HA without us seeing an event
+    ha_state.drop_ws()
+    wait_for(lambda: status(ingress.base)["ha"]["reconnects"] > before)
+    connected(ingress.base)
+    assert all(
+        e["entity_id"] != "fan.living_room_fan" for e in httpx.get(f"{ingress.base}/api/entities").json()
+    )
+
+
+def test_reconnect_after_a_working_session_is_quick(ingress, ha_state):
+    connected(ingress.base)
+    for _ in range(4):  # with a backoff that never resets, the 4th reconnect would wait 8 s
+        before = status(ingress.base)["ha"]["reconnects"]
+        ha_state.drop_ws()
+        wait_for(lambda b=before: status(ingress.base)["ha"]["reconnects"] > b, timeout=4)
+        wait_for(lambda: status(ingress.base)["ha"]["connected"], timeout=4)

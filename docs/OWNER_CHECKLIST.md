@@ -67,7 +67,6 @@ profile, whether the 4B GGUF file name in `models.md` resolves.
 
 ## Unverified facts to watch for (from RESEARCH.md)
 
-- `float(0,100)` option schema and `repository.yaml` fields: the app linter in CI and the store
-  listing on your HA settle these.
+- `repository.yaml` fields and icon sizes: the store listing on your HA settles these.
 - llama-server `timings` field names, default port, `--mlock` spelling: `setup.sh --check` will
   record `llama-server --help` and one sample response.

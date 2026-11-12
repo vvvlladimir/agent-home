@@ -64,7 +64,10 @@ class PeerGuard:
         self.ctx.ingress_stats["last_peer"] = peer
         for name, value in scope.get("headers", []):
             if name == b"x-ingress-path":
-                self.ctx.ingress_stats["last_ingress_path"] = value.decode("latin-1")
+                # /api/hassio_ingress/<token>: the token is a session secret, keep only the shape
+                path = value.decode("latin-1").rstrip("/")
+                head, _, token = path.rpartition("/")
+                self.ctx.ingress_stats["last_ingress_path"] = f"{head}/<{len(token)} chars>" if head else path
                 break
         return await self.app(scope, receive, send)
 

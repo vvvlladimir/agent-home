@@ -14,7 +14,7 @@ WORKDIR /opt/agent_house
 COPY requirements.txt .
 # Prefer wheels: every dependency ships musllinux wheels for aarch64 and amd64, so no compiler is
 # needed. If a wheel is missing the build fails loudly here instead of compiling for an hour on a Pi.
-RUN pip install --only-binary=:all: -r requirements.txt
+RUN pip install --no-cache-dir --only-binary=:all: -r requirements.txt
 
 COPY app ./app
 COPY run.sh /run.sh
