@@ -22,7 +22,7 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] API: status, mode, kill switch, areas, entities, feed + SSE, settings, logs, diagnostics bundle
 - [x] GUI: dashboard, live feed, entity browser with tiers, settings & logs; placeholders for later pages
 - [x] Tier resolution (`core/policy.py`) with invariant tests
-- [ ] CI green on GitHub (first run after push)
+- [x] CI green on GitHub (run 2: lint+tests 3.13/3.14, app linter, hadolint, amd64+aarch64 image, real HA Core)
 - [ ] **Owner:** install on the Pi, open the panel, commit screenshot + diagnostics (OWNER_CHECKLIST M1)
 
 ## M2 — Inference stack
