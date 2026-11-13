@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "kind": "setup_check",
+  "created": "2026-11-13T00:48:15Z",
+  "module": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+  "is_orin_nano_8gb": true,
+  "l4t_version": "36.5.0",
+  "jetpack_major": 6,
+  "ubuntu": "22.04",
+  "cuda_version": "12.6.11",
+  "ram_total_mb": 7607.0,
+  "ram_available_mb": 5039.0,
+  "swap_total_mb": 11995.0,
+  "zram_enabled": true,
+  "power_mode": "MAXN_SUPER",
+  "power_modes_available": [
+    "0:15W",
+    "1:25W",
+    "2:MAXN_SUPER"
+  ],
+  "default_target": "multi-user.target",
+  "disk_free_gb": 26.9,
+  "llama_server_path": "/home/vvvlladimir/llama.cpp/build/bin/llama-server",
+  "llama_server_version": "version: 9728 (fabde3bf5)",
+  "checks": [
+    {
+      "name": "platform",
+      "status": "ok",
+      "detail": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super, 7607 MB RAM"
+    },
+    {
+      "name": "jetpack",
+      "status": "ok",
+      "detail": "L4T 36.5.0 (JetPack 6)"
+    },
+    {
+      "name": "cuda",
+      "status": "ok",
+      "detail": "CUDA 12.6.11 in /usr/local/cuda"
+    },
+    {
+      "name": "power_mode",
+      "status": "ok",
+      "detail": "MAXN_SUPER"
+    },
+    {
+      "name": "jetson_clocks",
+      "status": "ok",
+      "detail": "run by llama-server.service at every start"
+    },
+    {
+      "name": "swap",
+      "status": "ok",
+      "detail": "8191 MB on disk (zram: true)"
+    },
+    {
+      "name": "headless",
+      "status": "ok",
+      "detail": "boots to multi-user.target (no desktop)"
+    },
+    {
+      "name": "disk",
+      "status": "ok",
+      "detail": "26.9 GB free in /home/vvvlladimir"
+    },
+    {
+      "name": "packages",
+      "status": "ok",
+      "detail": "git cmake build-essential libcurl4-openssl-dev curl python3 python3-yaml"
+    },
+    {
+      "name": "llama_server",
+      "status": "ok",
+      "detail": "/home/vvvlladimir/llama.cpp/build/bin/llama-server (version: 9728 (fabde3bf5))"
+    },
+    {
+      "name": "token",
+      "status": "warn",
+      "detail": "no token yet: the profile switch and llama-server would be open or refused",
+      "would_change": "generate /etc/agent-house/token (mode 600) and print it once for the add-on's jetson_token option"
+    },
+    {
+      "name": "unit:llama-server.service",
+      "status": "warn",
+      "detail": "not installed or out of date",
+      "would_change": "install to /etc/systemd/system, enable and start as user vvvlladimir"
+    },
+    {
+      "name": "unit:agent-house-metrics.service",
+      "status": "warn",
+      "detail": "not installed or out of date",
+      "would_change": "install to /etc/systemd/system, enable and start as user vvvlladimir"
+    },
+    {
+      "name": "sudoers",
+      "status": "warn",
+      "detail": "the metrics service cannot restart llama-server yet",
+      "would_change": "add /etc/sudoers.d/agent-house: vvvlladimir ALL=(root) NOPASSWD: /usr/bin/systemctl restart llama-server.service"
+    }
+  ]
+}
