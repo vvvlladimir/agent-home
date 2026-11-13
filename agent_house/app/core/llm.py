@@ -53,6 +53,10 @@ class LLMUnavailable(LLMError):
     """No usable local model right now (not configured, unreachable, still loading at the deadline)."""
 
 
+class LLMTimeout(LLMError):
+    """No complete answer within the request's time limit (not retried: the slot was busy)."""
+
+
 class LLMDropped(LLMError):
     """The request was never sent. `reason`: coalesced | stale | queue_full | shutdown."""
 
@@ -411,7 +415,7 @@ class LLMManager:
                 return result
             except TimeoutError:
                 self._failures += 1
-                raise LLMError(f"no complete answer within {job.timeout_s:.0f} s") from None
+                raise LLMTimeout(f"no complete answer within {job.timeout_s:.0f} s") from None
             except _Retry as err:
                 self._failures += 1
                 if err.loading:

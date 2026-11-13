@@ -1,16 +1,18 @@
-"""Policy engine, part 1: tier resolution (pure functions, no I/O).
+"""Policy engine: tier resolution and the decision function (pure functions, no I/O).
 
 Tiers: T0 free · T1 act + notify · T2 act only after human approval · T3 never.
 Deny by default: a domain that is not listed is T3.
 
-The decision function (kill switch, allowlists, shadow mode, rate limits, approvals) is added
-in M3 on top of `resolve_tier`; changes to this file need a `reviewer` pass.
+`decide` answers one question for one service call on one entity, in a fixed order:
+kill switch → allowlist → service allowlist → tier → rate limit → mode. Anything unexpected is
+`denied`. `core/actuator.py` is its only production caller; changes here need a `reviewer` pass.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from pathlib import Path
 
@@ -28,8 +30,8 @@ DEFAULT_POLICY: dict = {
         "light": "T0",
         "media_player": "T0",
         "fan": "T0",
-        "scene": "T1",
-        "input_boolean": "T1",
+        "scene": "T2",
+        "input_boolean": "T2",
         "humidifier": "T1",
         "vacuum": "T1",
         "climate": "T2",
@@ -45,7 +47,32 @@ DEFAULT_POLICY: dict = {
     },
     "entity_tiers": {"cover.*garage*": "T3"},
     "t3_whitelist": [],
+    "allowed_services": {
+        "light": ["turn_on", "turn_off", "toggle"],
+        "media_player": [
+            "turn_on",
+            "turn_off",
+            "media_play",
+            "media_pause",
+            "media_stop",
+            "volume_set",
+            "volume_mute",
+        ],
+        "fan": ["turn_on", "turn_off", "set_percentage"],
+        "scene": ["turn_on"],
+        "input_boolean": ["turn_on", "turn_off"],
+        "humidifier": ["turn_on", "turn_off", "set_humidity"],
+        "vacuum": ["start", "return_to_base"],
+        "climate": ["set_temperature", "set_hvac_mode", "turn_on", "turn_off"],
+        "cover": ["open_cover", "close_cover", "set_cover_position", "stop_cover"],
+        "switch": ["turn_on", "turn_off"],
+        "water_heater": ["set_temperature"],
+        "input_number": ["set_value"],
+    },
+    "rate_limits": {"per_entity_per_minute": 4, "global_per_minute": 30},
+    "approval_ttl_s": 900,
 }
+POLICY_KEYS = tuple(DEFAULT_POLICY)
 
 
 _ENTITY_ID = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
@@ -121,4 +148,143 @@ def _resolve(entity_id: str, policy: dict, agent_overrides: dict) -> str:
 def schema_defaults() -> dict:
     """Defaults as written in the JSON Schema (used by the sync test)."""
     props = json.loads(_SCHEMA.read_text())["properties"]
-    return {key: props[key]["default"] for key in ("domain_tiers", "entity_tiers", "t3_whitelist")}
+    defaults = {key: props[key]["default"] for key in POLICY_KEYS}
+    limits = props["rate_limits"]["properties"]
+    defaults["rate_limits"] = {key: limits[key]["default"] for key in limits}
+    return defaults
+
+
+def effective_policy(stored: object) -> dict:
+    """The owner's policy file over the defaults, key by key. A missing key keeps its default;
+    a present key replaces the default as a whole (so the owner can remove a domain)."""
+    stored = stored if isinstance(stored, dict) else {}
+    merged = {key: stored.get(key, default) for key, default in DEFAULT_POLICY.items()}
+    if isinstance(merged["rate_limits"], dict):
+        merged["rate_limits"] = {**DEFAULT_POLICY["rate_limits"], **merged["rate_limits"]}
+    return merged
+
+
+# --- decision ---------------------------------------------------------------------------------
+
+_NAME = re.compile(r"^[a-z0-9_]+$")
+# Service data must not carry its own target: the entity is the one the decision was made for.
+TARGET_KEYS = frozenset({"entity_id", "area_id", "device_id", "floor_id", "label_id", "target"})
+
+
+@dataclass(frozen=True)
+class Decision:
+    verdict: str  # allow | shadow | pending | denied
+    tier: str
+    reason: str
+
+
+def _limit(value: object, default: int) -> int:
+    """A rate limit as a non-negative int; anything malformed means 0 (= nothing allowed)."""
+    if value is None:
+        return default
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+def decide(
+    *,
+    domain: object,
+    service: object,
+    entity_id: object,
+    data: object,
+    agent: dict | None,
+    scope: object,
+    kill_engaged: bool,
+    global_mode: str,
+    policy: dict | None = None,
+    recent: dict | None = None,
+    approved: bool = False,
+    force_shadow: bool = False,
+    protected: object = (),
+) -> Decision:
+    """May `agent` call `domain.service` on `entity_id` right now?
+
+    - `agent`: the agent's config as a dict (`enabled`, `mode`, `tier_overrides`, `limits`);
+    - `scope`: the entity ids the agent is allowed to see and touch (its allowlist);
+    - `recent`: actions counted in the last minute: {"entity": n, "agent": n, "global": n};
+    - `approved`: the owner approved this very action (lets a T2 action through, nothing else);
+    - `force_shadow`: replays never actuate;
+    - `protected`: entity ids no agent may ever actuate (the kill switch helper).
+
+    Verdicts: `denied`; `shadow` (would be allowed, the mode says do not send); `pending` (T2,
+    waits for the owner); `allow`. Invariants (tests/unit/test_policy_decide.py): an engaged kill
+    switch denies everything; T3 is never anything but denied; nothing outside the allowlist or
+    the service allowlist gets past `denied`; any exception or malformed input denies.
+    """
+    try:
+        return _decide(
+            domain, service, entity_id, data, agent, scope, kill_engaged, global_mode,
+            DEFAULT_POLICY if policy is None else policy, recent or {}, approved, force_shadow, protected,
+        )  # fmt: skip
+    except Exception:  # noqa: BLE001 - the safety layer never fails open
+        return Decision("denied", "T3", "policy error (failing closed)")
+
+
+def _decide(
+    domain, service, entity_id, data, agent, scope, kill_engaged, global_mode, policy, recent, approved,
+    force_shadow, protected,
+) -> Decision:  # fmt: skip
+    def deny(reason: str, tier: str = "T3") -> Decision:
+        return Decision("denied", tier, reason)
+
+    # 1. kill switch: `is not False` so that a broken flag (None, "no") still stops everything
+    if kill_engaged is not False:
+        return deny("kill switch engaged")
+
+    # shape: nothing below may see a value of the wrong type
+    if not isinstance(entity_id, str) or not _ENTITY_ID.fullmatch(entity_id):
+        return deny("malformed entity id")
+    if not isinstance(domain, str) or not isinstance(service, str):
+        return deny("malformed domain or service")
+    if not _NAME.fullmatch(domain) or not _NAME.fullmatch(service):
+        return deny("malformed domain or service")
+    if not isinstance(data, dict):
+        return deny("service data must be an object")
+    if TARGET_KEYS & set(data):
+        return deny("service data must not name a target; one call acts on one entity_id")
+    if not isinstance(agent, dict) or agent.get("enabled") is not True:
+        return deny("agent is disabled or unknown")
+    tier = resolve_tier(entity_id, policy, agent.get("tier_overrides") or {})
+
+    # 2. the agent's entity allowlist
+    if not isinstance(scope, set | frozenset) or entity_id not in scope:
+        return deny(f"{entity_id} is not in this agent's allowlist", tier)
+    if not isinstance(protected, set | frozenset | tuple | list) or entity_id in protected:
+        return deny(f"{entity_id} is reserved for the owner", tier)
+
+    # 3. service allowlist (a call always targets an entity of its own domain)
+    if domain != entity_id.split(".", 1)[0]:
+        return deny(f"{domain}.{service} does not apply to {entity_id}", tier)
+    services = policy.get("allowed_services")
+    allowed = services.get(domain) if isinstance(services, dict) else None
+    if not isinstance(allowed, list | tuple) or service not in allowed:
+        return deny(f"service {domain}.{service} is not on the allowlist", tier)
+
+    # 4. tier
+    if tier not in ("T0", "T1", "T2"):
+        return deny("T3 entities are never actuated", "T3")
+
+    # 5. rate limits
+    limits = policy.get("rate_limits")
+    limits = limits if isinstance(limits, dict) else {}
+    defaults = DEFAULT_POLICY["rate_limits"]
+    agent_limits = agent.get("limits") if isinstance(agent.get("limits"), dict) else {}
+    for key, cap, label in (
+        ("entity", _limit(limits.get("per_entity_per_minute"), defaults["per_entity_per_minute"]), "entity"),
+        ("agent", _limit(agent_limits.get("max_actions_per_minute"), 6), "agent"),
+        ("global", _limit(limits.get("global_per_minute"), defaults["global_per_minute"]), "global"),
+    ):
+        count = recent.get(key, 0)
+        if not isinstance(count, int) or count >= cap:
+            return deny(f"rate limit: {label} limit of {cap} actions per minute reached", tier)
+
+    # 6. mode: live needs both the global switch and the agent's own
+    if force_shadow or global_mode != "live" or agent.get("mode") != "live":
+        return Decision("shadow", tier, "shadow mode: recorded, not sent")
+    if tier == "T2" and approved is not True:
+        return Decision("pending", tier, "T2: waiting for the owner's approval")
+    return Decision("allow", tier, "approved by the owner" if tier == "T2" else f"{tier}: allowed")

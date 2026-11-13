@@ -40,16 +40,17 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## M3 — Room agents in Shadow Mode
 
-- [ ] Policy decision function: kill switch → allowlist → service allowlist → tier → rate limit → mode
-- [ ] Single actuation path (`Actuator`), T2 approvals with expiry, action log
-- [ ] Event gate: per-agent rules, debounce, cooldown, hourly cap; cron wakes
-- [ ] Agent runtime: compact context, stable prompt prefix, step/token/time limits, escalate instead of guess
-- [ ] Tools: get_state, list_entities, get_history, call_service, report, ask_agent, schedule_wake, remember/recall
-- [ ] Traces: store, API, GUI page with replay and copy-as-test-case
-- [ ] Agents CRUD page (area picker, tiers, wake rules, prompt preview with token estimate)
-- [ ] Kill switch from HA (`agent_house_kill_switch` event, optional `input_boolean`)
-- [ ] `tests/eval`: tool-call eval against scripted LLM; two sample rooms (owner, Q3: Bedroom, Livingroom)
-- [ ] If SSE does not pass the real ingress: polling fallback for the feed
+- [x] Policy decision function: kill switch → allowlist → service allowlist → tier → rate limit → mode
+- [x] Single actuation path (`Actuator`), T2 approvals with expiry, action log
+- [x] Event gate: per-agent rules, debounce, cooldown, hourly cap; cron wakes
+- [x] Agent runtime: compact context, stable prompt prefix, step/token/time limits, escalate instead of guess
+- [x] Tools: get_state, list_entities, get_history, call_service, report, ask_agent, schedule_wake, remember/recall
+- [x] Traces: store, API, GUI page with replay and copy-as-test-case
+- [x] Agents CRUD page (area picker, tiers, wake rules, prompt preview with token estimate)
+- [x] Kill switch from HA (`agent_house_kill_switch` event, optional `input_boolean`)
+- [x] `tests/eval`: tool-call eval against scripted LLM; two sample rooms (owner, Q3: Bedroom, Livingroom)
+- [x] Polling fallback for the feed (SSE passed ingress in M1; fallback kicks in after 8 s without a stream)
+- [ ] **Owner:** two room agents in Shadow for a day, traces + case files (OWNER_CHECKLIST M3)
 
 ## M4 — Orchestrator + automation lifecycle
 

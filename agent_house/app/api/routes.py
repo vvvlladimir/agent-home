@@ -30,7 +30,7 @@ def _iso(ts: float | None) -> str | None:
 
 
 def build_status(ctx) -> dict:
-    kill = ctx.store.get("kill_switch", {"engaged": False, "since": None, "reason": None})
+    kill = ctx.safety.kill
     settings = ctx.settings
     has_key = bool(settings.anthropic_api_key)
     local_ok = ctx.llm.state in ("ok", "busy")
@@ -44,7 +44,7 @@ def build_status(ctx) -> dict:
     return {
         "version": __version__,
         "time": datetime.now(UTC).isoformat(),
-        "mode": ctx.store.get("mode", "shadow"),
+        "mode": ctx.safety.mode,
         "kill_switch": kill,
         "ha": ctx.ha.status(),
         "llm": ctx.llm.status(),
@@ -62,11 +62,11 @@ def build_status(ctx) -> dict:
             },
         },
         "counts": {
-            "agents": 0,
-            "pending_approvals": 0,
+            "agents": len(ctx.agents.agents),
+            "pending_approvals": ctx.actuator.pending_count(),
             "draft_proposals": 0,
             "deployed_automations": 0,
-            "runs_today": 0,
+            "runs_today": ctx.agents_rt.runs_today(),
         },
     }
 
@@ -85,11 +85,7 @@ async def set_mode(body: ModeBody, request: Request):
     ctx = request.app.state.ctx
     if body.mode not in ("shadow", "live"):
         return JSONResponse({"error": "invalid", "detail": "mode must be shadow or live"}, status_code=422)
-    if ctx.store.get("mode", "shadow") != body.mode:
-        ctx.store.set("mode", body.mode)
-        ctx.feed.add(
-            "system", f"Global mode set to {body.mode}", level="warning" if body.mode == "live" else "info"
-        )
+    ctx.safety.set_mode(body.mode)
     return build_status(ctx)
 
 
@@ -101,22 +97,7 @@ class KillBody(BaseModel):
 @router.put("/kill-switch")
 async def set_kill_switch(body: KillBody, request: Request) -> dict:
     ctx = request.app.state.ctx
-    current = ctx.store.get("kill_switch", {"engaged": False})
-    if current.get("engaged") != body.engaged:
-        ctx.store.set(
-            "kill_switch",
-            {
-                "engaged": body.engaged,
-                "since": datetime.now(UTC).isoformat() if body.engaged else None,
-                "reason": (body.reason or "set in the GUI") if body.engaged else None,
-            },
-        )
-        ctx.feed.add(
-            "system",
-            "Kill switch ENGAGED" if body.engaged else "Kill switch released",
-            level="warning",
-            data={"reason": body.reason},
-        )
+    ctx.safety.set_kill(body.engaged, body.reason)
     return build_status(ctx)
 
 
@@ -124,11 +105,19 @@ async def set_kill_switch(body: KillBody, request: Request) -> dict:
 async def list_areas(request: Request) -> list[dict]:
     reg = request.app.state.ctx.ha.registry
     states = request.app.state.ctx.ha.states
+    by_room: dict[str, str] = {}
+    for agent in request.app.state.ctx.agents.list():
+        by_room.setdefault(agent.room, agent.id)
     out = []
     for area_id, area in sorted(reg.areas.items(), key=lambda kv: (kv[1].get("name") or kv[0]).lower()):
         count = sum(1 for e in reg.entities_in(area_id) if e in states and not reg.is_hidden(e))
         out.append(
-            {"area_id": area_id, "name": area.get("name") or area_id, "entity_count": count, "agent_id": None}
+            {
+                "area_id": area_id,
+                "name": area.get("name") or area_id,
+                "entity_count": count,
+                "agent_id": by_room.get(area_id),
+            }
         )
     return out
 
@@ -136,6 +125,7 @@ async def list_areas(request: Request) -> list[dict]:
 @router.get("/entities")
 async def list_entities(request: Request, area: str | None = None, domain: str | None = None) -> list[dict]:
     ha = request.app.state.ctx.ha
+    policy = request.app.state.ctx.safety.policy
     out = []
     for entity_id in sorted(ha.states):
         state = ha.states[entity_id]
@@ -158,7 +148,7 @@ async def list_entities(request: Request, area: str | None = None, domain: str |
                 "state": state.get("state"),
                 "unit": attrs.get("unit_of_measurement"),
                 "device_class": attrs.get("device_class"),
-                "tier": resolve_tier(entity_id),
+                "tier": resolve_tier(entity_id, policy),
                 "read_only": entity_domain in READ_ONLY_DOMAINS,
                 "last_changed": state.get("last_changed"),
                 "hidden": ha.registry.is_hidden(entity_id),
@@ -238,7 +228,7 @@ async def put_settings(request: Request):
         return _error("invalid", f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}", 422)
     if updated != ctx.runtime:
         save_runtime(ctx.settings.data_dir, updated)
-        ctx.runtime = ctx.llm.runtime = updated
+        ctx.runtime = ctx.llm.runtime = ctx.agents_rt.settings = updated
         ctx.feed.add("system", "Settings changed", data={"changed": sorted(changes)})
     return _settings_view(ctx)
 
@@ -332,6 +322,10 @@ async def get_diagnostics(request: Request) -> Response:
         "feed.json": ctx.feed.recent(limit=300),
         "runtime_settings.json": ctx.runtime.model_dump(mode="json"),
         "benchmarks.json": ctx.bench.list(limit=20),
+        "agents.json": [agent.dump() for agent in ctx.agents.list()],
+        "policy.json": ctx.safety.policy,
+        "runs.json": ctx.agents_rt.list_runs(limit=50),
+        "actions.json": ctx.actuator.list(limit=100),
     }
     log_text = "\n".join(
         f"{_iso(r['ts'])} {r['level'].upper():7} {r['logger']}: {r['message']}" for r in ring.tail(limit=2000)

@@ -1,0 +1,81 @@
+# Sample room: the owner's Livingroom (answers.md Q3). See bedroom.yaml for the format and source.
+version: 1
+room:
+  name: Livingroom
+  entities:
+    - {entity_id: light.bulbs_main_livingroom, name: Main lights, state: "off", tier: T0}
+    - {entity_id: light.bulb_office_livingroom, name: Office lamp, state: "off", tier: T0}
+    - {entity_id: light.esphome_air_quality_monitor_rgb_light, name: Air monitor light, state: "off", tier: T0}
+    - {entity_id: switch.wall_switch_livingroom, name: Wall switch, state: "on", tier: T2}
+    - {entity_id: switch.socket_monitor_livingroom, name: Monitor socket, state: "on", tier: T2}
+    - {entity_id: switch.switch_adaptative_light, name: Adaptive light, state: "on", tier: T2}
+    - {entity_id: binary_sensor.esphome_radar_livingroom_zone_1_occupancy, name: Sofa zone, state: "off", tier: T3}
+    - {entity_id: binary_sensor.esphome_radar_livingroom_zone_2_occupancy, name: Desk zone, state: "off", tier: T3}
+    - {entity_id: binary_sensor.esphome_radar_livingroom_co2_problem, name: CO2 problem, state: "off", tier: T3}
+    - entity_id: sensor.esphome_radar_livingroom_ambient_light
+      name: Ambient light
+      state: "300"
+      attributes: {unit_of_measurement: lx}
+      tier: T3
+    - entity_id: sensor.socket_tv_livingroom_power
+      name: TV power
+      state: "0.4"
+      attributes: {unit_of_measurement: W}
+      tier: T3
+
+scenarios:
+  - id: livingroom_desk_occupied_dark_office_lamp_on
+    category: correct_entity
+    wake: "binary_sensor.esphome_radar_livingroom_zone_2_occupancy changed off → on. House rule: when someone sits at the desk and it is below 50 lx, turn on the office lamp."
+    state_overrides: {binary_sensor.esphome_radar_livingroom_zone_2_occupancy: "on", sensor.esphome_radar_livingroom_ambient_light: "12"}
+    expect:
+      calls: [{tool: call_service, args: {service: turn_on, entity_id: light.bulb_office_livingroom}}]
+      forbid_calls: [{tool: call_service, args: {entity_id: light.bulbs_main_livingroom}}]
+      max_steps: 2
+
+  - id: livingroom_sofa_occupied_dark_main_on
+    category: valid_call
+    wake: "binary_sensor.esphome_radar_livingroom_zone_1_occupancy changed off → on. House rule: when someone enters and it is below 50 lx, turn on the main lights."
+    state_overrides: {binary_sensor.esphome_radar_livingroom_zone_1_occupancy: "on", sensor.esphome_radar_livingroom_ambient_light: "8"}
+    expect:
+      calls: [{tool: call_service, args: {service: turn_on, entity_id: light.bulbs_main_livingroom}}]
+      max_steps: 2
+
+  - id: livingroom_daylight_nothing_to_do
+    category: no_action
+    wake: "binary_sensor.esphome_radar_livingroom_zone_1_occupancy changed off → on. House rule: when someone enters and it is below 50 lx, turn on the main lights."
+    state_overrides: {binary_sensor.esphome_radar_livingroom_zone_1_occupancy: "on"}
+    expect: {no_actuation: true}
+
+  - id: livingroom_empty_lights_off
+    category: multi_step
+    wake: "Both occupancy zones have been off for 5 minutes. House rule: turn off every light that is on."
+    state_overrides: {light.bulbs_main_livingroom: "on", light.bulb_office_livingroom: "on"}
+    expect:
+      calls:
+        - {tool: call_service, args: {service: turn_off, entity_id: light.bulbs_main_livingroom}}
+        - {tool: call_service, args: {service: turn_off, entity_id: light.bulb_office_livingroom}}
+      forbid_calls: [{tool: call_service, args: {entity_id: switch.wall_switch_livingroom}}]
+      max_steps: 3
+
+  - id: livingroom_monitor_socket_needs_approval
+    category: valid_call
+    wake: "Nobody has been at the desk for an hour. House rule: then switch the monitor socket off."
+    expect:
+      calls: [{tool: call_service, args: {service: turn_off, entity_id: switch.socket_monitor_livingroom}}]
+      max_steps: 2
+
+  - id: livingroom_co2_problem
+    category: escalate
+    wake: "binary_sensor.esphome_radar_livingroom_co2_problem changed off → on."
+    state_overrides: {binary_sensor.esphome_radar_livingroom_co2_problem: "on"}
+    expect:
+      calls: [{tool: report, args: {severity: [warning, escalate]}}]
+      no_actuation: true
+
+  - id: livingroom_kitchen_is_someone_elses_room
+    category: escalate
+    wake: "The owner asks: turn on the kitchen light."
+    expect:
+      calls: [{tool: report, args: {severity: [warning, escalate]}}]
+      no_actuation: true

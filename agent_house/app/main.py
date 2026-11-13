@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -12,11 +13,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
+from .api.agents import router as agents_router
 from .api.routes import router
 from .config import RuntimeSettings, Settings, load_runtime, load_settings
+from .core.actuator import Actuator
+from .core.agents import AgentStore
 from .core.bench import BenchRunner
+from .core.gate import EventGate
 from .core.llm import LLMManager
 from .core.monitor import JetsonMonitor
+from .core.runtime import AgentRuntime, WakeRefused
+from .core.safety import KILL_EVENT, Safety
 from .ha.client import HAClient
 from .logbuf import setup_logging
 from .store.db import Store
@@ -36,6 +43,11 @@ class Context:
     runtime: RuntimeSettings
     llm: LLMManager
     bench: BenchRunner
+    safety: Safety
+    agents: AgentStore
+    agents_rt: AgentRuntime
+    actuator: Actuator
+    gate: EventGate
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -85,15 +97,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     monitor = JetsonMonitor(settings)
     runtime = load_runtime(settings.data_dir)
     llm = LLMManager(settings, runtime, monitor)
+    ha = HAClient(settings)
+    safety = Safety(store, feed, settings.data_dir)
+    agents = AgentStore(settings.data_dir)
+    agents_rt = AgentRuntime(
+        agents=agents, ha=ha, llm=llm, store=store, feed=feed, safety=safety, runtime_settings=runtime
+    )
+
+    def kill_entity() -> set[str]:
+        return {ctx.runtime.kill_switch_entity} if ctx.runtime.kill_switch_entity else set()
+
+    actuator = Actuator(store, feed, ha, safety, agents, agents_rt.scope, protected=kill_entity)
+
+    def wake(agent_id: str, **kwargs) -> None:
+        try:
+            agents_rt.wake(agent_id, **kwargs)
+        except WakeRefused as err:
+            feed.add("gate_drop", f"{agent_id}: not woken, {err}", level="debug", agent_id=agent_id)
+
+    gate = EventGate(agents, feed, store, agents_rt.scope, wake)
+    agents_rt.actuator, agents_rt.gate = actuator, gate
     ctx = Context(
         settings=settings,
         store=store,
         feed=feed,
-        ha=HAClient(settings),
+        ha=ha,
         monitor=monitor,
         runtime=runtime,
         llm=llm,
         bench=BenchRunner(llm, monitor, store, feed),
+        safety=safety,
+        agents=agents,
+        agents_rt=agents_rt,
+        actuator=actuator,
+        gate=gate,
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -102,8 +139,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if old_state == new_state:
             return  # attribute-only updates are noise for the feed
         ctx.feed.add("state", f"{entity_id}: {old_state} → {new_state}", entity_id=entity_id, level="debug")
+        # Optional kill switch helper in HA (Settings → kill_switch_entity): on = engaged.
+        if entity_id == ctx.runtime.kill_switch_entity and new_state in ("on", "off"):
+            safety.set_kill(new_state == "on", f"{entity_id} is {new_state}", source="Home Assistant")
+
+    def on_kill_event(event: dict) -> None:
+        """HA event `agent_house_kill_switch`; data: {engaged: bool = true, reason: str}."""
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        engaged = data.get("engaged") is not False  # anything unclear engages
+        safety.set_kill(engaged, str(data.get("reason") or "")[:200] or None, source="Home Assistant event")
 
     ctx.ha.on_state_changed(on_state)
+    ctx.ha.on_state_changed(gate.on_state)
+    ctx.ha.on_event(KILL_EVENT, on_kill_event)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -114,9 +162,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await ctx.ha.start()
         await ctx.monitor.start()
         await ctx.llm.start()
+        await ctx.gate.start()
+
+        async def sync_kill_helper() -> None:
+            """The helper may have been switched on while the add-on was down."""
+            entity = ctx.runtime.kill_switch_entity
+            if entity and await ctx.ha.wait_ready(120) and ctx.ha.states.get(entity, {}).get("state") == "on":
+                safety.set_kill(True, f"{entity} is on", source="Home Assistant")
+
+        helper_sync = asyncio.create_task(sync_kill_helper(), name="kill-helper-sync")
         try:
             yield
         finally:
+            helper_sync.cancel()
+            await ctx.gate.stop()
+            await ctx.agents_rt.stop()
             await ctx.bench.stop()
             await ctx.llm.stop()
             await ctx.monitor.stop()
@@ -125,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Agent House", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
+    app.include_router(agents_router)  # before `router`: its catch-all answers 501 for the rest
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)

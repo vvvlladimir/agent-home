@@ -26,7 +26,7 @@ def test_defaults_match_the_contract_schema():
         ("light.kitchen", "T0"),
         ("media_player.tv", "T0"),
         ("fan.bedroom", "T0"),
-        ("scene.movie", "T1"),
+        ("scene.movie", "T2"),
         ("climate.bedroom", "T2"),
         ("cover.blinds", "T2"),
         ("switch.space_heater", "T2"),

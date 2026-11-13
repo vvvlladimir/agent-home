@@ -89,11 +89,11 @@ total, mostly the llama.cpp build and the model downloads.
    ```
    Restart the add-on, update it first if the store offers 0.1.0-dev.2. Then check and note:
    - [ ] Dashboard → Jetson card: inference server `ok`, the model name, memory and temperature
-   - [ ] **Models & Benchmarks**: four profiles, `qwen35-4b-balanced` marked active
-   - [ ] **Run benchmark** with *Quick* ticked finishes and shows a row with tok/s and tool calls
-   - [ ] **Activate** `qwen35-2b-fast`: state shows `warming`, then `ok` with the new model;
+   - [x] **Models & Benchmarks**: four profiles, `qwen35-4b-balanced` marked active
+   - [x] **Run benchmark** with *Quick* ticked finishes and shows a row with tok/s and tool calls
+   - [x] **Activate** `qwen35-2b-fast`: state shows `warming`, then `ok` with the new model;
          activate `qwen35-4b-balanced` again afterwards
-   - [ ] Settings → Local model requests: change *Timeout* to 90, Save, restart the add-on: still 90
+   - [x] Settings → Local model requests: change *Timeout* to 90, Save, restart the add-on: still 90
 6. **Commit** and push:
    ```bash
    git add owner-reports/setup owner-reports/bench owner-reports/logs
@@ -116,6 +116,34 @@ means llama.cpp was built without OpenSSL. Fixed in the scripts; on a Jetson set
 
 If something breaks: `journalctl -u llama-server -n 100`, `journalctl -u agent-house-metrics -n 50`
 into `owner-reports/logs/`.
+
+## M3 — room agents in Shadow Mode
+
+Update the add-on, keep the global mode on **Shadow**. About 30 minutes.
+
+1. **Agents → New room agent** for *Bedroom*, then for *Livingroom* (Q3). Tick nothing in the entity
+   list (the room's entities are picked automatically), add one state rule on the room's motion or
+   presence sensor (`To: on`), Save. Check the **Prompt preview**: token estimate below the budget,
+   nothing important under *Left out*.
+2. **Wake** each agent once. **Runs & traces** shows a run `ok` + `shadow`; open it: context, llm,
+   tool and final steps. `[UNVERIFIED-ON-HW]` latency and tokens with the real model.
+3. Walk into each room: a run with wake source `event` appears within a few seconds (debounce 5 s).
+4. **Replay** one run: a new run marked `replay`, nothing changes in the house. **Copy as test case**:
+   paste the YAML into `owner-reports/m3/<room>-case.yaml` (if the clipboard is blocked, it downloads).
+5. Kill switch from HA: Developer Tools → Events → fire `agent_house_kill_switch` with
+   `engaged: true`; the top bar turns red. Release it in the panel. Optional: create an
+   `input_boolean.agent_house_kill`, set it in Settings as the kill-switch entity, toggle it in HA:
+   the panel follows.
+6. Leave both agents in Shadow for a day, then send `owner-reports/m3/` with: a screenshot of
+   Runs & traces, a diagnostics bundle, and the case files. Note any run that would have actuated
+   something you did not want (verdict `shadow` in the Action log).
+7. Optional live test, one T0 light only: set that agent's mode to *live* and the global mode to
+   *Live*, wake it with a reason like "turn on the lamp". The Action log shows `executed`. Back to
+   Shadow afterwards. A T2 entity (blinds, climate) instead shows a pending approval on the
+   Dashboard; Approve or Deny it there.
+
+The Live feed shows *streaming* through ingress (verified in M1); if it ever shows *polling every 3 s*,
+SSE is being buffered and the feed falls back to polling — tell me.
 
 ## Unverified facts to watch for (from RESEARCH.md)
 

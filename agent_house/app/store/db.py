@@ -37,6 +37,66 @@ MIGRATIONS: list[str] = [
         report TEXT
     );
     """,
+    # 3 — M3: agent runs with their trace, the action log (every policy decision), agent reports,
+    # per-agent notes and one-shot wakes the agents scheduled for themselves
+    """
+    CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        wake_source TEXT NOT NULL,
+        wake_reason TEXT,
+        started REAL NOT NULL,
+        ended REAL,
+        latency_ms INTEGER,
+        steps INTEGER NOT NULL DEFAULT 0,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        provider TEXT, profile TEXT, summary TEXT, error TEXT,
+        shadow INTEGER NOT NULL DEFAULT 1,
+        replay_of TEXT,
+        trace TEXT NOT NULL DEFAULT '[]'
+    );
+    CREATE INDEX runs_agent ON runs (agent_id, id);
+    CREATE TABLE actions (
+        id TEXT PRIMARY KEY,
+        ts REAL NOT NULL,
+        run_id TEXT,
+        agent_id TEXT NOT NULL,
+        domain TEXT NOT NULL,
+        service TEXT NOT NULL,
+        entity_ids TEXT NOT NULL,
+        data TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        verdict TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        decided_by TEXT,
+        expires REAL
+    );
+    CREATE INDEX actions_verdict ON actions (verdict);
+    CREATE TABLE inbox (
+        id INTEGER PRIMARY KEY,
+        ts REAL NOT NULL,
+        agent_id TEXT NOT NULL,
+        run_id TEXT,
+        severity TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'new'
+    );
+    CREATE TABLE memory (
+        agent_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        ts REAL NOT NULL,
+        PRIMARY KEY (agent_id, key)
+    );
+    CREATE TABLE scheduled_wakes (
+        id INTEGER PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        due REAL NOT NULL,
+        reason TEXT NOT NULL
+    );
+    """,
 ]
 
 

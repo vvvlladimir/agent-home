@@ -50,6 +50,31 @@
   <!-- ───────────────────────── Dashboard ───────────────────────── -->
   <section x-show="page === 'dashboard'" x-cloak>
     <h1 x-text="t('Dashboard')"></h1>
+    <article class="card" x-show="pending.length" style="margin-bottom: 1rem">
+      <h2><span x-text="t('Waiting for your approval')"></span> <span class="badge" x-text="pending.length"></span></h2>
+      <div class="table-wrap"><table><tbody>
+        <template x-for="a in pending" :key="a.id">
+          <tr>
+            <td x-text="a.agent_id"></td>
+            <td class="mono" x-text="a.domain + '.' + a.service + ' ' + a.entity_ids.join(', ')"></td>
+            <td class="muted small" x-text="a.reason"></td>
+            <td class="muted small" x-text="a.expires ? t('expires in') + ' ' + until(a.expires) : ''"></td>
+            <td><button class="btn" @click="decide(a.id, true)" x-text="t('Approve')"></button>
+                <button class="btn btn-ghost" @click="decide(a.id, false)" x-text="t('Deny')"></button></td>
+          </tr>
+        </template>
+      </tbody></table></div>
+    </article>
+    <article class="card" x-show="inbox.length" style="margin-bottom: 1rem">
+      <h2 x-text="t('Inbox')"></h2>
+      <ul class="feed">
+        <template x-for="m in inbox.slice(0, 10)" :key="m.id">
+          <li :class="'lvl-' + (m.severity === 'alert' ? 'error' : m.severity)">
+            <time x-text="clock(m.ts)"></time><span class="tag" x-text="m.agent_id"></span><span class="msg" x-text="m.summary"></span>
+          </li>
+        </template>
+      </ul>
+    </article>
     <div class="grid cards">
       <article class="card">
         <h2 x-text="t('Mode')"></h2>
@@ -135,7 +160,7 @@
 
   <!-- ───────────────────────── Live feed ───────────────────────── -->
   <section x-show="page === 'feed'" x-cloak>
-    <h1 x-text="t('Live feed & traces')"></h1>
+    <h1 x-text="t('Live feed')"></h1>
     <div class="toolbar">
       <label><span x-text="t('Kind')"></span>
         <select x-model="feedKind">
@@ -146,7 +171,8 @@
       <label><span x-text="t('Filter')"></span>
         <input type="search" x-model="feedFilter" :placeholder="t('entity, agent, text…')"></label>
       <label class="check"><input type="checkbox" x-model="feedPaused"> <span x-text="t('Pause')"></span></label>
-      <span class="pill" :class="streamOk ? 'pill-ok' : 'pill-bad'" x-text="streamOk ? t('streaming') : t('reconnecting…')"></span>
+      <span class="pill" :class="streamOk ? 'pill-ok' : (polling ? 'pill-warn' : 'pill-bad')"
+            x-text="streamOk ? t('streaming') : (polling ? t('polling every 3 s') : t('reconnecting…'))"></span>
     </div>
     <p class="muted" x-show="!filteredFeed().length" x-text="t('Nothing yet. State changes and agent activity show up here as they happen.')"></p>
     <ul class="feed">
@@ -158,13 +184,250 @@
         </li>
       </template>
     </ul>
-    <p class="muted small" x-text="t('Per-run traces (prompt, tool calls, latency, tokens) and replay arrive with room agents in M3.')"></p>
   </section>
 
-  <!-- ───────────────────────── Agents (rooms & entities for now) ───────────────────────── -->
+  <!-- ───────────────────────── Runs & traces ───────────────────────── -->
+  <section x-show="page === 'runs'" x-cloak>
+    <h1 x-text="t('Runs & traces')"></h1>
+    <div class="toolbar">
+      <label><span x-text="t('Agent')"></span>
+        <select x-model="runAgent" @change="loadRuns()">
+          <option value="" x-text="t('all')"></option>
+          <template x-for="a in agentsList" :key="a.id"><option :value="a.id" x-text="a.name"></option></template>
+        </select>
+      </label>
+      <label><span x-text="t('Status')"></span>
+        <select x-model="runStatus" @change="loadRuns()">
+          <option value="" x-text="t('all')"></option>
+          <template x-for="s in ['queued', 'running', 'ok', 'error', 'timeout', 'dropped', 'escalated']" :key="s">
+            <option :value="s" x-text="s"></option></template>
+        </select>
+      </label>
+      <span class="muted small" x-text="runMsg"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th x-text="t('Started')"></th><th x-text="t('Agent')"></th><th x-text="t('Status')"></th><th x-text="t('Wake')"></th>
+          <th x-text="t('Steps')"></th><th x-text="t('Tokens in / out')"></th><th x-text="t('Latency')"></th><th x-text="t('Summary')"></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="r in runs" :key="r.id">
+            <tr class="clickable" @click="openRun(r.id)" :class="{ dim: runSel && runSel.id !== r.id }">
+              <td x-text="clock(r.started)"></td>
+              <td x-text="r.agent_id"></td>
+              <td><span class="pill" :class="{ ok: 'pill-ok', escalated: 'pill-warn', running: 'pill-warn', queued: 'pill-warn' }[r.status] || 'pill-bad'"
+                        x-text="r.status"></span>
+                  <span class="badge" x-show="r.shadow" x-text="t('shadow')"></span>
+                  <span class="badge" x-show="r.replay_of" x-text="t('replay')"></span></td>
+              <td class="small"><span class="tag" x-text="r.wake_source"></span> <span x-text="r.wake_reason || ''"></span></td>
+              <td x-text="r.steps"></td>
+              <td x-text="r.tokens_in + ' / ' + r.tokens_out"></td>
+              <td x-text="num(r.latency_ms, 'ms', 0)"></td>
+              <td class="small" x-text="r.error || r.summary || ''"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" x-show="!runs.length" x-text="t('No runs yet. Agents run when a wake rule fires, on a schedule or when you wake them.')"></p>
+
+    <article class="card" x-show="runSel" style="margin-top: 1rem">
+      <h2>
+        <span x-text="t('Trace')"></span> <span class="mono small" x-text="runSel?.id"></span>
+        <span class="muted small" x-show="runSel?.replay_of" x-text="t('replay of') + ' ' + runSel?.replay_of"></span>
+      </h2>
+      <div class="toolbar">
+        <button class="btn" @click="replayRun(runSel.id)" x-text="t('Replay (shadow)')"></button>
+        <button class="btn btn-ghost" @click="copyTestcase(runSel.id)" x-text="t('Copy as test case')"></button>
+        <button class="btn btn-ghost" @click="runSel = null" x-text="t('Close')"></button>
+        <span class="muted small" x-text="(runSel?.provider || '') + ' ' + (runSel?.profile || '')"></span>
+      </div>
+      <template x-for="s in runSel?.trace || []" :key="s.idx">
+        <details :open="s.type !== 'context'">
+          <summary>
+            <span class="tag" x-text="s.type"></span>
+            <span class="muted small" x-text="[s.latency_ms != null ? s.latency_ms + ' ms' : '', s.tokens_in != null ? s.tokens_in + '→' + s.tokens_out + ' tok' : ''].filter(Boolean).join(' · ')"></span>
+            <span x-text="stepText(s)"></span>
+          </summary>
+          <template x-if="s.type === 'context'">
+            <div><h3 x-text="t('System')"></h3><pre class="log" x-text="s.data.system"></pre>
+                 <h3 x-text="t('User')"></h3><pre class="log" x-text="s.data.user"></pre></div>
+          </template>
+          <template x-if="s.type !== 'context'"><pre class="log" x-text="json(s.data)"></pre></template>
+        </details>
+      </template>
+    </article>
+
+    <h2 class="section" x-text="t('Action log')"></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th x-text="t('Time')"></th><th x-text="t('Agent')"></th><th x-text="t('Call')"></th><th x-text="t('Tier')"></th>
+          <th x-text="t('Verdict')"></th><th x-text="t('Reason')"></th><th></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="a in actions" :key="a.id">
+            <tr>
+              <td x-text="clock(a.ts)"></td>
+              <td x-text="a.agent_id"></td>
+              <td class="mono small" x-text="a.domain + '.' + a.service + ' ' + a.entity_ids.join(', ')"></td>
+              <td><span class="tier" :class="'tier-' + a.tier" x-text="a.tier"></span></td>
+              <td><span class="pill" :class="{ executed: 'pill-ok', approved: 'pill-ok', shadow: '', pending: 'pill-warn' }[a.verdict] ?? 'pill-bad'"
+                        x-text="a.verdict"></span></td>
+              <td class="small" x-text="a.reason + (a.decided_by ? ' (' + a.decided_by + ')' : '')"></td>
+              <td><template x-if="a.verdict === 'pending'"><span>
+                <button class="btn" @click="decide(a.id, true)" x-text="t('Approve')"></button>
+                <button class="btn btn-ghost" @click="decide(a.id, false)" x-text="t('Deny')"></button></span></template>
+                <a x-show="a.run_id" href="#runs" @click="openRun(a.run_id)" x-text="t('trace')"></a></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── Agents ───────────────────────── -->
   <section x-show="page === 'agents'" x-cloak>
     <h1 x-text="t('Agents')"></h1>
-    <p class="muted" x-text="t('Room agents arrive in M3. Until then this page shows what an agent would see: rooms, their entities and each entity\'s permission tier.')"></p>
+    <p class="error" x-show="agentError" x-text="agentError"></p>
+    <p class="muted small" x-show="agentMsg && !agentForm" x-text="agentMsg"></p>
+
+    <template x-if="!agentForm">
+      <div>
+        <div class="toolbar"><button class="btn" @click="newAgent()" x-text="t('New room agent')"></button></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th x-text="t('Agent')"></th><th x-text="t('Room')"></th><th x-text="t('Mode')"></th><th x-text="t('Entities')"></th>
+              <th x-text="t('Wakes / h')"></th><th x-text="t('Last run')"></th><th></th>
+            </tr></thead>
+            <tbody>
+              <template x-for="a in agentsList" :key="a.id">
+                <tr :class="{ dim: !a.enabled }">
+                  <td><a href="#agents" @click.prevent="editAgent(a.id)" x-text="a.name"></a> <span class="muted mono small" x-text="a.id"></span></td>
+                  <td x-text="areaName(a.room)"></td>
+                  <td><span class="pill" :class="a.effective_mode === 'live' ? 'pill-warn' : ''" x-text="a.effective_mode"></span>
+                      <span class="muted small" x-show="a.mode !== a.effective_mode" x-text="'(' + t('own') + ': ' + a.mode + ')'"></span></td>
+                  <td x-text="a.entity_count"></td>
+                  <td x-text="a.wakes_last_hour"></td>
+                  <td class="small"><span x-text="a.last_run ? a.last_run.status + ' · ' + ago(a.last_run.started) : '—'"></span></td>
+                  <td>
+                    <button class="btn btn-ghost" @click="wakeAgent(a.id)" :disabled="!a.enabled" x-text="t('Wake')"></button>
+                    <button class="btn btn-ghost" @click="patchAgent(a.id, { enabled: !a.enabled })" x-text="a.enabled ? t('Disable') : t('Enable')"></button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <p class="muted" x-show="!agentsList.length" x-text="t('No agents yet. A room agent watches one room and starts in Shadow Mode: it only logs what it would do.')"></p>
+      </div>
+    </template>
+
+    <template x-if="agentForm">
+      <div class="grid" style="grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start">
+        <article class="card form wide" @input.debounce.400ms="schedulePreview()" @change="schedulePreview()">
+          <h2 x-text="agentIsNew ? t('New room agent') : agentForm.name"></h2>
+          <label><span x-text="t('Id')"></span>
+            <input x-model="agentForm.id" :disabled="!agentIsNew" placeholder="living_room" pattern="[a-z][a-z0-9_]{1,31}"></label>
+          <label><span x-text="t('Name')"></span><input x-model="agentForm.name"></label>
+          <label><span x-text="t('Room')"></span>
+            <select x-model="agentForm.room" @change="agentForm.entities = []; loadRoomEntities()">
+              <template x-for="a in areas" :key="a.area_id"><option :value="a.area_id" x-text="a.name" :selected="a.area_id === agentForm.room"></option></template>
+            </select></label>
+          <label class="check"><input type="checkbox" x-model="agentForm.enabled"> <span x-text="t('Enabled')"></span></label>
+          <label><span x-text="t('Mode')"></span>
+            <select x-model="agentForm.mode">
+              <option value="shadow" x-text="t('shadow: only log what it would do')"></option>
+              <option value="live" x-text="t('live: may actuate when the global mode is live too')"></option>
+            </select></label>
+
+          <h3 x-text="t('Entities and tiers')"></h3>
+          <p class="muted small" x-text="t('None ticked = every entity of the room, actuators first, capped below. Overrides can only make a tier stricter.')"></p>
+          <label><span x-text="t('Cap')"></span><input type="number" min="1" max="25" x-model="agentForm.max_entities"></label>
+          <div class="table-wrap"><table><tbody>
+            <template x-for="e in roomEntities" :key="e.entity_id">
+              <tr :class="{ dim: e.hidden }">
+                <td><input type="checkbox" :checked="agentForm.entities.includes(e.entity_id)" @change="toggleEntity(e.entity_id)"></td>
+                <td class="mono small" x-text="e.entity_id"></td>
+                <td class="small" x-text="e.state"></td>
+                <td><span class="tier" :class="e.read_only ? '' : 'tier-' + e.tier" x-text="e.read_only ? t('read-only') : e.tier"></span></td>
+                <td><select x-show="!e.read_only" @change="setOverride(e.entity_id, $event.target.value)">
+                  <option value="" x-text="t('policy')"></option>
+                  <template x-for="tier in ['T0', 'T1', 'T2', 'T3']" :key="tier">
+                    <option :value="tier" x-text="tier" :selected="agentForm.tier_overrides[e.entity_id] === tier"></option></template>
+                </select></td>
+              </tr>
+            </template>
+          </tbody></table></div>
+
+          <h3 x-text="t('Wake rules')"></h3>
+          <template x-for="(r, i) in agentForm.wake_rules.events" :key="i">
+            <div class="card" style="margin-bottom: .5rem">
+              <label><span x-text="t('Entities (ids or globs, comma separated)')"></span><input x-model="r._entities" placeholder="binary_sensor.living_room_motion"></label>
+              <label><span x-text="t('From')"></span><input x-model="r._from" placeholder="off"></label>
+              <label><span x-text="t('To')"></span><input x-model="r._to" placeholder="on"></label>
+              <label><span x-text="t('Debounce s')"></span><input type="number" min="0" x-model="r.debounce_s"></label>
+              <label><span x-text="t('Cooldown s')"></span><input type="number" min="0" x-model="r.cooldown_s"></label>
+              <label><span x-text="t('Priority')"></span>
+                <select x-model="r.priority"><option value="routine">routine</option><option value="alarm">alarm</option></select></label>
+              <label><span x-text="t('Reason')"></span><input x-model="r.reason" maxlength="120"></label>
+              <button class="btn btn-ghost" @click="agentForm.wake_rules.events.splice(i, 1)" x-text="t('Remove')"></button>
+            </div>
+          </template>
+          <template x-for="(c, i) in agentForm.wake_rules.cron" :key="'c' + i">
+            <div class="toolbar">
+              <label><span x-text="t('Cron')"></span><input x-model="c.expr" class="mono"></label>
+              <label><span x-text="t('Reason')"></span><input x-model="c.reason" maxlength="120"></label>
+              <button class="btn btn-ghost" @click="agentForm.wake_rules.cron.splice(i, 1)" x-text="t('Remove')"></button>
+            </div>
+          </template>
+          <div class="toolbar">
+            <button class="btn btn-ghost" @click="addEventRule()" x-text="t('+ state rule')"></button>
+            <button class="btn btn-ghost" @click="addCron()" x-text="t('+ schedule')"></button>
+            <label><span x-text="t('Max wakes per hour')"></span><input type="number" min="0" max="120" x-model="agentForm.wake_rules.max_wakes_per_hour"></label>
+          </div>
+
+          <h3 x-text="t('Limits')"></h3>
+          <label><span x-text="t('Max steps')"></span><input type="number" min="1" max="12" x-model="agentForm.limits.max_steps"></label>
+          <label><span x-text="t('Timeout s')"></span><input type="number" min="5" max="300" x-model="agentForm.limits.timeout_s"></label>
+          <label><span x-text="t('Context budget (tokens)')"></span><input type="number" min="512" max="16384" x-model="agentForm.limits.context_budget_tokens"></label>
+
+          <h3 x-text="t('System prompt')"></h3>
+          <p class="muted small" x-text="t('Empty = built-in default. Variables: {{agent_name}} {{room_name}} {{entity_table}} {{tiers}}')"></p>
+          <textarea rows="8" class="mono" style="width: 100%" x-model="agentForm.system_prompt" maxlength="4000"></textarea>
+
+          <p class="error" x-show="agentError" x-text="agentError"></p>
+          <p class="muted" x-show="agentMsg" x-text="agentMsg"></p>
+          <div class="toolbar">
+            <button class="btn" @click="saveAgent()" x-text="t('Save')"></button>
+            <button class="btn btn-ghost" @click="closeForm()" x-text="t('Back')"></button>
+            <button class="btn btn-ghost" x-show="!agentIsNew" @click="wakeAgent(agentForm.id)" x-text="t('Wake now')"></button>
+            <button class="btn btn-ghost" x-show="!agentIsNew" @click="deleteAgent(agentForm.id)" x-text="t('Delete')"></button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h2 x-text="t('Prompt preview')"></h2>
+          <p class="error" x-show="previewError" x-text="previewError"></p>
+          <template x-if="preview">
+            <div>
+              <p><span x-text="'≈ ' + preview.tokens_estimate + ' / ' + preview.budget + ' ' + t('tokens')"></span>
+                 · <span x-text="preview.entities_included + ' ' + t('entities')"></span></p>
+              <div class="bar"><span :style="'width:' + pct(preview.tokens_estimate, preview.budget) + '%'"></span></div>
+              <p class="muted small" x-show="preview.entities_dropped.length"
+                 x-text="t('Left out:') + ' ' + preview.entities_dropped.join(', ')"></p>
+              <h3 x-text="t('System')"></h3><pre class="log" x-text="preview.system"></pre>
+              <h3 x-text="t('User (example wake)')"></h3><pre class="log" x-text="preview.user"></pre>
+              <p class="muted small" x-text="t('Estimate ≈ characters / 3.5, not the model tokenizer. No model is called.')"></p>
+            </div>
+          </template>
+        </article>
+      </div>
+    </template>
+
+    <h2 class="section" x-text="t('Rooms and entities')"></h2>
     <div class="toolbar">
       <label><span x-text="t('Room')"></span>
         <select x-model="areaSel" @change="loadEntities()">
@@ -358,6 +621,8 @@
             <input type="number" min="1" max="100" step="1" x-model="runtimeForm.llm_max_queue"></label>
           <label><span x-text="t('Presence penalty')"></span>
             <input type="number" min="0" max="2" step="0.1" x-model="runtimeForm.llm_presence_penalty" :placeholder="t('profile default')"></label>
+          <label><span x-text="t('Kill switch helper (input_boolean, optional)')"></span>
+            <input type="text" class="mono" x-model="runtimeForm.kill_switch_entity" placeholder="input_boolean.agent_house_kill"></label>
           <div class="toolbar">
             <button class="btn" type="submit" x-text="t('Save')"></button>
             <span class="muted" x-show="runtimeMsg" x-text="runtimeMsg"></span>

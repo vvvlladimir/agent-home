@@ -1,7 +1,8 @@
 """Home Assistant client: REST for one-shot reads, WebSocket for registries and live events.
 
-Read-only in M1. Actuating calls (services, automation config) are added in M3/M4 behind the
-policy engine and the automation lifecycle; nothing else in the code base may talk to HA.
+Read-only except `call_service`, whose only caller is `core/actuator.py` (after the policy
+decision; tests/unit/test_actuator.py greps for other callers). Automation config writes arrive
+in M4 behind the automation lifecycle; nothing else in the code base may talk to HA.
 
 API shapes: docs/RESEARCH.md §3. The registry list responses and the Supervisor proxy
 behaviour are [UNVERIFIED-ON-HW]; `tests/integration/test_real_ha.py` checks them against a
@@ -27,8 +28,8 @@ from .registry import Registry
 log = logging.getLogger(__name__)
 
 REGISTRY_EVENTS = ("area_registry_updated", "device_registry_updated", "entity_registry_updated")
-# The only WebSocket commands this client sends until the policy engine (M3) and the automation
-# lifecycle (M4) add their own guarded write paths. `call_service` is deliberately absent.
+# The WebSocket commands `command()` accepts. `call_service` is deliberately absent: it has its
+# own method below, for the actuator only.
 READ_COMMANDS = frozenset(
     {
         "get_states",
@@ -266,6 +267,18 @@ class HAClient:
         finally:
             self._pending.pop(msg_id, None)
 
+    async def call_service(self, domain: str, service: str, entity_id: str, data: dict | None = None) -> None:
+        """Actuate ONE entity. Only `core/actuator.py` may call this, after `policy.decide`."""
+        if not isinstance(entity_id, str) or not entity_id:
+            raise HAError("call_service needs exactly one entity_id")
+        await self._send(
+            "call_service",
+            domain=domain,
+            service=service,
+            service_data=dict(data or {}),
+            target={"entity_id": entity_id},
+        )
+
     def _fail_pending(self, reason: str) -> None:
         for future in self._pending.values():
             if not future.done():
@@ -281,6 +294,18 @@ class HAClient:
         if response.status_code >= 400:
             raise HAError(f"HTTP {response.status_code} for GET {path}: {response.text[:200]}")
         return response.json()
+
+    async def history(self, entity_id: str, start: str, end: str) -> list[dict]:
+        """State changes of one entity between two ISO timestamps, oldest first.
+        The flag parameters and the path timestamp are [UNVERIFIED-ON-HW] (docs/RESEARCH.md §3)."""
+        rows = await self.rest_get(
+            f"/history/period/{start}",
+            filter_entity_id=entity_id,
+            end_time=end,
+            minimal_response="",
+            no_attributes="",
+        )
+        return rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], list) else []
 
     async def api_alive(self) -> bool:
         """GET /api/ → {"message": "API running."}; used by diagnostics to tell REST from WS problems."""

@@ -109,6 +109,8 @@ class RuntimeSettings(BaseModel):
     llm_max_queue: int = Field(default=16, ge=1, le=100)
     # None = the active profile's value. The benchmark compares the vendor's 1.5 against 0.
     llm_presence_penalty: float | None = Field(default=None, ge=0, le=2)
+    # An HA helper that mirrors the kill switch: on = engaged, off = released. No agent may touch it.
+    kill_switch_entity: str | None = Field(default=None, pattern=r"^input_boolean\.[a-z0-9_]+$")
 
 
 def load_runtime(data_dir: Path) -> RuntimeSettings:

@@ -154,3 +154,7 @@ tr.dim { opacity: .55; }
 .form input { width: 100%; }
 tr.clickable { cursor: pointer; }
 tr.clickable:hover { background: var(--hover, rgba(127, 127, 127, .08)); }
+.form.wide label { grid-template-columns: 12rem minmax(0, 1fr); }
+.form.wide label.check { grid-template-columns: auto 1fr; justify-content: start; }
+details { margin: .25rem 0; }
+details summary { cursor: pointer; overflow-wrap: anywhere; }

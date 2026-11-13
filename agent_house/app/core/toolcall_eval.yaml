@@ -21,7 +21,7 @@ room:
     - {entity_id: light.living_room_desk, name: Desk light, state: "off", tier: T0}
     - {entity_id: media_player.living_room_tv, name: TV, state: "off", tier: T0}
     - {entity_id: fan.living_room_fan, name: Fan, state: "off", tier: T0}
-    - {entity_id: scene.living_room_movie, name: Movie scene, state: scening, tier: T1}
+    - {entity_id: scene.living_room_movie, name: Movie scene, state: scening, tier: T2}
     - {entity_id: humidifier.living_room, name: Humidifier, state: "off", tier: T1}
     - entity_id: climate.living_room
       name: Thermostat
