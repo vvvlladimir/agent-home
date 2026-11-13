@@ -5,15 +5,24 @@ orchestrator sees the whole house and writes automations for you to approve. Ref
 Home Assistant: an approved automation keeps running when this add-on, the Jetson or the
 internet is down.
 
-**This build is M4 (development).** Room agents run in Shadow Mode, the orchestrator drafts
-automations, and you review, deploy, version and roll them back on the *Proposals* and
-*Deployed automations* pages. Migration from your own automations and the chat arrive in M5.
+**Version 0.1.0 (prototype).** Room agents run in Shadow Mode until you enable them one by one.
+The orchestrator drafts automations; you review, simulate, deploy, version and roll them back on
+the *Proposals* and *Deployed automations* pages. *Council* shows the house mode, the shared board
+the agents write to and which agent owns which entity; a daily review (04:30 by default) scans
+the history for habits, undone and fighting automations and drafts one proposal per finding.
+*Migration* imports your own automations and Node-RED flows, *Chat* talks to any agent.
+Day-to-day operation and what to do when something goes wrong: `docs/RUNBOOK.md` in the repository.
 
 ## Safety model
 
 - **Shadow Mode is the default.** Agents log what they would do. Nothing is actuated until you
   switch the global mode to Live *and* set an individual agent to live.
-- **Kill switch** in the top bar: while engaged, no service call and no deploy leaves the add-on.
+- **Kill switch** in the top bar (or the HA event `agent_house_kill_switch`): while engaged, no
+  service call, no deploy and no draft leaves the add-on.
+- **One owner per entity**: a room agent may only act on (and automate) the entities of its room;
+  everything without an area belongs to the orchestrator, which itself only ever switches the
+  house mode helper `input_select.agent_house_mode` (in shadow unless you set
+  `orchestrator_mode: live` in Settings).
 - **Tiers** decide what an agent may touch (deny by default):
 
   | Tier | Meaning | Default domains |
