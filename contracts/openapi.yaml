@@ -437,20 +437,28 @@ paths:
       x-milestone: M2
       responses:
         "200":
-          description: "newest first; `report` follows schemas/bench_report.schema.json"
+          description: "newest first; `report` follows schemas/bench_report.schema.json and is null until the run is done"
           content:
             application/json:
               schema:
                 type: array
                 items:
                   type: object
-                  required: [id, created, profile, source, report]
+                  required: [id, created, profile, source, status, report]
                   properties:
                     id: {type: string}
                     created: {type: string, format: date-time}
                     profile: {type: string}
                     source: {type: string}
-                    report: {type: object}
+                    status: {type: string, enum: [running, done, error]}
+                    report: {type: [object, "null"]}
+                    progress:
+                      type: object
+                      description: only while running
+                      properties:
+                        done: {type: integer}
+                        total: {type: integer}
+                        label: {type: string}
     post:
       tags: [models]
       operationId: runBenchmark
@@ -612,6 +620,8 @@ components:
         ttft_ms: {type: [number, "null"]}
         requests_total: {type: integer}
         dropped_total: {type: integer}
+        errors_total: {type: integer}
+        retries_total: {type: integer}
     JetsonStatus:
       type: object
       required: [reachable]

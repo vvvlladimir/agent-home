@@ -357,6 +357,8 @@ class LLMManager:
             except asyncio.CancelledError:
                 if self._stopping or not self._current.cancelled():
                     self._current.cancel()
+                    if not job.future.done():  # the caller must not wait forever on shutdown
+                        job.future.set_exception(LLMDropped("shutdown"))
                     raise
             except LLMDropped as err:
                 self._drop(job, err.reason)

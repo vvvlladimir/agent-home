@@ -18,6 +18,8 @@ hardware; replaced after `make analyze-report` has real data.
 | D9 | Orchestrator: official `anthropic` SDK, manual tool loop, default model `claude-opus-5-5`, configurable. | We need policy, budget and trace hooks around every step. Model choice and cost are the owner's call (RESEARCH §6). |
 | D10 | Model swapping on the Jetson goes through our small metrics/control endpoint (restart the systemd unit with another profile), not llama-server router mode. | One resident model is the rule on 8 GB; a restart is explicit, visible ("warming") and works on any llama.cpp build. |
 | D11 | Default provider: local Qwen on the Jetson once M2 benchmarks pass; cloud is the fallback with `claude-haiku-5-5`. Until then, `claude-haiku-5-5`. Supersedes the `claude-opus-5-5` default in D9. | Owner's answer to Q6 (2026-11-13): Haiku is enough, local first. |
+| D12 | The add-on's LLM manager owns the single llama-server slot: priority queue (interactive > agent > background), coalescing by key, stale drop, bounded wait while the model loads, retry only for 5xx / transport / unparsable. | `-np 1` on 8 GB: requests must queue in the add-on, where priorities and staleness are known, not on the Jetson. A timeout is not retried: the slot is busy. |
+| D13 | The GUI benchmark and `jetson/bench/bench.py` share `app/core/benchkit.py` and `toolcall_eval.yaml`. Hardware reports come from the Jetson; the GUI run is a quick check of the live setup. | One scoring logic; the GUI cannot restart llama-server between profiles for a cold-load measurement. |
 
 ## Safety
 
@@ -38,6 +40,7 @@ hardware; replaced after `make analyze-report` has real data.
 |---|---|---|---|
 | `qwen35-4b-balanced` | Qwen3.5-4B, Q4_K_M-class quant (`unsloth/Qwen3.5-4B-GGUF`) | ctx 8192, q8_0 KV, `-ngl 99`, flash-attn, `-np 1`, thinking off, temp 0.7 / top_p 0.8 / top_k 20 / presence 1.5 | **provisional default** |
 | `qwen35-2b-fast` | Qwen3.5-2B | ctx 8192–16384, same flags | fallback if 4B misses the latency target |
+| `gemma4-e2b-compare` | Gemma 4 E2B-it, Q4_K_M (`unsloth/gemma-4-E2B-it-GGUF`) | ctx 8192, same flags, template default, temp 1.0 / top_p 0.95 / top_k 64 / presence 0 | comparison candidate |
 | `qwen35-9b-experimental` | Qwen3.5-9B Q4 | only resident model; mainline `q8_0` KV first, TurboQuant fork only as an opt-in experiment | experiment |
 
 - The 4B is the only candidate with a third-party Orin Nano measurement (~16 tok/s, 3.9 GB peak;

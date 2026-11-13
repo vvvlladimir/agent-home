@@ -11,6 +11,7 @@ import yaml
 from openapi_spec_validator import validate
 
 ROOT = Path(__file__).resolve().parents[2]
+DONE = {"M1", "M2"}  # milestones whose operations must all be routed
 SCHEMAS = sorted((ROOT / "contracts" / "schemas").glob("*.schema.json"))
 MILESTONES = {"M1", "M2", "M3", "M4", "M5"}
 
@@ -56,7 +57,7 @@ def test_agent_config_example_and_defaults():
         jsonschema.validate({**example, "entities": [f"light.l{i}" for i in range(26)]}, schema)
 
 
-def test_implemented_m1_operations_are_not_answered_by_the_501_fallback():
+def test_implemented_operations_are_not_answered_by_the_501_fallback():
     """Guards against the contract and the router drifting apart."""
     from app.api.routes import router
 
@@ -64,5 +65,5 @@ def test_implemented_m1_operations_are_not_answered_by_the_501_fallback():
     routes = {(r.path, m.lower()) for r in router.routes for m in r.methods if "{path:path}" not in r.path}
     for path, item in spec["paths"].items():
         for method, operation in item.items():
-            if method != "parameters" and operation["x-milestone"] == "M1":
-                assert (path, method) in routes, f"{method} {path} is M1 in the contract but not implemented"
+            if method != "parameters" and operation["x-milestone"] in DONE:
+                assert (path, method) in routes, f"{method} {path} is {operation['x-milestone']} but not implemented"

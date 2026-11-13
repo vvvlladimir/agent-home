@@ -12,8 +12,7 @@ const PAGES = [
     todo: 'Your existing automations and Node-RED flows next to their proposed replacements, with a parity report.' },
   { id: 'chat', label: 'Chat', milestone: 'M5',
     todo: 'Talk to the orchestrator or a room agent; tool calls are shown inline.' },
-  { id: 'models', label: 'Models & Benchmarks', milestone: 'M2',
-    todo: 'Model profiles, the benchmark runner and its history: tok/s, time to first token, memory, tool-call accuracy.' },
+  { id: 'models', label: 'Models & Benchmarks' },
   { id: 'settings', label: 'Settings & Logs' },
 ];
 
@@ -44,6 +43,14 @@ function app() {
     settings: null,
     logs: [],
     logLevel: 'info',
+    profiles: [],
+    benchmarks: [],
+    benchQuick: true,
+    benchOpen: '',
+    modelsError: '',
+    runtimeForm: {},
+    runtimeMsg: '',
+    runtimeError: '',
     _stream: null,
 
     async init() {
@@ -55,6 +62,7 @@ function app() {
       this.loadAreas();
       setInterval(() => this.refresh(), 5000);
       setInterval(() => { if (this.page === 'dashboard') this.loadAreas(); }, 30000);
+      setInterval(() => { if (this.page === 'models') this.loadModels(); }, 3000);
       this.api('api/events?limit=200').then((items) => { this.feed = items; }).catch(() => {});
       this.connectStream();
     },
@@ -98,6 +106,10 @@ function app() {
       this.page = PAGES.some((p) => p.id === id) ? id : 'dashboard';
       if (this.page === 'agents') this.loadEntities();
       if (this.page === 'settings') { this.loadSettings(); this.loadLogs(); }
+      if (this.page === 'models') this.loadModels();
+    },
+    post(path, body) {
+      return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
     },
 
     // ── data ───────────────────────────────────────────────────────────────────
@@ -114,7 +126,59 @@ function app() {
       const query = this.areaSel ? '?area=' + encodeURIComponent(this.areaSel) : '';
       try { this.entities = await this.api('api/entities' + query); } catch (e) { this.entities = []; }
     },
-    async loadSettings() { try { this.settings = await this.api('api/settings'); } catch (e) { /* ignore */ } },
+    async loadSettings() {
+      try {
+        this.settings = await this.api('api/settings');
+        this.runtimeForm = this.formFrom(this.settings.runtime);
+      } catch (e) { /* ignore */ }
+    },
+    formFrom(runtime) {
+      const form = {};
+      for (const [k, v] of Object.entries(runtime || {})) form[k] = v == null ? '' : String(v);
+      return form;
+    },
+    async saveRuntime() {
+      // '' = "use the default" (the field becomes null); everything else is sent as a number
+      const body = {};
+      for (const [k, v] of Object.entries(this.runtimeForm)) body[k] = v === '' ? null : Number(v);
+      this.runtimeMsg = ''; this.runtimeError = '';
+      try {
+        this.settings = await this.put('api/settings', body);
+        this.runtimeForm = this.formFrom(this.settings.runtime);
+        this.runtimeMsg = this.t('Saved.');
+      } catch (e) { this.runtimeError = e.message; }
+    },
+
+    // ── models & benchmarks ────────────────────────────────────────────────────
+    async loadModels() {
+      try {
+        [this.profiles, this.benchmarks] = await Promise.all([this.api('api/models/profiles'), this.api('api/benchmarks')]);
+        this.modelsError = '';
+      } catch (e) { this.modelsError = e.message; }
+    },
+    get benchRunning() { return this.benchmarks.some((b) => b.status === 'running'); },
+    async activateProfile(name) {
+      if (!confirm(this.t('Restart the inference server with this profile? Agents wait while the model loads.'))) return;
+      try {
+        this.status = { ...this.status, llm: await this.put('api/models/active', { profile: name }) };
+        this.modelsError = '';
+      } catch (e) { this.modelsError = e.message; }
+      this.loadModels();
+    },
+    async runBenchmark() {
+      try {
+        await this.post('api/benchmarks', { quick: this.benchQuick });
+        this.modelsError = '';
+      } catch (e) { this.modelsError = e.message; }
+      this.loadModels();
+    },
+    toolScore(report) {
+      const t = report && report.toolcall;
+      return t ? t.passed + '/' + t.total : '—';
+    },
+    num(value, unit, digits) {
+      return value == null ? '—' : Number(value).toFixed(digits ?? 1) + (unit ? ' ' + unit : '');
+    },
     async loadLogs() {
       try { this.logs = await this.api('api/logs?limit=500&level=' + this.logLevel); } catch (e) { this.logs = []; }
     },

@@ -204,6 +204,122 @@
     </p>
   </section>
 
+  <!-- ───────────────────────── Models & benchmarks ───────────────────────── -->
+  <section x-show="page === 'models'" x-cloak>
+    <h1 x-text="t('Models & Benchmarks')"></h1>
+    <p class="error" x-show="modelsError" x-text="modelsError"></p>
+    <div class="grid cards">
+      <article class="card">
+        <h2 x-text="t('Inference server')"></h2>
+        <dl class="kv">
+          <dt x-text="t('State')"></dt>
+          <dd><span class="dot" :class="llmDot()"></span> <span x-text="status?.llm?.state || '…'"></span></dd>
+          <dt x-text="t('Profile')"></dt><dd class="mono" x-text="status?.llm?.active_profile || '—'"></dd>
+          <dt x-text="t('Model')"></dt><dd class="mono" x-text="status?.llm?.model || '—'"></dd>
+          <dt x-text="t('Queue')"></dt>
+          <dd x-text="(status?.llm?.queue_depth ?? 0) + (status?.llm?.in_flight ? ' · ' + t('serving') + ' ' + status.llm.in_flight : '')"></dd>
+          <dt x-text="t('Decode / prefill')"></dt>
+          <dd x-text="num(status?.llm?.decode_tps) + ' / ' + num(status?.llm?.prefill_tps) + ' tok/s'"></dd>
+          <dt x-text="t('Time to first token')"></dt><dd x-text="num(status?.llm?.ttft_ms, 'ms', 0)"></dd>
+          <dt x-text="t('Requests / dropped / errors')"></dt>
+          <dd x-text="(status?.llm?.requests_total ?? 0) + ' / ' + (status?.llm?.dropped_total ?? 0) + ' / ' + (status?.llm?.errors_total ?? 0)"></dd>
+        </dl>
+        <p class="error" x-show="status?.llm?.last_error" x-text="status?.llm?.last_error"></p>
+        <p class="muted small" x-text="t('Rolling medians of the last 20 requests.')"></p>
+      </article>
+      <article class="card">
+        <h2 x-text="t('Run a benchmark')"></h2>
+        <p class="muted" x-text="t('Speed and the tool-call eval against the loaded model, at background priority: room agents go first. The full run takes a while; quick is a smoke test.')"></p>
+        <div class="toolbar">
+          <label class="check"><input type="checkbox" x-model="benchQuick"> <span x-text="t('Quick')"></span></label>
+          <button class="btn" @click="runBenchmark()" :disabled="benchRunning || !['ok', 'busy'].includes(status?.llm?.state)"
+                  x-text="benchRunning ? t('Running…') : t('Run benchmark')"></button>
+        </div>
+        <template x-for="b in benchmarks.filter((b) => b.progress)" :key="b.id">
+          <div>
+            <span class="bar"><span :style="'width:' + pct(b.progress.done, b.progress.total) + '%'"></span></span>
+            <span class="muted small" x-text="b.progress.done + '/' + b.progress.total + ' · ' + b.progress.label"></span>
+          </div>
+        </template>
+        <p class="muted small" x-text="t('The full comparison of all profiles runs on the Jetson: jetson/bench/run_all.sh.')"></p>
+      </article>
+    </div>
+
+    <h2 class="section" x-text="t('Profiles')"></h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th x-text="t('Profile')"></th><th x-text="t('Model')"></th><th x-text="t('Context')"></th>
+          <th x-text="t('Sampling')"></th><th x-text="t('Notes')"></th><th></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="p in profiles" :key="p.name">
+            <tr>
+              <td class="mono"><span x-text="p.name"></span>
+                <span class="pill pill-ok" x-show="p.active" x-text="t('active')"></span>
+                <span class="pill" x-show="p.provisional" :title="t('not confirmed by a benchmark on your Jetson yet')" x-text="t('provisional')"></span>
+                <span class="pill pill-warn" x-show="p.experimental" x-text="t('experimental')"></span></td>
+              <td class="mono small" x-text="p.model"></td>
+              <td x-text="p.ctx_size"></td>
+              <td class="small" x-text="'T ' + p.temperature + ' · top_p ' + p.top_p + ' · top_k ' + p.top_k + ' · pp ' + p.presence_penalty"></td>
+              <td class="muted small" x-text="p.notes || ''"></td>
+              <td><button class="btn btn-ghost" @click="activateProfile(p.name)"
+                          :disabled="p.active || benchRunning || status?.llm?.state === 'warming' || !status?.jetson?.configured"
+                          x-text="t('Activate')"></button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small" x-show="!status?.jetson?.configured"
+       x-text="t('Switching profiles needs jetson_metrics_url and jetson_token in the add-on configuration.')"></p>
+
+    <h2 class="section" x-text="t('Benchmark history')"></h2>
+    <p class="muted" x-show="!benchmarks.length" x-text="t('No benchmark yet.')"></p>
+    <div class="table-wrap" x-show="benchmarks.length">
+      <table>
+        <thead><tr>
+          <th x-text="t('When')"></th><th x-text="t('Profile')"></th><th x-text="t('Status')"></th>
+          <th x-text="t('Decode')"></th><th x-text="t('Prefill')"></th><th x-text="t('TTFT warm')"></th>
+          <th x-text="t('Wake')"></th><th x-text="t('Tool calls')"></th><th x-text="t('RAM peak')"></th><th x-text="t('Temp max')"></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="b in benchmarks" :key="b.id">
+            <tr @click="benchOpen = benchOpen === b.id ? '' : b.id" class="clickable">
+              <td x-text="new Date(b.created).toLocaleString()"></td>
+              <td class="mono" x-text="b.profile"></td>
+              <td><span class="pill" :class="b.status === 'done' ? 'pill-ok' : (b.status === 'error' ? 'pill-bad' : 'pill-warn')" x-text="b.status"></span></td>
+              <td x-text="num(b.report?.speed?.decode_tps, 'tok/s')"></td>
+              <td x-text="num(b.report?.speed?.prefill_tps_warm ?? b.report?.speed?.prefill_tps, 'tok/s')"></td>
+              <td x-text="num(b.report?.speed?.ttft_ms_warm, 'ms', 0)"></td>
+              <td x-text="num(b.report?.speed?.e2e_wake_ms_warm, 'ms', 0)"></td>
+              <td x-text="toolScore(b.report)"></td>
+              <td x-text="mb(b.report?.resources?.ram_peak_mb)"></td>
+              <td x-text="deg(b.report?.resources?.temp_max_c)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <template x-for="b in benchmarks.filter((b) => b.id === benchOpen && b.report)" :key="b.id">
+      <article class="card">
+        <h2 x-text="b.profile + ' · ' + toolScore(b.report) + ' ' + t('tool calls') + ' · ' + b.report.toolcall.json_valid + ' ' + t('with clean JSON')"></h2>
+        <dl class="kv">
+          <template x-for="[cat, c] in Object.entries(b.report.toolcall.by_category || {})" :key="cat">
+            <div class="kv-rows"><dt x-text="cat"></dt><dd x-text="c.passed + '/' + c.total"></dd></div>
+          </template>
+        </dl>
+        <h3 x-show="b.report.toolcall.failures.length" x-text="t('Failures')"></h3>
+        <ul class="feed">
+          <template x-for="f in b.report.toolcall.failures" :key="f.id">
+            <li class="lvl-warning"><span class="tag mono" x-text="f.id"></span> <span class="msg" x-text="f.reason"></span></li>
+          </template>
+        </ul>
+        <p class="error" x-show="b.report.errors?.length" x-text="(b.report.errors || []).length + ' ' + t('request errors; see the diagnostics bundle')"></p>
+      </article>
+    </template>
+  </section>
+
   <!-- ───────────────────────── Placeholders for later milestones ───────────────────────── -->
   <template x-for="p in pages.filter(p => p.todo)" :key="p.id">
     <section x-show="page === p.id" x-cloak>
@@ -227,6 +343,27 @@
             <div class="kv-rows"><dt class="mono" x-text="k"></dt><dd class="mono" x-text="fmt(v)"></dd></div>
           </template>
         </dl>
+      </article>
+      <article class="card">
+        <h2 x-text="t('Local model requests')"></h2>
+        <p class="muted" x-text="t('Editable here, stored in /data/settings.yaml. Leave the presence penalty empty to use the profile\'s value.')"></p>
+        <form class="form" @submit.prevent="saveRuntime()">
+          <label><span x-text="t('Timeout per request (s)')"></span>
+            <input type="number" min="5" max="900" step="1" x-model="runtimeForm.llm_timeout_s"></label>
+          <label><span x-text="t('Retries')"></span>
+            <input type="number" min="0" max="5" step="1" x-model="runtimeForm.llm_max_retries"></label>
+          <label><span x-text="t('Drop queued agent wakes after (s)')"></span>
+            <input type="number" min="1" max="3600" step="1" x-model="runtimeForm.llm_stale_after_s"></label>
+          <label><span x-text="t('Queue length')"></span>
+            <input type="number" min="1" max="100" step="1" x-model="runtimeForm.llm_max_queue"></label>
+          <label><span x-text="t('Presence penalty')"></span>
+            <input type="number" min="0" max="2" step="0.1" x-model="runtimeForm.llm_presence_penalty" :placeholder="t('profile default')"></label>
+          <div class="toolbar">
+            <button class="btn" type="submit" x-text="t('Save')"></button>
+            <span class="muted" x-show="runtimeMsg" x-text="runtimeMsg"></span>
+          </div>
+          <p class="error" x-show="runtimeError" x-text="runtimeError"></p>
+        </form>
       </article>
       <article class="card">
         <h2 x-text="t('Diagnostics bundle')"></h2>

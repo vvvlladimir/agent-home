@@ -100,7 +100,7 @@ class Client:
             return {**self._failed(f"HTTP {err.code} {detail}", started), "loading": err.code == 503}
         except (OSError, ValueError) as err:
             return self._failed(f"{type(err).__name__}: {err}", started)
-        if self.sample_file and body.get("tools") and not self.sample_file.exists():
+        if self.sample_file and parsed["message"].get("tool_calls") and not self.sample_file.exists():
             # the raw wire format of one tool-call response, to check the field names we rely on
             self.sample_file.write_text("".join(raw_lines), encoding="utf-8")
         return {

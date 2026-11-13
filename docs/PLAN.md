@@ -28,14 +28,14 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## M2 — Inference stack
 
-- [ ] `jetson/setup.sh` (`--check`, `--dry-run`, `--json`), `build_llamacpp.sh`, `profiles/*.env`,
+- [x] `jetson/setup.sh` (`--check`, `--dry-run`, `--json`), `build_llamacpp.sh`, `profiles/*.env`,
       `llama-server.service`, `models.md`; shellcheck clean
-- [ ] `jetson/metrics/server.py`: tegrastats → `/metrics.json`, `POST /profile/<name>` with token
-- [ ] `jetson/bench/bench.py`, `run_all.sh`, `toolcall_eval.yaml` (≥ 30 scenarios), validated against `sim/fake_llm.py`
-- [ ] `core/llm.py`: priority queue, coalescing, stale drop, health, warming state, retry, metrics
-- [ ] Tool-call JSON repair + content-embedded tool-call parsing
-- [ ] API + GUI: Models & Benchmarks page; `PUT api/settings`
-- [ ] Gemma 4 E2B comparison profile
+- [x] `jetson/metrics/server.py`: tegrastats → `/metrics.json`, `POST /profile/<name>` with token
+- [x] `jetson/bench/bench.py`, `run_all.sh`, `toolcall_eval.yaml` (≥ 30 scenarios), validated against `sim/fake_llm.py`
+- [x] `core/llm.py`: priority queue, coalescing, stale drop, health, warming state, retry, metrics
+- [x] Tool-call JSON repair + content-embedded tool-call parsing
+- [x] API + GUI: Models & Benchmarks page; `PUT api/settings`
+- [x] Gemma 4 E2B comparison profile
 - [ ] **Owner:** `setup.sh --check`, setup, `bench/run_all.sh`; then `make analyze-report` → final default profile
 
 ## M3 — Room agents in Shadow Mode
