@@ -1,11 +1,12 @@
 <!-- Agent editor: room, mode, entities and tier overrides, wakes, limits, prompt; live prompt preview. -->
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { api, enc, type AgentConfig, type Entity } from '../api';
 import DetailHead from '../components/DetailHead.vue';
 import Icon from '../components/Icon.vue';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
+import SearchField from '../components/SearchField.vue';
 import Seg from '../components/Seg.vue';
 import TierBadge from '../components/TierBadge.vue';
 import { pct } from '../format';
@@ -76,6 +77,42 @@ async function loadRoomEntities() {
   try { roomEntities.value = await api.get<Entity[]>(`api/entities?area=${enc(form.value.room)}`); } catch { roomEntities.value = []; }
   schedulePreview();
 }
+// New agents get their id from the name (or the room): lowercase ascii, unique among agents.
+const ID_RE = /^[a-z][a-z0-9_]{1,31}$/;
+const slug = (text: string) => text.normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+|_+$/g, '').slice(0, 28);
+const autoId = computed(() => {
+  const f = form.value;
+  if (!f) return '';
+  let base = slug(f.name) || slug(f.room) || 'agent';
+  if (base.length < 2) base = `${base}_agent`;
+  const taken = new Set(state.agents.map((a) => a.id));
+  let id = base;
+  for (let n = 2; taken.has(id); n++) id = `${base}_${n}`;
+  return id;
+});
+
+// Entity list: search, domain filter, sort.
+const entQuery = ref('');
+const entDomain = ref('');
+const entSort = ref<'ticked' | 'name' | 'domain' | 'tier'>('ticked');
+const domainOf = (id: string) => id.split('.')[0];
+const domains = computed(() => [...new Set(roomEntities.value.map((e) => domainOf(e.entity_id)))].sort());
+const tierRank = (e: Entity) => (e.read_only ? 9 : Number(String(form.value?.tier_overrides[e.entity_id] || e.tier || 'T9').slice(1)));
+const shownEntities = computed(() => {
+  const needle = entQuery.value.trim().toLowerCase();
+  const ticked = new Set(form.value?.entities || []);
+  const label = (e: Entity) => (e.name || e.entity_id).toLowerCase();
+  const list = roomEntities.value.filter((e) => (!entDomain.value || domainOf(e.entity_id) === entDomain.value)
+    && (!needle || `${e.entity_id} ${e.name || ''}`.toLowerCase().includes(needle)));
+  const by = {
+    name: (a: Entity, b: Entity) => label(a).localeCompare(label(b)),
+    domain: (a: Entity, b: Entity) => a.entity_id.localeCompare(b.entity_id),
+    tier: (a: Entity, b: Entity) => tierRank(a) - tierRank(b) || label(a).localeCompare(label(b)),
+    ticked: (a: Entity, b: Entity) => Number(ticked.has(b.entity_id)) - Number(ticked.has(a.entity_id)) || label(a).localeCompare(label(b)),
+  }[entSort.value];
+  return list.sort(by);
+});
+
 function changeRoom() { form.value!.entities = []; loadRoomEntities(); }
 function toggleEntity(id: string) {
   const list = form.value!.entities;
@@ -93,6 +130,7 @@ const addCron = () => form.value!.wake_rules.cron.push({ expr: '0 7 * * *', reas
 
 function payload() {
   const f = form.value!;
+  if (isNew.value) f.id = autoId.value;
   const list = (text: string) => (text || '').split(',').map((s) => s.trim()).filter(Boolean);
   const num = (v: unknown) => (v === '' || v == null ? undefined : Number(v));
   const events = f.wake_rules.events.map(({ _entities, _to, _from, ...rule }) => {
@@ -123,7 +161,7 @@ function schedulePreview() {
 }
 async function loadPreview() {
   if (!form.value) return;
-  const id = /^[a-z][a-z0-9_]{1,31}$/.test(form.value.id) ? form.value.id : 'preview';
+  const id = ID_RE.test(form.value.id) ? form.value.id : 'preview';
   try {
     preview.value = await api.post(`api/agents/${enc(id)}/prompt-preview`, { ...payload(), id });
     previewError.value = '';
@@ -170,8 +208,8 @@ const MODES = [['shadow', 'Shadow'], ['live', 'Live']] as const;
             <label class="field"><span>{{ t('Name') }}</span><input v-model="form.name" /></label>
             <label class="field"><span>{{ t('Room') }}</span>
               <select v-model="form.room" @change="changeRoom"><option v-for="a in state.areas" :key="a.area_id" :value="a.area_id">{{ a.name }}</option></select></label>
-            <label class="field"><span>{{ t('Id') }}</span><input v-model="form.id" :disabled="!isNew" placeholder="living_room" pattern="[a-z][a-z0-9_]{1,31}" /></label>
           </div>
+          <p class="faint small">{{ t('Id') }}: <span class="mono">{{ isNew ? autoId : form.id }}</span></p>
           <div class="row">
             <Seg v-model="form.mode" :options="MODES" :label="t('Mode')" />
             <Info :tip="t('Shadow: only logs what it would do. Live: may act within its tiers when the global mode is live too.')" />
@@ -187,15 +225,28 @@ const MODES = [['shadow', 'Shadow'], ['live', 'Live']] as const;
               <select v-model="form.entities_mode"><option value="only">{{ t('Only these') }}</option><option value="pinned">{{ t('These first, then the whole room') }}</option></select></label>
             <label class="field"><span>{{ t('In the prompt (max)') }}</span><input v-model="form.max_entities" type="number" min="1" max="25" /></label>
           </div>
+          <div class="toolbar">
+            <SearchField v-model="entQuery" :placeholder="t('Search id or name')" />
+            <label class="field auto"><select v-model="entDomain" :aria-label="t('Type')">
+              <option value="">{{ t('All types') }}</option>
+              <option v-for="d in domains" :key="d" :value="d">{{ d }}</option></select></label>
+            <label class="field auto"><select v-model="entSort" :aria-label="t('Sort')">
+              <option value="ticked">{{ t('Ticked first') }}</option>
+              <option value="name">{{ t('By name') }}</option>
+              <option value="domain">{{ t('By type') }}</option>
+              <option value="tier">{{ t('By tier') }}</option></select></label>
+            <span class="muted small count">{{ shownEntities.length }} / {{ roomEntities.length }} · {{ form.entities.length }} {{ t('ticked') }}</span>
+          </div>
           <div class="table-wrap">
             <table><tbody>
-              <tr v-for="e in roomEntities" :key="e.entity_id" :class="{ dim: e.hidden }">
+              <tr v-if="!shownEntities.length"><td class="empty">{{ t('Nothing matches.') }}</td></tr>
+              <tr v-for="e in shownEntities" :key="e.entity_id" :class="{ dim: e.hidden }">
                 <td style="width: 1%"><input type="checkbox" :checked="form.entities.includes(e.entity_id)" :aria-label="e.entity_id" @change="toggleEntity(e.entity_id)" /></td>
                 <td><div class="cell-2"><span>{{ e.name || e.entity_id }}</span><small class="mono">{{ e.entity_id }}</small></div></td>
                 <td class="small muted">{{ (e.state ?? '') + (e.unit ? ' ' + e.unit : '') }}</td>
                 <td><TierBadge :tier="e.tier" :read-only="e.read_only" /></td>
                 <td style="width: 7rem">
-                  <select v-if="!e.read_only" :aria-label="t('Tier override')" @change="setOverride(e.entity_id, ($event.target as HTMLSelectElement).value)">
+                  <select v-if="!e.read_only" class="sm" :aria-label="t('Tier override')" @change="setOverride(e.entity_id, ($event.target as HTMLSelectElement).value)">
                     <option value="">{{ t('Policy') }}</option>
                     <option v-for="tier in ['T0', 'T1', 'T2', 'T3']" :key="tier" :value="tier" :selected="form.tier_overrides[e.entity_id] === tier">{{ tier }}</option>
                   </select></td>

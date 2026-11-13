@@ -98,7 +98,7 @@ onActivated(() => {
               <option v-for="a in state.areas" :key="a.area_id" :value="a.area_id">{{ a.name }}</option>
               <option value="none">{{ t('Without a room') }}</option>
             </select></label>
-          <span class="muted small">{{ shown.length }} {{ t('entities') }}</span>
+          <span class="muted small count">{{ shown.length }} {{ t('entities') }}</span>
         </div>
         <div class="table-wrap">
           <table>
