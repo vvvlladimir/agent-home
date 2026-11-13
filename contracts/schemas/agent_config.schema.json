@@ -23,6 +23,11 @@
       "default": [],
       "description": "Entity allowlist, shown in full. Empty = every entity of the room minus device noise (battery, signal, firmware, …); the first max_entities go into the prompt, the rest the agent finds with list_entities (at most 200)."
     },
+    "entities_mode": {
+      "enum": ["only", "pinned"],
+      "default": "only",
+      "description": "only = the agent sees exactly `entities`. pinned = `entities` always go first in the prompt, the rest of the room fills it up and stays findable with list_entities."
+    },
     "max_entities": {"type": "integer", "minimum": 1, "maximum": 25, "default": 20},
     "tier_overrides": {
       "type": "object",

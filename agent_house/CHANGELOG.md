@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.0-dev.5 — pinned entities
+
+- Agents editor → *Ticked entities*: "only these" (as before) or "first in the prompt + search the
+  whole room": the ticked entities always lead the prompt, the rest of the room stays findable.
+
 ## 0.1.0-dev.4 — smarter entity selection
 
 - Room agents skip device noise (firmware updates, trackers, battery, signal and voltage sensors);

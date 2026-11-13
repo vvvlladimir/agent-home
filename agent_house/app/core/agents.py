@@ -74,6 +74,7 @@ class AgentConfig(_Strict):
     enabled: bool = True
     mode: Literal["shadow", "live"] = "shadow"
     entities: list[EntityId] = Field(default_factory=list, max_length=25)
+    entities_mode: Literal["only", "pinned"] = "only"
     max_entities: int = Field(default=20, ge=1, le=25)
     tier_overrides: dict[str, Tier] = Field(default_factory=dict)
     system_prompt: str = Field(default="", max_length=4000)
@@ -99,7 +100,7 @@ def parse_agent(payload: object) -> AgentConfig:
     except ValidationError as err:
         first = err.errors()[0]
         raise ConfigError(f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None
-    if agent.entities:
+    if agent.entities and agent.entities_mode == "only":
         for index, rule in enumerate(agent.wake_rules.events):
             for pattern in rule.entities:
                 if not any(c in pattern for c in "*?[") and pattern not in agent.entities:
@@ -176,15 +177,16 @@ def is_noise(ha, entity_id: str) -> bool:
 def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]]:
     """(entities shown in the prompt, further entities the agent may find via list_entities).
 
-    Both lists together are the agent's allowlist. An explicit `entities` list is taken as is
-    (minus ids HA does not know) and is shown in full. Otherwise: every visible entity of the
+    Both lists together are the agent's allowlist. An explicit `entities` list with
+    `entities_mode: only` is taken as is (minus ids HA does not know) and is shown in full; with
+    `pinned` those entities go first and the room fills up the rest. Otherwise: every visible entity of the
     room except config/diagnostic helpers and device noise, ranked low tiers first, then T3,
     then room sensors (motion, temperature, …), then other read-only entities; the first
     `max_entities` go into the prompt. `tier_of(entity_id) -> tier`.
     """
-    if agent.entities:
-        known = [e for e in agent.entities if e in ha.states]
-        return known, []
+    pinned = [e for e in agent.entities if e in ha.states]
+    if agent.entities and agent.entities_mode == "only":
+        return pinned, []
     registry = ha.registry
     candidates = [
         e
@@ -204,8 +206,10 @@ def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]
         return rank, entity_id
 
     candidates.sort(key=order)
-    candidates = candidates[:SCOPE_HARD_CAP]
-    return candidates[: agent.max_entities], candidates[agent.max_entities :]
+    # pinned: the ticked entities always come first, the room fills up the prompt and the search
+    candidates = (pinned + [e for e in candidates if e not in pinned])[: max(SCOPE_HARD_CAP, len(pinned))]
+    shown = max(agent.max_entities, len(pinned))
+    return candidates[:shown], candidates[shown:]
 
 
 class PolicyModel(_Strict):

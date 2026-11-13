@@ -344,7 +344,12 @@
             </select></label>
 
           <h3 x-text="t('Entities and tiers')"></h3>
-          <p class="muted small" x-text="t('None ticked = every entity of the room except device noise (battery, signal, firmware). The first ones up to the cap go into the prompt, the agent finds the rest with a search. Ticked = exactly these. Overrides can only make a tier stricter.')"></p>
+          <p class="muted small" x-text="t('None ticked = every entity of the room except device noise (battery, signal, firmware). The first ones up to the cap go into the prompt, the agent finds the rest with a search. Ticked: see the switch below. Overrides can only make a tier stricter.')"></p>
+          <label><span x-text="t('Ticked entities')"></span>
+            <select x-model="agentForm.entities_mode">
+              <option value="only" x-text="t('only these: the agent sees nothing else')"></option>
+              <option value="pinned" x-text="t('first in the prompt + search the whole room')"></option>
+            </select></label>
           <label><span x-text="t('In the prompt (max)')"></span><input type="number" min="1" max="25" x-model="agentForm.max_entities"></label>
           <div class="table-wrap"><table><tbody>
             <template x-for="e in roomEntities" :key="e.entity_id">

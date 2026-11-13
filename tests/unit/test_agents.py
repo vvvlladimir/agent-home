@@ -164,3 +164,19 @@ def test_room_sensors_rank_before_other_sensors_and_the_rest_stays_findable():
     shown, findable = resolve_scope(parse_agent({**AGENT, "max_entities": 7}), ha, tier_of)
     assert shown[-1] == "binary_sensor.room_motion"
     assert "sensor.room_power" in findable and "sensor.room_illuminance" in findable
+
+
+def test_pinned_entities_go_first_and_the_room_stays_findable():
+    ha = StubHA()
+    pinned = ["sensor.room_illuminance", "lock.room_door"]
+    only = parse_agent({**AGENT, "entities": pinned, "max_entities": 3})
+    assert resolve_scope(only, ha, tier_of) == (pinned, []), "only = exactly the ticked ones"
+    agent = parse_agent({**AGENT, "entities": pinned, "entities_mode": "pinned", "max_entities": 3})
+    shown, findable = resolve_scope(agent, ha, tier_of)
+    assert shown == pinned + ["light.room_ceiling"]
+    assert "light.room_lamp" in findable and not set(pinned) & set(findable)
+    # a wake rule may watch a room entity that is not ticked
+    rule = {"events": [{"entities": ["binary_sensor.room_motion"]}]}
+    parse_agent({**AGENT, "entities": pinned, "entities_mode": "pinned", "wake_rules": rule})
+    with pytest.raises(ConfigError):
+        parse_agent({**AGENT, "entities": pinned, "wake_rules": rule})

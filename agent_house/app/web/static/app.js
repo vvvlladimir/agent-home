@@ -261,7 +261,7 @@ function app() {
     newAgent() {
       this.agentIsNew = true;
       this.openForm({
-        id: '', name: '', room: this.areas[0]?.area_id || '', enabled: true, mode: 'shadow', entities: [],
+        id: '', name: '', room: this.areas[0]?.area_id || '', enabled: true, mode: 'shadow', entities: [], entities_mode: 'only',
         max_entities: 20, tier_overrides: {}, system_prompt: '',
         wake_rules: { events: [], cron: [], max_wakes_per_hour: 12 },
         limits: { max_steps: 5, timeout_s: 45, context_budget_tokens: 3000 },
@@ -285,6 +285,7 @@ function app() {
       config.limits = config.limits || {};
       config.tier_overrides = config.tier_overrides || {};
       config.entities = config.entities || [];
+      config.entities_mode = config.entities_mode || 'only';
       this.agentForm = config;
       this.agentMsg = ''; this.agentError = ''; this.preview = null;
       this.loadRoomEntities();
