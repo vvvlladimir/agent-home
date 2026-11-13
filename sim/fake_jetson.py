@@ -15,7 +15,12 @@ class JetsonSim:
     def __init__(self, llm: LLMSim | None = None):
         self.llm = llm
         self.token = "jetson-sim"
-        self.profiles = ["qwen35-4b-balanced", "qwen35-2b-fast", "qwen35-9b-experimental"]
+        self.profiles = [
+            "qwen35-4b-balanced",
+            "qwen35-2b-fast",
+            "gemma4-e2b-compare",
+            "qwen35-9b-experimental",
+        ]
         self.active_profile = self.profiles[0]
         self.swap_seconds = 0.2
         self.ram_used_mb, self.ram_total_mb = 4600.0, 7620.0
@@ -34,7 +39,7 @@ class JetsonSim:
             "source": "sim",
             "hostname": "jetson-sim",
             "module": "NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
-            "l4t_version": "36.4.4",
+            "l4t_version": "36.5.0",
             "jetpack_major": 6,
             "power_mode": "MAXN_SUPER",
             "ram_used_mb": self.ram_used_mb,
@@ -75,6 +80,7 @@ def create_app(sim: JetsonSim | None = None) -> FastAPI:
         sim.active_profile = name
         sim.profile_calls.append(name)
         if sim.llm:
+            sim.llm.model = name
             sim.llm.loading = True
             llm = sim.llm
             t = threading.Timer(sim.swap_seconds, lambda: setattr(llm, "loading", False))

@@ -13,7 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api.routes import router
-from .config import Settings, load_settings
+from .config import RuntimeSettings, Settings, load_runtime, load_settings
+from .core.bench import BenchRunner
+from .core.llm import LLMManager
 from .core.monitor import JetsonMonitor
 from .ha.client import HAClient
 from .logbuf import setup_logging
@@ -31,6 +33,9 @@ class Context:
     feed: Feed
     ha: HAClient
     monitor: JetsonMonitor
+    runtime: RuntimeSettings
+    llm: LLMManager
+    bench: BenchRunner
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -76,12 +81,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
     setup_logging(settings.log_level)
     store = Store(settings.data_dir / "agent_house.db")
+    feed = Feed(store)
+    monitor = JetsonMonitor(settings)
+    runtime = load_runtime(settings.data_dir)
+    llm = LLMManager(settings, runtime, monitor)
     ctx = Context(
         settings=settings,
         store=store,
-        feed=Feed(store),
+        feed=feed,
         ha=HAClient(settings),
-        monitor=JetsonMonitor(settings),
+        monitor=monitor,
+        runtime=runtime,
+        llm=llm,
+        bench=BenchRunner(llm, monitor, store, feed),
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -101,9 +113,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ctx.feed.add("system", f"Agent House {__version__} started")
         await ctx.ha.start()
         await ctx.monitor.start()
+        await ctx.llm.start()
         try:
             yield
         finally:
+            await ctx.bench.stop()
+            await ctx.llm.stop()
             await ctx.monitor.stop()
             await ctx.ha.stop()
             store.close()

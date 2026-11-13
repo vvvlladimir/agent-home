@@ -1,0 +1,19 @@
+# Installed by jetson/setup.sh to /etc/systemd/system/ with @USER@ and @REPO@ filled in.
+[Unit]
+Description=llama-server for Agent House (profile: /var/lib/agent-house/active.env)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+# Clocks do not survive a reboot. "-" = a failure must not stop the server, "+" = run as root.
+ExecStartPre=-+/usr/bin/jetson_clocks
+ExecStart=@REPO@/jetson/run_llama_server.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

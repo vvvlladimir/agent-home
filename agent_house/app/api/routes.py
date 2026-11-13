@@ -12,10 +12,13 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from .. import __version__
-from ..config import redact_url
+from ..config import RuntimeSettings, redact_url, save_runtime
+from ..core import profiles
+from ..core.bench import BenchBusy
+from ..core.monitor import JetsonError
 from ..core.policy import READ_ONLY_DOMAINS, resolve_tier
 from ..logbuf import ring
 
@@ -30,7 +33,7 @@ def build_status(ctx) -> dict:
     kill = ctx.store.get("kill_switch", {"engaged": False, "since": None, "reason": None})
     settings = ctx.settings
     has_key = bool(settings.anthropic_api_key)
-    local_ok = ctx.monitor.llm_state == "ok"
+    local_ok = ctx.llm.state in ("ok", "busy")
     provider = settings.orchestrator_provider
     if provider == "anthropic":
         effective = "anthropic" if has_key else "none"
@@ -44,12 +47,12 @@ def build_status(ctx) -> dict:
         "mode": ctx.store.get("mode", "shadow"),
         "kill_switch": kill,
         "ha": ctx.ha.status(),
-        "llm": ctx.monitor.llm_status(),
+        "llm": ctx.llm.status(),
         "jetson": ctx.monitor.jetson_status(),
         "orchestrator": {
             "provider": provider,
             "effective": effective,
-            "model": settings.anthropic_model if effective == "anthropic" else ctx.monitor.llm_model,
+            "model": settings.anthropic_model if effective == "anthropic" else ctx.llm.model,
             "budget": {
                 "daily_limit_eur": settings.daily_budget_eur,
                 "spent_today_eur": 0.0,
@@ -196,15 +199,111 @@ async def stream_events(request: Request) -> StreamingResponse:
     return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
 
-@router.get("/settings")
-async def get_settings(request: Request) -> dict:
-    ctx = request.app.state.ctx
+def _error(code: str, detail: str, status: int) -> JSONResponse:
+    return JSONResponse({"error": code, "detail": detail}, status_code=status)
+
+
+def _settings_view(ctx) -> dict:
     masked = ctx.settings.masked()
     return {
         "options": masked,
-        "runtime": {},
-        "paths": {"data_dir": masked["data_dir"], "database": ctx.store.path},
+        "runtime": ctx.runtime.model_dump(mode="json"),
+        "paths": {
+            "data_dir": masked["data_dir"],
+            "database": ctx.store.path,
+            "runtime_settings": str(ctx.settings.data_dir / "settings.yaml"),
+        },
     }
+
+
+@router.get("/settings")
+async def get_settings(request: Request) -> dict:
+    return _settings_view(request.app.state.ctx)
+
+
+@router.put("/settings")
+async def put_settings(request: Request):
+    """Partial update of the GUI-editable settings; add-on options are not reachable from here."""
+    ctx = request.app.state.ctx
+    try:
+        changes = await request.json()
+    except ValueError:
+        return _error("invalid", "the body is not JSON", 422)
+    if not isinstance(changes, dict):
+        return _error("invalid", "the body must be an object of settings", 422)
+    try:
+        updated = RuntimeSettings(**{**ctx.runtime.model_dump(), **changes})
+    except ValidationError as err:
+        first = err.errors()[0]
+        return _error("invalid", f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}", 422)
+    if updated != ctx.runtime:
+        save_runtime(ctx.settings.data_dir, updated)
+        ctx.runtime = ctx.llm.runtime = updated
+        ctx.feed.add("system", "Settings changed", data={"changed": sorted(changes)})
+    return _settings_view(ctx)
+
+
+# --- models & benchmarks (M2) -----------------------------------------------------------------
+
+
+@router.get("/models/profiles")
+async def list_profiles(request: Request) -> list[dict]:
+    active = request.app.state.ctx.llm.active_profile
+    return [{**profile, "active": profile["name"] == active} for profile in profiles.PROFILES]
+
+
+class ProfileBody(BaseModel):
+    profile: str = Field(max_length=64)
+
+
+@router.put("/models/active")
+async def set_active_profile(body: ProfileBody, request: Request) -> JSONResponse:
+    ctx = request.app.state.ctx
+    known = {p["name"] for p in profiles.PROFILES}
+    if body.profile not in known:
+        return _error("not_found", f"unknown profile; known: {', '.join(sorted(known))}", 404)
+    if not ctx.monitor.can_switch:
+        return _error(
+            "not_configured", "set jetson_metrics_url and jetson_token in the add-on configuration", 409
+        )
+    if ctx.bench.running:
+        return _error("busy", "a benchmark is running", 409)
+    if ctx.llm.swapping:
+        return _error("busy", "a model swap is already in progress", 409)
+    ctx.llm.begin_swap(body.profile)
+    try:
+        await ctx.monitor.switch_profile(body.profile)
+    except JetsonError as err:
+        ctx.llm.end_swap()
+        await ctx.llm.probe()
+        ctx.feed.add("system", f"Model swap to {body.profile} failed: {err}", level="error")
+        return _error("jetson_error", str(err), 502)
+    ctx.feed.add("system", f"Model profile switching to {body.profile}", level="warning")
+    await ctx.llm.probe()
+    return JSONResponse(ctx.llm.status(), status_code=202)
+
+
+@router.get("/benchmarks")
+async def list_benchmarks(request: Request) -> list[dict]:
+    return request.app.state.ctx.bench.list()
+
+
+class BenchBody(BaseModel):
+    profile: str | None = Field(default=None, max_length=64)
+    quick: bool = False
+
+
+@router.post("/benchmarks")
+async def run_benchmark(request: Request, body: BenchBody | None = None) -> JSONResponse:
+    ctx = request.app.state.ctx
+    body = body or BenchBody()
+    active = ctx.llm.active_profile
+    if body.profile and active and body.profile != active:
+        return _error("wrong_profile", f"{active} is loaded; activate {body.profile} first", 409)
+    try:
+        return JSONResponse({"id": ctx.bench.start(quick=body.quick)}, status_code=202)
+    except BenchBusy as err:
+        return _error("busy", str(err), 409)
 
 
 @router.get("/logs")
@@ -231,6 +330,8 @@ async def get_diagnostics(request: Request) -> Response:
             "websocket_url": redact_url(ctx.settings.ha_websocket_url),
         },
         "feed.json": ctx.feed.recent(limit=300),
+        "runtime_settings.json": ctx.runtime.model_dump(mode="json"),
+        "benchmarks.json": ctx.bench.list(limit=20),
     }
     log_text = "\n".join(
         f"{_iso(r['ts'])} {r['level'].upper():7} {r['logger']}: {r['message']}" for r in ring.tail(limit=2000)

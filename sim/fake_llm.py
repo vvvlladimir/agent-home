@@ -31,6 +31,7 @@ class LLMSim:
         self.latency = 0.0
         self.tokens_per_second = 20.0
         self.model = "qwen35-4b-balanced"
+        self.api_key: str | None = None  # set it to require `Authorization: Bearer <key>` like --api-key
         self._n = 0
 
     def reset(self) -> None:
@@ -138,6 +139,9 @@ def create_app(sim: LLMSim | None = None) -> FastAPI:
 
     @app.post("/v1/chat/completions")
     async def chat(request: Request):
+        if sim.api_key and request.headers.get("authorization") != f"Bearer {sim.api_key}":
+            err = {"message": "Invalid API Key", "type": "authentication_error", "code": 401}
+            return JSONResponse({"error": err}, status_code=401)
         if sim.loading:
             return loading_resp()
         body = await request.json()

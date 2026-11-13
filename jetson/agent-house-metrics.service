@@ -1,0 +1,15 @@
+# Installed by jetson/setup.sh to /etc/systemd/system/ with @USER@ and @REPO@ filled in.
+[Unit]
+Description=Agent House Jetson metrics and profile switch (tegrastats over HTTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/jetson/metrics/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

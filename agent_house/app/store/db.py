@@ -26,6 +26,17 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX feed_ts ON feed (ts);
     """,
+    # 2 — M2: benchmark runs started from the GUI (report = contracts/schemas/bench_report.schema.json)
+    """
+    CREATE TABLE benchmarks (
+        id TEXT PRIMARY KEY,
+        created TEXT NOT NULL,
+        profile TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        report TEXT
+    );
+    """,
 ]
 
 

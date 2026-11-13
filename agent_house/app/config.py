@@ -3,6 +3,9 @@
 Precedence (lowest → highest): built-in defaults → add-on options (`/data/options.json`,
 written by the Supervisor from the HA Configuration tab) → `AH_*` environment variables
 (used by the simulator and tests).
+
+GUI-editable settings (`RuntimeSettings`) are separate: they live in `/data/settings.yaml` and
+are changed through `PUT api/settings`.
 """
 
 from __future__ import annotations
@@ -13,7 +16,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +94,39 @@ class Settings(BaseModel):
         for key in URL_FIELDS:
             data[key] = redact_url(data.get(key) or "")
         return data
+
+
+class RuntimeSettings(BaseModel):
+    """Settings the owner changes in the GUI. Unknown keys are rejected, values are range-checked."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm_timeout_s: float = Field(default=120.0, ge=5, le=900)  # one request, including retries
+    llm_max_retries: int = Field(default=2, ge=0, le=5)
+    llm_stale_after_s: float = Field(
+        default=120.0, ge=1, le=3600
+    )  # queued agent wakes older than this are dropped
+    llm_max_queue: int = Field(default=16, ge=1, le=100)
+    # None = the active profile's value. The benchmark compares the vendor's 1.5 against 0.
+    llm_presence_penalty: float | None = Field(default=None, ge=0, le=2)
+
+
+def load_runtime(data_dir: Path) -> RuntimeSettings:
+    file = data_dir / "settings.yaml"
+    if not file.is_file():
+        return RuntimeSettings()
+    try:
+        return RuntimeSettings(**(yaml.safe_load(file.read_text()) or {}))
+    except (OSError, yaml.YAMLError, ValidationError, TypeError) as err:
+        log.warning("ignoring %s, using defaults: %s", file, str(err).splitlines()[0])
+        return RuntimeSettings()
+
+
+def save_runtime(data_dir: Path, runtime: RuntimeSettings) -> None:
+    file = data_dir / "settings.yaml"
+    temporary = file.with_suffix(".yaml.tmp")
+    temporary.write_text(yaml.safe_dump(runtime.model_dump(mode="json"), sort_keys=True))
+    temporary.replace(file)
 
 
 _ENV = {
