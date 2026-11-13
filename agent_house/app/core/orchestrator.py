@@ -75,7 +75,21 @@ How to answer:
   if a check failed, fix the YAML and call submit_automation again.
 - If the request cannot be done safely or with the listed entities, call decline with the reason.
 
-YAML rules:
+{yaml_rules}"""
+
+CHAT_SYSTEM = """You are the orchestrator of Agent House, talking with the owner of a smart home in chat.
+
+How to answer:
+- Short and concrete, in the owner's language. Finish with plain text and no tool call.
+- You cannot switch anything yourself. Use find_entities (English words, or an area) to look up
+  entities and their current states. Describe only states you read; never claim one you did not see.
+- When the owner wants something to happen automatically, call submit_automation with one automation
+  in YAML; you get the result of the safety checks (fix and submit again if one failed). The owner
+  reviews it on the Proposals page; nothing runs before that.
+
+{yaml_rules}"""
+
+YAML_RULES = """YAML rules:
 - Keys: alias, description, triggers, conditions, actions, mode. Plural keys only.
 - Triggers use `trigger:` (state, numeric_state, time, sun, …). Actions use `action: domain.service`.
 - Name every target entity explicitly: `target: {entity_id: light.x}`. No area_id, device_id,
@@ -119,6 +133,8 @@ TOOLS = [
         "required": ["reason"],
     },
 ]
+CHAT_TOOLS = TOOLS[:2]  # find_entities, submit_automation: a chat answer needs no `decline`
+CHAT_HISTORY_TURNS = 8
 
 
 class OrchestratorError(Exception):
@@ -697,10 +713,43 @@ class Orchestrator:
         more = f"\n({len(matches) - FIND_LIMIT} more: add a word)" if len(matches) > FIND_LIMIT else ""
         return "\n".join(matches[:FIND_LIMIT]) + more
 
-    def _system(self) -> str:
+    def _system(self, template: str = SYSTEM) -> str:
         services = self.safety.policy.get("allowed_services") or {}
         listed = "\n".join(f"  {d}: {', '.join(s)}" for d, s in sorted(services.items()))
-        return SYSTEM.replace("{services}", listed)
+        return template.replace("{yaml_rules}", YAML_RULES).replace("{services}", listed)
+
+    async def _submit(self, args: dict, proposal: dict | None, trace: _Trace, **create) -> tuple[dict, list]:
+        """One submit_automation call → (the proposal, its failed checks). The first call of a
+        conversation creates the draft, later ones edit it."""
+        text = str(args.get("yaml") or "")
+        if proposal is None:
+            proposal = await self.lifecycle.create(
+                text,
+                title=args.get("title"),
+                rationale=args.get("rationale"),
+                expected_triggers=args.get("expected_triggers"),
+                run_id=trace.run_id,
+                **create,
+            )
+        else:
+            proposal = await self.lifecycle.edit(proposal["id"], text)
+        failed = [f"{c['name']}: {c['detail']}" for c in proposal["checks"] if not c["ok"]]
+        trace.step(
+            "tool",
+            {
+                "name": "submit_automation",
+                "proposal_id": proposal["id"],
+                "status": proposal["status"],
+                "failed": failed,
+            },
+        )
+        return proposal, failed
+
+    def _find(self, call: dict, trace: _Trace) -> dict:
+        args = call["input"]
+        found = self.find_entities(str(args.get("query") or ""), str(args.get("area") or "") or None)
+        trace.step("tool", {"name": "find_entities", "arguments": args, "result": found[:2000]})
+        return {"id": call["id"], "content": found}
 
     async def draft(
         self,
@@ -729,7 +778,13 @@ class Orchestrator:
             "\n".join(lines) or "(none)"
         )
         transcript: list[dict] = [{"role": "user", "text": user}]
-        trace = _Trace(self, origin_agent, run_id, request, priority, new_run_id)
+        trace = _Trace(
+            self,
+            f"{origin_agent or 'owner'} asks for an automation: {request}",
+            "manual" if priority is Priority.INTERACTIVE else "poke",
+            run_id=new_run_id,
+            origin=(origin_agent, run_id),
+        )
         trace.step("context", {"system": self._system(), "user": user, "entities": len(lines)})
         redactor = Redactor.for_home(self.ha)
         proposal = None
@@ -755,14 +810,7 @@ class Orchestrator:
                 for call in turn.calls:
                     if not call.get("error") and call["name"] == "find_entities":
                         searched += 1
-                        args = call["input"]
-                        found = self.find_entities(
-                            str(args.get("query") or ""), str(args.get("area") or "") or None
-                        )
-                        trace.step(
-                            "tool", {"name": "find_entities", "arguments": args, "result": found[:2000]}
-                        )
-                        results.append({"id": call["id"], "content": found})
+                        results.append(self._find(call, trace))
                         continue
                     if (
                         not call.get("error")
@@ -792,30 +840,13 @@ class Orchestrator:
                         reason = str(call["input"].get("reason") or "no reason given")[:300]
                         trace.finish("escalated", error=f"declined: {reason}")
                         raise OrchestratorError("declined", reason)
-                    args = call["input"]
-                    text = str(args.get("yaml") or "")
-                    if proposal is None:
-                        proposal = await self.lifecycle.create(
-                            text,
-                            title=args.get("title"),
-                            rationale=args.get("rationale"),
-                            expected_triggers=args.get("expected_triggers"),
-                            origin_agent=origin_agent,
-                            run_id=trace.run_id,
-                            ha_id=ha_id,
-                            replaces_original=replaces_original,
-                        )
-                    else:
-                        proposal = await self.lifecycle.edit(proposal["id"], text)
-                    failed = [f"{c['name']}: {c['detail']}" for c in proposal["checks"] if not c["ok"]]
-                    trace.step(
-                        "tool",
-                        {
-                            "name": "submit_automation",
-                            "proposal_id": proposal["id"],
-                            "status": proposal["status"],
-                            "failed": failed,
-                        },
+                    proposal, failed = await self._submit(
+                        call["input"],
+                        proposal,
+                        trace,
+                        origin_agent=origin_agent,
+                        ha_id=ha_id,
+                        replaces_original=replaces_original,
                     )
                     done = not failed
                     results.append(
@@ -853,6 +884,100 @@ class Orchestrator:
             summary=f"proposal {proposal['id']} ({proposal['status']}): {proposal['title']}",
         )
         return proposal
+
+    # --- chat -------------------------------------------------------------------------------
+    def house_summary(self) -> str:
+        """What the orchestrator knows without asking: rooms, agents, open work. Local data only."""
+        areas = ", ".join(sorted(self.ha.registry.areas)) or "none"
+        lines = [f"Time: {datetime.now().astimezone():%Y-%m-%d %H:%M (%a)}", f"Areas: {areas}"]
+        agents = self.agents_rt.agents.list() if self.agents_rt else []
+        if agents:
+            lines.append(
+                "Room agents: "
+                + ", ".join(
+                    f"{a.id} ({a.room}, {self.agents_rt.effective_mode(a) if a.enabled else 'disabled'})"
+                    for a in agents
+                )
+            )
+        lines.append(
+            f"Proposals waiting for review: {self.lifecycle.count_open()}; "
+            f"deployed automations: {self.lifecycle.count_deployed()}"
+        )
+        reports = self.store.query("SELECT agent_id, severity, summary FROM inbox ORDER BY id DESC LIMIT 5")
+        if reports:
+            lines.append("Latest agent reports:")
+            lines += [f"- {r['agent_id']} [{r['severity']}]: {r['summary'][:160]}" for r in reports]
+        return "\n".join(lines)
+
+    async def chat(self, message: str, history: list[dict] | None = None) -> tuple[str, str]:
+        """One chat turn with the owner → (reply, run id). Reads and drafts; never actuates."""
+        if self.safety.kill_engaged:
+            raise OrchestratorError("kill_switch", "the kill switch is engaged")
+        earlier = "".join(
+            f"{'Owner' if h['role'] == 'user' else 'You'}: {h['text']}\n"
+            for h in (history or [])[-CHAT_HISTORY_TURNS:]
+        )
+        user = self.house_summary() + (f"\n\nEarlier in this chat:\n{earlier}" if earlier else "\n")
+        user += f"\nOwner: {message.strip()[:4000]}"
+        system = self._system(CHAT_SYSTEM)
+        transcript: list[dict] = [{"role": "user", "text": user}]
+        trace = _Trace(self, f"owner in chat: {message.strip()}", "chat")
+        trace.step("context", {"system": system, "user": user})
+        redactor = Redactor.for_home(self.ha)
+        proposal, reply = None, ""
+        try:
+            for _ in range(MAX_TURNS):
+                turn = await self.turn(system, transcript, CHAT_TOOLS, Priority.INTERACTIVE, redactor)
+                trace.llm(turn)
+                if not turn.calls:
+                    reply = str(redactor.restore(turn.text)).strip()
+                    break
+                results = []
+                for call in turn.calls:
+                    if not call.get("error") and call["name"] == "find_entities":
+                        results.append(self._find(call, trace))
+                    elif not call.get("error") and call["name"] == "submit_automation":
+                        proposal, failed = await self._submit(call["input"], proposal, trace)
+                        results.append(
+                            {
+                                "id": call["id"],
+                                "content": "Checks failed, fix and submit again:\n" + "\n".join(failed)
+                                if failed
+                                else f"Drafted as proposal {proposal['id']}; tell the owner to review it "
+                                "on the Proposals page.",
+                                "is_error": bool(failed),
+                            }
+                        )
+                    else:
+                        results.append(
+                            {
+                                "id": call["id"],
+                                "content": f"unusable call: {call.get('error') or call['name']}",
+                                "is_error": True,
+                            }
+                        )
+                transcript += [
+                    {
+                        "role": "assistant",
+                        "text": turn.text,
+                        "calls": turn.calls,
+                        "raw": turn.raw,
+                        "raw_by": turn.raw_by,
+                    },
+                    {"role": "tool", "results": results},
+                ]
+        except OrchestratorError as err:
+            trace.finish("error", error=str(err))
+            raise
+        except LifecycleError as err:
+            trace.finish("error", error=str(err))
+            raise OrchestratorError("failed", str(err)) from err
+        if not reply:
+            trace.finish("escalated", error="no answer within the turn limit")
+            raise OrchestratorError("failed", "the model gave no answer within the turn limit")
+        trace.step("final", {"text": reply})
+        trace.finish("ok", summary=reply)
+        return reply, trace.run_id
 
     def request_draft(self, agent_id: str, run_id: str | None, description: str, room: str | None) -> bool:
         """A room agent's idea, drafted in the background. False when too many are waiting."""
@@ -896,24 +1021,20 @@ class Orchestrator:
 class _Trace:
     """An orchestrator draft as a run (agent_id `orchestrator`), so Runs & traces shows it."""
 
-    def __init__(
-        self, orch: Orchestrator, origin_agent, origin_run, request: str, priority: Priority, run_id=None
-    ) -> None:
+    def __init__(self, orch: Orchestrator, reason: str, source: str, run_id=None, origin=None) -> None:
         self.store = orch.store
         self.run_id = run_id or new_id("r")
         self.started = time.time()
         self.trace: list[dict] = []
         self.steps = self.tokens_in = self.tokens_out = 0
         self.provider = None
-        source = "manual" if priority is Priority.INTERACTIVE else "poke"
-        reason = f"{origin_agent or 'owner'} asks for an automation: {request}"[:500]
         self.store.execute(
             "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow, replay_of) "
             "VALUES (?, 'orchestrator', 'running', ?, ?, ?, 1, NULL)",
-            (self.run_id, source, reason, self.started),
+            (self.run_id, source, reason[:500], self.started),
         )
-        if origin_run:
-            self.step("origin", {"run_id": origin_run, "agent_id": origin_agent})
+        if origin and origin[1]:
+            self.step("origin", {"run_id": origin[1], "agent_id": origin[0]})
 
     def step(self, kind: str, data: dict, **extra) -> None:
         self.trace.append(

@@ -794,6 +794,35 @@
     </article>
   </section>
 
+  <!-- ───────────────────────── Chat (M5) ───────────────────────── -->
+  <section x-show="page === 'chat'" x-cloak>
+    <h1 x-text="t('Chat')"></h1>
+    <p class="muted" x-text="t('The orchestrator reads and drafts automations; it never switches anything. A room agent answers through a normal run: same tiers, same shadow mode. Every turn is a trace under Runs & traces.')"></p>
+    <form class="form" @submit.prevent="chatSend()">
+      <label><span x-text="t('Talk to')"></span>
+        <select x-model="chatTarget" @change="chatReset()">
+          <option value="orchestrator" x-text="t('Orchestrator')"></option>
+          <template x-for="a in agentsList.filter(a => a.enabled)" :key="a.id"><option :value="a.id" x-text="a.name + ' (' + a.id + ')'"></option></template>
+        </select></label>
+      <div class="log" x-show="chatLog.length">
+        <template x-for="(m, i) in chatLog" :key="i">
+          <div style="margin-bottom: .6rem">
+            <strong x-text="m.role === 'user' ? t('You') : chatTarget"></strong>
+            <span class="badge" x-show="m.shadow && m.tools?.length" x-text="t('shadow')"></span>
+            <a class="small" x-show="m.run" href="#runs" @click="openRun(m.run)" x-text="m.run"></a>
+            <template x-for="(c, j) in m.tools || []" :key="j"><div class="muted small" x-text="'→ ' + c"></div></template>
+            <div x-text="m.text"></div>
+          </div>
+        </template>
+      </div>
+      <label><span x-text="t('Message')"></span>
+        <textarea rows="2" x-model="chatInput" maxlength="4000" @keydown.enter.prevent="if (!$event.shiftKey) chatSend()"></textarea></label>
+      <p><button class="btn" type="submit" :disabled="chatBusy || status?.kill_switch?.engaged" x-text="chatBusy ? t('Waiting for the answer…') : t('Send')"></button>
+        <button class="btn btn-ghost" type="button" @click="chatReset()" x-text="t('New conversation')"></button></p>
+      <p class="error" x-show="chatError" x-text="chatError"></p>
+    </form>
+  </section>
+
   <!-- ───────────────────────── Placeholders for later milestones ───────────────────────── -->
   <template x-for="p in pages.filter(p => p.todo)" :key="p.id">
     <section x-show="page === p.id" x-cloak>
@@ -817,6 +846,15 @@
             <div class="kv-rows"><dt class="mono" x-text="k"></dt><dd class="mono" x-text="fmt(v)"></dd></div>
           </template>
         </dl>
+      </article>
+      <article class="card">
+        <h2 x-text="t('Config export / import')"></h2>
+        <p class="muted" x-text="t('Agents, policy and the settings on this page as one YAML file. No add-on options, so no secrets. Imported agents always start in shadow mode.')"></p>
+        <p><a class="btn" href="api/config/export" download="agent-house-config.yaml" x-text="t('Export')"></a>
+          <label class="btn btn-ghost" style="display: inline-block"><span x-text="t('Import…')"></span>
+            <input type="file" accept=".yaml,.yml,text/yaml" style="display: none" @change="importConfig($event)"></label></p>
+        <p class="small" x-show="configMsg" x-text="configMsg"></p>
+        <p class="error" x-show="configError" x-text="configError"></p>
       </article>
       <article class="card">
         <h2 x-text="t('Local model requests')"></h2>

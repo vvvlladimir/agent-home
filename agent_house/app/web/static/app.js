@@ -8,8 +8,7 @@ const PAGES = [
   { id: 'proposals', label: 'Proposals' },
   { id: 'automations', label: 'Deployed automations' },
   { id: 'migration', label: 'Migration' },
-  { id: 'chat', label: 'Chat', milestone: 'M5',
-    todo: 'Talk to the orchestrator or a room agent; tool calls are shown inline.' },
+  { id: 'chat', label: 'Chat' },
   { id: 'models', label: 'Models & Benchmarks' },
   { id: 'settings', label: 'Settings & Logs' },
 ];
@@ -52,6 +51,15 @@ function app() {
     _stream: null,
     _poll: null,
     polling: false,
+    // chat
+    chatTarget: 'orchestrator',
+    chatSession: '',
+    chatLog: [],
+    chatInput: '',
+    chatBusy: false,
+    chatError: '',
+    configMsg: '',
+    configError: '',
     // migration
     originals: [],
     originalSel: null,
@@ -157,6 +165,7 @@ function app() {
       if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); }
       if (this.page === 'automations') this.loadDeployed();
       if (this.page === 'migration') this.loadOriginals();
+      if (this.page === 'chat') this.loadAgents();
     },
     post(path, body) {
       return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -533,6 +542,39 @@ function app() {
         if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
         this.deployedSel = null;
       }, this.t('Removed.'));
+    },
+
+    // ── chat, config export / import (M5) ──────────────────────────────────────
+    chatReset() { this.chatSession = ''; this.chatLog = []; this.chatError = ''; },
+    async chatSend() {
+      const message = this.chatInput.trim();
+      if (!message || this.chatBusy) return;
+      this.chatBusy = true; this.chatError = ''; this.chatInput = '';
+      this.chatLog.push({ role: 'user', text: message });
+      try {
+        const body = { target: this.chatTarget, message };
+        if (this.chatSession) body.session_id = this.chatSession;
+        const out = await this.post('api/chat', body);
+        this.chatSession = out.session_id;
+        const tools = (out.run.trace || []).filter((s) => s.type === 'tool' || s.type === 'policy')
+          .map((s) => (s.type === 'tool'
+            ? s.data.name + ' ' + JSON.stringify(s.data.arguments || { proposal: s.data.proposal_id, status: s.data.status })
+            : s.data.verdict + ': ' + s.data.domain + '.' + s.data.service + ' ' + (s.data.entity_ids || []).join(', ')));
+        this.chatLog.push({ role: 'assistant', text: out.reply, tools, run: out.run.id, shadow: out.run.shadow });
+      } catch (e) { this.chatError = e.message; }
+      this.chatBusy = false;
+    },
+    async importConfig(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      this.configMsg = ''; this.configError = '';
+      try {
+        const out = await this.api('api/config/import', { method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: await file.text() });
+        this.configMsg = this.t('Imported agents:') + ' ' + (out.agents.join(', ') || '—')
+          + (out.set_to_shadow.length ? ' · ' + this.t('set to shadow:') + ' ' + out.set_to_shadow.join(', ') : '');
+        this.loadSettings();
+      } catch (e) { this.configError = e.message; }
     },
 
     // ── migration (M5) ─────────────────────────────────────────────────────────

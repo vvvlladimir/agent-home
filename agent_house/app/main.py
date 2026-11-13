@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from . import __version__
 from .api.agents import router as agents_router
 from .api.automations import router as automations_router
+from .api.chat import router as chat_router
 from .api.migration import router as migration_router
 from .api.routes import router
 from .config import RuntimeSettings, Settings, load_runtime, load_settings
@@ -202,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(agents_router)  # before `router`: its catch-all answers 501 for the rest
     app.include_router(automations_router)
     app.include_router(migration_router)
+    app.include_router(chat_router)
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)

@@ -193,6 +193,11 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    off (not changed, not deleted). Tick it again: it is on again.
 5. Try one Node-RED group: the summary says what was read and how many logic nodes were not.
    The draft is a starting point; say in `owner-reports/m5/README.md` how close it was.
+6. **Chat**: ask the orchestrator "which lights are on in the living room?" and "turn the desk lamp
+   on when I sit down" (a proposal must appear); ask a room agent to switch something (in Shadow
+   the answer shows `shadow: light.turn_on …`, nothing moves). Note the wait per answer on the Jetson.
+7. **Settings → Config export**: download the YAML, check it has no token or key, import it back:
+   the message lists the agents and that they were set to shadow.
 
 ## Unverified facts to watch for (from RESEARCH.md)
 

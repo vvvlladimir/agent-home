@@ -204,8 +204,10 @@ class AgentRuntime:
         priority: str = "routine",
         entity_id: str | None = None,
         replay: dict | None = None,
+        prompt_reason: str | None = None,
     ) -> str:
-        """Queue one run and return its id. Raises WakeRefused; never calls the model itself."""
+        """Queue one run and return its id. Raises WakeRefused; never calls the model itself.
+        `prompt_reason`: the full text for the prompt when it is longer than the stored reason (chat)."""
         agent = self.agents.get(agent_id)
         if agent is None:
             raise WakeRefused("not_found", f"no agent {agent_id!r}")
@@ -224,6 +226,7 @@ class AgentRuntime:
             "replay_of": replay["id"] if replay else None,
             "priority": priority,
             "context": replay["context"] if replay else None,
+            "prompt_reason": prompt_reason,
         }
         self.store.execute(
             "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow, replay_of) "
@@ -283,7 +286,7 @@ class AgentRuntime:
         if self.safety.kill_engaged:
             return self._finish(run, "dropped", error="kill switch engaged")
         limits = agent.limits
-        context = run["context"] or self.build_context(agent, run["wake_reason"])
+        context = run["context"] or self.build_context(agent, run["prompt_reason"] or run["wake_reason"])
         run.update(trace=[], steps=0, tokens_in=0, tokens_out=0, status="running", provider="local")
         run["profile"] = self.llm.active_profile
         self._step(run, "context", {k: context.get(k) for k in (
@@ -295,7 +298,11 @@ class AgentRuntime:
             {"role": "user", "content": context["user"]},
         ]
         toolbox = ToolBox(self, agent, run, sorted(self.scope(agent)))
-        priority = {"manual": Priority.INTERACTIVE, "replay": Priority.BACKGROUND}.get(
+        priority = {
+            "manual": Priority.INTERACTIVE,
+            "chat": Priority.INTERACTIVE,
+            "replay": Priority.BACKGROUND,
+        }.get(
             run["wake_source"], Priority.INTERACTIVE if run["priority"] == "alarm" else Priority.AGENT
         )
         spent, bad_turns, seen = 0.0, 0, {}
@@ -500,6 +507,15 @@ class AgentRuntime:
     def runs_today(self) -> int:
         midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         return self.store.query("SELECT COUNT(*) AS n FROM runs WHERE started>=?", (midnight,))[0]["n"]
+
+    async def wait(self, run_id: str, timeout: float = 300.0) -> dict | None:
+        """The run once it has ended (or as it is when the time is up)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            run = self.get_run(run_id)
+            if run is None or run["ended"] or time.monotonic() >= deadline:
+                return run
+            await asyncio.sleep(0.1)
 
     def inbox(self, limit: int = 100) -> list[dict]:
         return self.store.query("SELECT * FROM inbox ORDER BY id DESC LIMIT ?", (limit,))

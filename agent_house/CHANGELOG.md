@@ -6,6 +6,10 @@
   (`/share/agent_house/nodered/*.json`) read-only, asks the orchestrator for a replacement (a normal
   proposal), compares both against the last 7 days of history, and can switch your original off
   and on again. Nothing of yours is edited or deleted.
+- **Chat** page: talk to the orchestrator (it looks things up and drafts automations, never
+  switches anything) or to a room agent (a normal run: same tiers, same shadow mode).
+- Settings: **Config export / import** (agents, policy, GUI settings as YAML, no secrets).
+  Imported agents always start in shadow mode.
 
 ## 0.1.0-dev.9 — the orchestrator finds your sensors
 
