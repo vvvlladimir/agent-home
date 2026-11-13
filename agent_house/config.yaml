@@ -1,6 +1,6 @@
 # Home Assistant add-on ("app") manifest. Field reference: docs/RESEARCH.md §1.
 name: Agent House
-version: "0.1.0-dev.2"
+version: "0.1.0-dev.3"
 slug: agent_house
 description: LLM agents that watch your rooms, propose automations and act within strict safety tiers
 url: https://github.com/vvvlladimir/agent-home
