@@ -164,6 +164,13 @@ class EventGate:
     def _under_cap(self, agent: AgentConfig) -> bool:
         return len(self._recent(agent.id)) < agent.wake_rules.max_wakes_per_hour
 
+    def allow_task(self, agent: AgentConfig) -> bool:
+        """A task from the orchestrator counts against the same hourly cap as any wake."""
+        if not self._under_cap(agent):
+            return False
+        self._recent(agent.id).append(self.clock())
+        return True
+
     def _drop(self, agent: AgentConfig, why: str, entity_id: str | None = None) -> None:
         self.feed.add(
             "gate_drop",

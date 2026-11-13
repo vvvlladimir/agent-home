@@ -70,14 +70,24 @@ def test_native_calls():
     message = {
         "content": None,
         "tool_calls": [
-            {"id": "c1", "type": "function", "function": {"name": "call_service", "arguments": json.dumps(ARGS)}},
+            {
+                "id": "c1",
+                "type": "function",
+                "function": {"name": "call_service", "arguments": json.dumps(ARGS)},
+            },
             {"id": "c2", "type": "function", "function": {"name": "report", "arguments": {"summary": "x"}}},
             {"id": "c3", "type": "function", "function": {"name": "format_disk", "arguments": "{}"}},
             {"id": "c4", "type": "function", "function": {"name": "report", "arguments": "{nope"}},
         ],
     }
     one, two, three, four = extract_tool_calls(message, "tool_calls", KNOWN)
-    assert (one.name, one.arguments, one.repaired, one.error, one.source) == ("call_service", ARGS, False, None, "native")
+    assert (one.name, one.arguments, one.repaired, one.error, one.source) == (
+        "call_service",
+        ARGS,
+        False,
+        None,
+        "native",
+    )
     assert two.arguments == {"summary": "x"}
     assert three.error == "unknown tool 'format_disk'" and three.arguments == {}
     assert "not valid JSON" in four.error
@@ -87,22 +97,27 @@ def test_native_calls():
 @pytest.mark.parametrize(
     "content",
     [
-        f'<tool_call>{json.dumps({"name": "call_service", "arguments": ARGS})}</tool_call>',
-        f'<think>hmm, the light</think>\n<tool_call>\n{json.dumps({"name": "call_service", "arguments": ARGS})}\n</tool_call>',
-        f'<tool_call>{json.dumps({"name": "call_service", "arguments": ARGS})}',  # closing tag missing
-        f'<tool_call>{json.dumps({"name": "call_service", "parameters": ARGS})}</tool_call>',
-        f'<tool_call>{json.dumps({"name": "call_service", "arguments": json.dumps(ARGS)})}</tool_call>',
+        f"<tool_call>{json.dumps({'name': 'call_service', 'arguments': ARGS})}</tool_call>",
+        f"<think>hmm, the light</think>\n<tool_call>\n{json.dumps({'name': 'call_service', 'arguments': ARGS})}\n</tool_call>",
+        f"<tool_call>{json.dumps({'name': 'call_service', 'arguments': ARGS})}",  # closing tag missing
+        f"<tool_call>{json.dumps({'name': 'call_service', 'parameters': ARGS})}</tool_call>",
+        f"<tool_call>{json.dumps({'name': 'call_service', 'arguments': json.dumps(ARGS)})}</tool_call>",
         f"<function=call_service>{json.dumps(ARGS)}</function>",
         "<tool_call><function=call_service><parameter=domain>light</parameter><parameter=service>turn_on"
         "</parameter><parameter=entity_id>light.hallway</parameter></function></tool_call>",
-        f'```json\n{json.dumps({"name": "call_service", "arguments": ARGS})}\n```',
+        f"```json\n{json.dumps({'name': 'call_service', 'arguments': ARGS})}\n```",
         json.dumps({"name": "call_service", "arguments": ARGS}),
     ],
 )
 def test_calls_embedded_in_the_text(content):
     calls = extract_tool_calls({"role": "assistant", "content": content}, "stop", KNOWN)
     assert len(calls) == 1
-    assert (calls[0].name, calls[0].arguments, calls[0].error, calls[0].source) == ("call_service", ARGS, None, "content")
+    assert (calls[0].name, calls[0].arguments, calls[0].error, calls[0].source) == (
+        "call_service",
+        ARGS,
+        None,
+        "content",
+    )
     assert visible_text({"content": content}).count("tool_call") == 0
 
 
@@ -111,13 +126,17 @@ def test_plain_text_and_unmarked_json_for_unknown_tools_are_not_calls():
     assert extract_tool_calls({"content": '{"name": "Alice", "arguments": {"a": 1}}'}, "stop", KNOWN) == []
     assert extract_tool_calls({"content": '{"temperature": 21}'}, "stop", KNOWN) == []
     # explicit markers with an unknown tool or broken JSON are reported, not dropped
-    unknown = extract_tool_calls({"content": '<tool_call>{"name": "rm", "arguments": {}}</tool_call>'}, "stop", KNOWN)
+    unknown = extract_tool_calls(
+        {"content": '<tool_call>{"name": "rm", "arguments": {}}</tool_call>'}, "stop", KNOWN
+    )
     assert unknown[0].error == "unknown tool 'rm'"
     broken = extract_tool_calls({"content": "<tool_call>{nope</tool_call>"}, "stop", KNOWN)
     assert broken[0].error
     two = extract_tool_calls(
-        {"content": '<tool_call>{"name": "report", "arguments": {"summary": "a"}}</tool_call>'
-                    '<tool_call>{"name": "get_state", "arguments": {"entity_id": "light.x"}}</tool_call>'},
+        {
+            "content": '<tool_call>{"name": "report", "arguments": {"summary": "a"}}</tool_call>'
+            '<tool_call>{"name": "get_state", "arguments": {"entity_id": "light.x"}}</tool_call>'
+        },
         "stop",
         KNOWN,
     )
@@ -145,11 +164,20 @@ def test_stream_accumulator_and_timings():
     call = extract_tool_calls(result["message"], result["finish_reason"], ["report"])[0]
     assert call.arguments == {"summary": "x"} and call.id == "c1"
     timings = read_timings(result["timings"], result["usage"])
-    assert timings["prefill_tps"] == 400.0 and timings["decode_tps"] == 20.0 and timings["prompt_tokens"] == 50
-    assert read_timings(None)["decode_tps"] is None and read_timings({"prompt_n": "x"}, [])["prompt_n"] is None
+    assert (
+        timings["prefill_tps"] == 400.0 and timings["decode_tps"] == 20.0 and timings["prompt_tokens"] == 50
+    )
+    assert (
+        read_timings(None)["decode_tps"] is None and read_timings({"prompt_n": "x"}, [])["prompt_n"] is None
+    )
     failed = StreamAccumulator()
     failed.feed_line('data: {"error": {"message": "slot unavailable"}}')
     assert failed.error == "slot unavailable"
     with pytest.raises(ValueError):
         parse_completion({"choices": []})
-    assert parse_completion({"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]})["message"]["content"] == "hi"
+    assert (
+        parse_completion({"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}]})["message"][
+            "content"
+        ]
+        == "hi"
+    )

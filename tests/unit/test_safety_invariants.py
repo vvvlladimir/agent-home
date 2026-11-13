@@ -23,7 +23,7 @@ actions: [{action: light.turn_on, target: {entity_id: light.room_lamp}}]
 def stack(tmp_path, *script):
     s = make_stack(tmp_path, ha=AutomationHA(), llm=None)
     s.llm.steps = list(script)
-    s.lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety)
+    s.lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety, owner_of=s.council.ownership.owner_of)
     settings = SimpleNamespace(orchestrator_provider="local", anthropic_api_key="", anthropic_model="claude-haiku-5-5",
                                anthropic_base_url="", daily_budget_eur=1.0, redact_cloud=True)  # fmt: skip
     s.orch = Orchestrator(settings, s.llm, s.store, s.feed, s.ha, s.safety, s.lifecycle)

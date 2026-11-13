@@ -6,6 +6,8 @@ Read-only except two write paths:
 - automation writes (`write_automation`, `delete_automation`, `set_automation_enabled`), whose only
   caller is `core/lifecycle.py`. Each refuses any id that is not `agent_house_<slug>`: the owner's
   own automations can never be written or deleted from here.
+- `create_mode_helper` (M5 council, only caller `core/council.py`): creates the one helper
+  `input_select.agent_house_mode` when it does not exist yet, on the owner's click. Nothing else.
 - `set_original_enabled` (M5 migration, only caller `core/migration.py`): `automation.turn_off` /
   `turn_on` on one of the owner's automations, on the owner's explicit click. Never an edit.
 
@@ -52,6 +54,8 @@ READ_COMMANDS = frozenset(
 AUTOMATION_PREFIX = "agent_house_"
 OUR_AUTOMATION_ID = re.compile(r"^agent_house_[a-z0-9_]{1,64}$")
 OWNER_AUTOMATION = re.compile(r"^automation\.[a-z0-9_]+$")
+MODE_HELPER = "input_select.agent_house_mode"
+MODE_OPTIONS = ("home", "away", "night", "guests", "work")
 
 
 class HAError(Exception):
@@ -76,6 +80,7 @@ class HAClient:
         self.version: str | None = None
         self.location_name: str | None = None
         self.reconnects = 0
+        self.own_user_id: str | None = None  # HA user behind our token, from a call_service context
         self.last_event_ts: float | None = None
         self.states: dict[str, dict] = {}
         self.registry = Registry()
@@ -292,13 +297,27 @@ class HAClient:
         """Actuate ONE entity. Only `core/actuator.py` may call this, after `policy.decide`."""
         if not isinstance(entity_id, str) or not entity_id:
             raise HAError("call_service needs exactly one entity_id")
-        await self._send(
+        result = await self._send(
             "call_service",
             domain=domain,
             service=service,
             service_data=dict(data or {}),
             target={"entity_id": entity_id},
         )
+        context = result.get("context") if isinstance(result, dict) else None
+        if isinstance(context, dict) and isinstance(context.get("user_id"), str):
+            # tells our own changes apart from the owner's in the logbook (core/insights.py)
+            self.own_user_id = context["user_id"]
+
+    async def create_mode_helper(self) -> str:
+        """Create `input_select.agent_house_mode` (WebSocket `input_select/create`, the command the
+        HA helper dialog sends; [UNVERIFIED-ON-HW]). Refuses when the entity exists already."""
+        if MODE_HELPER in self.states:
+            raise HAError(f"{MODE_HELPER} exists already")
+        await self._send(
+            "input_select/create", name="Agent House mode", options=list(MODE_OPTIONS), icon="mdi:home-switch"
+        )
+        return MODE_HELPER
 
     # --- automation writes (core/lifecycle.py only) -------------------------------------
     async def _rest(self, method: str, path: str, body: Any = None) -> Any:
@@ -413,6 +432,13 @@ class HAClient:
             no_attributes="",
         )
         return rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], list) else []
+
+    async def logbook(self, start: str, end: str) -> list[dict]:
+        """Logbook entries of the whole house between two ISO timestamps, oldest first. Unlike the
+        history they carry the cause of a change (`context_user_id`, `context_event_type`,
+        `context_entity_id`, …): the field names are [UNVERIFIED-ON-HW] (docs/RESEARCH.md §3)."""
+        rows = await self.rest_get(f"/logbook/{start}", end_time=end)
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
 
     async def api_alive(self) -> bool:
         """GET /api/ → {"message": "API running."}; used by diagnostics to tell REST from WS problems."""

@@ -33,9 +33,22 @@ TOOLS: list[dict] = [
     ),
     _tool(
         "ask_agent",
-        "Send a question or a request to another room's agent. It is woken later; you get no answer here.",
-        {"agent_id": {"type": "string"}, "question": {"type": "string"}},
+        "Ask about or request something another agent owns. It goes through the orchestrator, which "
+        "gives the owner a task; the answer appears on the shared board later, not here.",
+        {
+            "agent_id": {"type": "string", "description": "the agent, or orchestrator if unsure"},
+            "question": {"type": "string", "description": "one sentence; name the entity id"},
+        },
         ["agent_id", "question"],
+    ),
+    _tool(
+        "post_fact",
+        "Tell your neighbours a short fact about your room on the shared board.",
+        {
+            "text": {"type": "string", "description": "e.g. someone went to bed at 23:10"},
+            "minutes": {"type": "number", "description": "how long it stays true, 5 to 720, default 60"},
+        },
+        ["text"],
     ),
     _tool(
         "schedule_wake",
@@ -110,6 +123,7 @@ class ToolBox:
         self.asked = False
         self.scheduled = False
         self.proposed = False
+        self.posted = 0
 
     async def execute(self, name: str, args: dict) -> dict:
         handler = getattr(self, f"_{name}", None) if name in TOOL_NAMES else None
@@ -161,7 +175,7 @@ class ToolBox:
                 "entity_id": entity_id,
                 "name": self.rt._name(entity_id),
                 "state": state_text(self.rt.ha.states[entity_id]),
-                "tier": self.rt.tier(self.agent, entity_id),
+                "tier": self.rt._label(self.agent, entity_id),
             }
             for entity_id in matches[:LIST_LIMIT]
         ]
@@ -239,31 +253,42 @@ class ToolBox:
             self.run["escalated"] = True
         if not self.dry:
             self.rt.inbox_add(self.agent.id, self.run["id"], SEVERITY[severity], summary.strip()[:500])
+            council = getattr(self.rt, "council", None)
+            if severity == "escalate" and council is not None:
+                council.escalate(self.agent.id, summary.strip(), self.run["id"])
         return {"ok": True}
 
     async def _ask_agent(self, args: dict) -> dict:
+        """Through the orchestrator (council), never straight to a neighbour; depth 1."""
         target, question = args.get("agent_id"), args.get("question")
-        other = self.rt.agents.get(target) if isinstance(target, str) else None
-        if other is None or not other.enabled or other.id == self.agent.id:
-            known = [a.id for a in self.rt.agents.list() if a.enabled and a.id != self.agent.id]
-            return {"ok": False, "error": f"unknown agent {target!r}; agents: {', '.join(known) or 'none'}"}
         if not isinstance(question, str) or not question.strip():
             return {"ok": False, "error": "question must be a sentence"}
-        if self.run["wake_source"] in ("poke", "schedule") or self.asked:
-            return {"ok": False, "error": "one question per wake, and none on a wake by another agent or a "
-                    "schedule. Finish with one short sentence."}  # fmt: skip
+        if self.run["wake_source"] in ("poke", "schedule", "task") or self.asked:
+            return {"ok": False, "error": "one question per wake, and none on a task, a wake by another "
+                    "agent or a schedule. Finish with one short sentence."}  # fmt: skip
+        council = getattr(self.rt, "council", None)
+        if council is None:
+            return {"ok": False, "error": "nobody to ask; report it instead"}
         self.asked = True
+        if self.dry:
+            return {"ok": True, "status": "forwarded"}
+        return council.ask(self.agent.id, target, question.strip()[:300], self.run["id"])
+
+    async def _post_fact(self, args: dict) -> dict:
+        text, minutes = args.get("text"), args.get("minutes", 60)
+        if not isinstance(text, str) or len(text.strip()) < 3:
+            return {"ok": False, "error": "text must be a short sentence"}
+        if isinstance(minutes, bool) or not isinstance(minutes, int | float) or not 5 <= minutes <= 720:
+            return {"ok": False, "error": "minutes must be a number from 5 to 720"}
+        if self.posted >= 2:
+            return {"ok": False, "error": "two facts per wake. Finish with one short sentence."}
+        council = getattr(self.rt, "council", None)
+        if council is None:
+            return {"ok": False, "error": "there is no shared board"}
+        self.posted += 1
         if not self.dry:
-            reason = f'Agent "{self.agent.id}" asks: {question.strip()[:300]}'
-            try:
-                self.rt.wake(other.id, source="poke", reason=reason)
-            except Exception as err:  # noqa: BLE001
-                return {"ok": False, "error": f"{other.id} cannot be woken: {err}"[:200]}
-        return {
-            "ok": True,
-            "status": "queued",
-            "note": "its answer goes to the owner as a report, not to you",
-        }
+            council.board.post(self.agent.id, text, ttl_s=float(minutes) * 60, run_id=self.run["id"])
+        return {"ok": True, "status": "posted"}
 
     async def _schedule_wake(self, args: dict) -> dict:
         minutes, reason = args.get("in_minutes"), args.get("reason")

@@ -4,7 +4,8 @@ Tiers: T0 free · T1 act + notify · T2 act only after human approval · T3 neve
 Deny by default: a domain that is not listed is T3.
 
 `decide` answers one question for one service call on one entity, in a fixed order:
-kill switch → allowlist → service allowlist → tier → rate limit → mode. Anything unexpected is
+kill switch → allowlist → ownership → service allowlist → tier → rate limit → mode. Anything
+unexpected is
 `denied`. `core/actuator.py` is its only production caller; changes here need a `reviewer` pass.
 """
 
@@ -32,6 +33,7 @@ DEFAULT_POLICY: dict = {
         "fan": "T0",
         "scene": "T2",
         "input_boolean": "T2",
+        "input_select": "T2",
         "humidifier": "T1",
         "vacuum": "T1",
         "climate": "T2",
@@ -45,7 +47,8 @@ DEFAULT_POLICY: dict = {
         "siren": "T3",
         "camera": "T3",
     },
-    "entity_tiers": {"cover.*garage*": "T3"},
+    # the house mode helper (M5 council): the orchestrator switches it, the owner is notified
+    "entity_tiers": {"cover.*garage*": "T3", "input_select.agent_house_mode": "T1"},
     "t3_whitelist": [],
     "allowed_services": {
         "light": ["turn_on", "turn_off", "toggle"],
@@ -61,6 +64,7 @@ DEFAULT_POLICY: dict = {
         "fan": ["turn_on", "turn_off", "set_percentage"],
         "scene": ["turn_on"],
         "input_boolean": ["turn_on", "turn_off"],
+        "input_select": ["select_option"],
         "humidifier": ["turn_on", "turn_off", "set_humidity"],
         "vacuum": ["start", "return_to_base"],
         "climate": ["set_temperature", "set_hvac_mode", "turn_on", "turn_off"],
@@ -200,6 +204,7 @@ def decide(
     approved: bool = False,
     force_shadow: bool = False,
     protected: object = (),
+    owner: object = None,
 ) -> Decision:
     """May `agent` call `domain.service` on `entity_id` right now?
 
@@ -208,17 +213,21 @@ def decide(
     - `recent`: actions counted in the last minute: {"entity": n, "agent": n, "global": n};
     - `approved`: the owner approved this very action (lets a T2 action through, nothing else);
     - `force_shadow`: replays never actuate;
-    - `protected`: entity ids no agent may ever actuate (the kill switch helper).
+    - `protected`: entity ids no agent may ever actuate (the kill switch helper);
+    - `owner`: the id of the agent that owns `entity_id` (M5 council: exactly one owner per entity).
+      Only the owner may actuate; anything but the agent's own id (None included) denies.
 
     Verdicts: `denied`; `shadow` (would be allowed, the mode says do not send); `pending` (T2,
     waits for the owner); `allow`. Invariants (tests/unit/test_policy_decide.py): an engaged kill
     switch denies everything; T3 is never anything but denied; nothing outside the allowlist or
-    the service allowlist gets past `denied`; any exception or malformed input denies.
+    the service allowlist gets past `denied`; nothing an agent does not own gets past `denied`;
+    any exception or malformed input denies.
     """
     try:
         return _decide(
             domain, service, entity_id, data, agent, scope, kill_engaged, global_mode,
             DEFAULT_POLICY if policy is None else policy, recent or {}, approved, force_shadow, protected,
+            owner,
         )  # fmt: skip
     except Exception:  # noqa: BLE001 - the safety layer never fails open
         return Decision("denied", "T3", "policy error (failing closed)")
@@ -226,7 +235,7 @@ def decide(
 
 def _decide(
     domain, service, entity_id, data, agent, scope, kill_engaged, global_mode, policy, recent, approved,
-    force_shadow, protected,
+    force_shadow, protected, owner,
 ) -> Decision:  # fmt: skip
     def deny(reason: str, tier: str = "T3") -> Decision:
         return Decision("denied", tier, reason)
@@ -255,6 +264,11 @@ def _decide(
         return deny(f"{entity_id} is not in this agent's allowlist", tier)
     if not isinstance(protected, set | frozenset | tuple | list) or entity_id in protected:
         return deny(f"{entity_id} is reserved for the owner", tier)
+    # 2b. ownership: one owner agent per entity; a neighbour asks the orchestrator instead
+    agent_id = agent.get("id")
+    if not isinstance(agent_id, str) or not agent_id or owner != agent_id:
+        held = owner if isinstance(owner, str) and owner else "nobody"
+        return deny(f"{entity_id} is owned by {held}, not by this agent; ask through ask_agent", tier)
 
     # 3. service allowlist (a call always targets an entity of its own domain)
     if domain != entity_id.split(".", 1)[0]:

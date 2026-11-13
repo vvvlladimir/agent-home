@@ -108,7 +108,11 @@ def test_llama_server_command_line(tmp_path, name):
     (tmp_path / "etc").mkdir()
     (tmp_path / "etc" / "token").write_text("secret\n")
     out = subprocess.run(
-        [BASH, JETSON / "run_llama_server.sh", "--print-cmd"], env=env, capture_output=True, text=True, check=True
+        [BASH, JETSON / "run_llama_server.sh", "--print-cmd"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     profile = profiles.get_profile(name)
     assert f"-hf {profile['model']}" in out and f"--alias {name}" in out and "-np 1" in out
@@ -120,11 +124,21 @@ def test_llama_server_command_line(tmp_path, name):
 @needs_bash
 def test_switch_profile_without_restart(tmp_path):
     env = jetson_env(tmp_path)
-    run = subprocess.run([BASH, JETSON / "switch_profile.sh", "qwen35-2b-fast", "--no-restart"], env=env, capture_output=True, text=True)
+    run = subprocess.run(
+        [BASH, JETSON / "switch_profile.sh", "qwen35-2b-fast", "--no-restart"],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
     assert run.returncode == 0, run.stderr
     assert os.readlink(tmp_path / "state" / "active.env").endswith("qwen35-2b-fast.env")
     for bad in ("../../etc/passwd", "nope", ""):
-        assert subprocess.run([BASH, JETSON / "switch_profile.sh", bad, "--no-restart"], env=env, capture_output=True).returncode != 0
+        assert (
+            subprocess.run(
+                [BASH, JETSON / "switch_profile.sh", bad, "--no-restart"], env=env, capture_output=True
+            ).returncode
+            != 0
+        )
 
 
 # --- setup.sh ----------------------------------------------------------------------------
@@ -133,11 +147,18 @@ def test_switch_profile_without_restart(tmp_path):
 @needs_bash
 def test_setup_check_json_on_a_jetson_changes_nothing(tmp_path, sysroot):
     run = subprocess.run(
-        [BASH, JETSON / "setup.sh", "--check", "--json"], env=jetson_env(tmp_path, sysroot), capture_output=True, text=True
+        [BASH, JETSON / "setup.sh", "--check", "--json"],
+        env=jetson_env(tmp_path, sysroot),
+        capture_output=True,
+        text=True,
     )
     report = json.loads(run.stdout)
     jsonschema.validate(report, json.loads((SCHEMAS / "setup_check.schema.json").read_text()))
-    assert report["is_orin_nano_8gb"] is True and report["jetpack_major"] == 6 and report["l4t_version"] == "36.5.0"
+    assert (
+        report["is_orin_nano_8gb"] is True
+        and report["jetpack_major"] == 6
+        and report["l4t_version"] == "36.5.0"
+    )
     assert report["cuda_version"] == "12.6.68" and report["zram_enabled"] is True
     checks = {c["name"]: c for c in report["checks"]}
     assert checks["platform"]["status"] == "ok" and checks["jetpack"]["status"] == "ok"
@@ -149,14 +170,24 @@ def test_setup_check_json_on_a_jetson_changes_nothing(tmp_path, sysroot):
 def test_setup_check_fails_on_a_non_jetson(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
-    run = subprocess.run([BASH, JETSON / "setup.sh", "--check", "--json"], env=jetson_env(tmp_path, empty), capture_output=True, text=True)
+    run = subprocess.run(
+        [BASH, JETSON / "setup.sh", "--check", "--json"],
+        env=jetson_env(tmp_path, empty),
+        capture_output=True,
+        text=True,
+    )
     checks = {c["name"]: c["status"] for c in json.loads(run.stdout)["checks"]}
     assert checks["platform"] == "fail"
 
 
 @needs_bash
 def test_setup_dry_run_prints_and_changes_nothing(tmp_path, sysroot):
-    run = subprocess.run([BASH, JETSON / "setup.sh", "--dry-run"], env=jetson_env(tmp_path, sysroot), capture_output=True, text=True)
+    run = subprocess.run(
+        [BASH, JETSON / "setup.sh", "--dry-run"],
+        env=jetson_env(tmp_path, sysroot),
+        capture_output=True,
+        text=True,
+    )
     assert run.returncode == 0, run.stderr
     assert "would run:" in run.stdout and "would write:" in run.stdout
     assert "libssl-dev" in (JETSON / "setup.sh").read_text(), "without it llama.cpp is built without HTTPS"
@@ -165,8 +196,12 @@ def test_setup_dry_run_prints_and_changes_nothing(tmp_path, sysroot):
 
 @needs_bash
 def test_llamacpp_build_has_https_for_model_downloads(tmp_path):
-    run = subprocess.run([BASH, JETSON / "build_llamacpp.sh", "--dry-run", "--dir", str(tmp_path / "llama.cpp")],
-                         env=jetson_env(tmp_path), capture_output=True, text=True)
+    run = subprocess.run(
+        [BASH, JETSON / "build_llamacpp.sh", "--dry-run", "--dir", str(tmp_path / "llama.cpp")],
+        env=jetson_env(tmp_path),
+        capture_output=True,
+        text=True,
+    )
     assert run.returncode == 0, run.stderr
     assert "-DLLAMA_OPENSSL=ON" in run.stdout and "-DCMAKE_CUDA_ARCHITECTURES=87" in run.stdout
 
@@ -174,7 +209,12 @@ def test_llamacpp_build_has_https_for_model_downloads(tmp_path):
 @needs_bash
 def test_setup_rejects_bad_options(tmp_path):
     for args in (["--json"], ["--frobnicate"]):
-        assert subprocess.run([BASH, JETSON / "setup.sh", *args], env=jetson_env(tmp_path), capture_output=True).returncode == 2
+        assert (
+            subprocess.run(
+                [BASH, JETSON / "setup.sh", *args], env=jetson_env(tmp_path), capture_output=True
+            ).returncode
+            == 2
+        )
 
 
 # --- metrics endpoint --------------------------------------------------------------------
@@ -227,7 +267,10 @@ def test_metrics_document(metrics):
     assert doc["throttled"] is False
     assert doc["llama"]["health"] == "ok" and doc["llama"]["active_profile"] == profiles.DEFAULT_PROFILE
 
-    metrics.module.Handler.sampler.line, metrics.module.Handler.sampler.line_ts = TEGRASTATS, __import__("time").time()
+    metrics.module.Handler.sampler.line, metrics.module.Handler.sampler.line_ts = (
+        TEGRASTATS,
+        __import__("time").time(),
+    )
     doc = httpx.get(f"{metrics.url}/metrics.json").json()
     assert doc["source"] == "tegrastats" and doc["gpu_percent"] == 45.0 and doc["raw"] == TEGRASTATS
     assert httpx.get(f"{metrics.url}/healthz").json() == {"ok": True}
@@ -268,13 +311,19 @@ def test_bench_py_end_to_end_against_the_fake_server(tmp_path, llm_sim, llm_serv
     sample = tmp_path / "sample.txt"
     code = bench.main(
         [
-            "--url", llm_server.url,
-            "--metrics-url", jetson_server.url,
-            "--token-file", str(tmp_path / "missing"),
-            "--out", str(tmp_path / "out"),
-            "--source", "sim",
+            "--url",
+            llm_server.url,
+            "--metrics-url",
+            jetson_server.url,
+            "--token-file",
+            str(tmp_path / "missing"),
+            "--out",
+            str(tmp_path / "out"),
+            "--source",
+            "sim",
             "--quick",
-            "--save-sample", str(sample),
+            "--save-sample",
+            str(sample),
         ]
     )
     assert code == 0

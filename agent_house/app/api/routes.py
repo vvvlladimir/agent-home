@@ -208,6 +208,7 @@ async def put_settings(request: Request):
     if updated != ctx.runtime:
         save_runtime(ctx.settings.data_dir, updated)
         ctx.runtime = ctx.llm.runtime = ctx.agents_rt.settings = updated
+        ctx.council.settings = ctx.insights.settings = ctx.review.settings = updated
         ctx.feed.add("system", "Settings changed", data={"changed": sorted(changes)})
     return _settings_view(ctx)
 

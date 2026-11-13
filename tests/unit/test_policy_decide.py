@@ -12,7 +12,13 @@ from app.core.policy import DEFAULT_POLICY, decide, effective_policy
 SCOPE = frozenset(
     {"light.a", "scene.a", "climate.a", "switch.a", "lock.a", "sensor.a", "cover.garage_door", "foo.a"}
 )
-LIVE_AGENT = {"enabled": True, "mode": "live", "tier_overrides": {}, "limits": {"max_actions_per_minute": 6}}
+LIVE_AGENT = {
+    "id": "me",
+    "enabled": True,
+    "mode": "live",
+    "tier_overrides": {},
+    "limits": {"max_actions_per_minute": 6},
+}
 SERVICE = {
     "light": "turn_on", "scene": "turn_on", "climate": "set_temperature", "switch": "turn_on",
     "lock": "unlock", "sensor": "turn_on", "cover": "open_cover", "foo": "turn_on",
@@ -33,6 +39,7 @@ def ask(entity_id="light.a", service=_DEFAULT, **changes):
         "scope": SCOPE,
         "kill_engaged": False,
         "global_mode": "live",
+        "owner": "me",
     }
     args.update(changes)
     return decide(**args)
@@ -165,4 +172,29 @@ def test_effective_policy_merges_the_owner_file_over_the_defaults():
     assert effective_policy("garbage") == DEFAULT_POLICY
     assert ask("fan.a", scope=frozenset({"fan.a"}), policy=merged).verdict == "denied", (
         "unlisted domain is T3"
+    )
+
+
+def test_only_the_owner_agent_may_actuate():
+    """M5 council: exactly one owner per entity; everything else is denied before the tier."""
+    assert ask("light.a").verdict == "allow"
+    for owner in ("bedroom", "orchestrator", None, "", 0, ["me"]):
+        decision = ask("light.a", owner=owner)
+        assert decision.verdict == "denied" and "owned by" in decision.reason
+        assert ask("climate.a", owner=owner, approved=True).verdict == "denied"
+    nameless = {k: v for k, v in LIVE_AGENT.items() if k != "id"}
+    assert ask("light.a", agent=nameless).verdict == "denied"
+    assert ask("light.a", agent={**LIVE_AGENT, "id": None}, owner=None).verdict == "denied"
+    # ownership does not lift anything: the owner of a T3 entity still cannot actuate it
+    assert ask("lock.a").verdict == "denied" and ask("lock.a").tier == "T3"
+
+
+def test_the_house_mode_helper_is_t1_by_default():
+    decision = ask(
+        "input_select.agent_house_mode", "select_option", data={"option": "away"},
+        scope=SCOPE | {"input_select.agent_house_mode"},
+    )  # fmt: skip
+    assert decision.verdict == "allow" and decision.tier == "T1"
+    assert (
+        ask("input_select.other", "select_option", scope=SCOPE | {"input_select.other"}).verdict == "pending"
     )

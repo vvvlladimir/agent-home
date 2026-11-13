@@ -35,7 +35,13 @@ def llm_ok(base: str) -> dict:
 
 def test_profiles(ingress):
     llm_ok(ingress.base)
-    listed = wait_for(lambda: (p := httpx.get(f"{ingress.base}/api/models/profiles").json()) and any(x["active"] for x in p) and p)
+    listed = wait_for(
+        lambda: (
+            (p := httpx.get(f"{ingress.base}/api/models/profiles").json())
+            and any(x["active"] for x in p)
+            and p
+        )
+    )
     validate(listed, "/api/models/profiles")
     assert [p["name"] for p in listed if p["active"]] == ["qwen35-4b-balanced"]
     assert {"qwen35-2b-fast", "gemma4-e2b-compare", "qwen35-9b-experimental"} <= {p["name"] for p in listed}
@@ -53,9 +59,16 @@ def test_profile_swap_goes_warming_then_ok(ingress, jetson_sim, llm_sim):
     again = httpx.put(f"{base}/api/models/active", json={"profile": "qwen35-2b-fast"})
     assert again.status_code == 409, "one swap at a time"
 
-    status = wait_for(lambda: (s := httpx.get(f"{base}/api/status").json())["llm"]["state"] == "ok" and s, timeout=10)
+    status = wait_for(
+        lambda: (s := httpx.get(f"{base}/api/status").json())["llm"]["state"] == "ok" and s, timeout=10
+    )
     assert status["llm"]["model"] == "gemma4-e2b-compare"
-    wait_for(lambda: [p["name"] for p in httpx.get(f"{base}/api/models/profiles").json() if p["active"]] == ["gemma4-e2b-compare"])
+    wait_for(
+        lambda: (
+            [p["name"] for p in httpx.get(f"{base}/api/models/profiles").json() if p["active"]]
+            == ["gemma4-e2b-compare"]
+        )
+    )
     summaries = [e["summary"] for e in httpx.get(f"{base}/api/events", params={"kind": "system"}).json()]
     assert any("switching to gemma4-e2b-compare" in s for s in summaries)
 
@@ -67,7 +80,9 @@ def test_profile_swap_errors(ingress, settings, jetson_sim):
     jetson_sim.token = "rotated-on-the-jetson"
     response = httpx.put(f"{base}/api/models/active", json={"profile": "qwen35-2b-fast"})
     assert response.status_code == 502 and "401" in response.json()["detail"]
-    assert httpx.get(f"{base}/api/status").json()["llm"]["state"] == "ok", "a refused swap leaves the model as it was"
+    assert httpx.get(f"{base}/api/status").json()["llm"]["state"] == "ok", (
+        "a refused swap leaves the model as it was"
+    )
     settings.jetson_token = ""
     response = httpx.put(f"{base}/api/models/active", json={"profile": "qwen35-2b-fast"})
     assert response.status_code == 409 and response.json()["error"] == "not_configured"
@@ -89,7 +104,9 @@ def test_gui_benchmark_runs_once_at_a_time_and_stores_a_valid_report(ingress, ll
     validate(listed, "/api/benchmarks")
     assert listed[0]["id"] == run_id and listed[0]["status"] == "running"
 
-    done = wait_for(lambda: (b := httpx.get(f"{base}/api/benchmarks").json())[0]["status"] != "running" and b, timeout=30)
+    done = wait_for(
+        lambda: (b := httpx.get(f"{base}/api/benchmarks").json())[0]["status"] != "running" and b, timeout=30
+    )
     validate(done, "/api/benchmarks")
     run = done[0]
     assert run["status"] == "done" and "progress" not in run
@@ -125,6 +142,11 @@ def test_put_settings(ingress, settings, app_server):
     for bad in ({"llm_timeout_s": 1}, {"anthropic_api_key": "x"}, {"llm_max_queue": "many"}, [1], "x"):
         response = httpx.put(f"{base}/api/settings", json=bad)
         assert response.status_code == 422 and response.json()["error"] == "invalid", bad
-    assert httpx.put(f"{base}/api/settings", content=b"{not json", headers={"content-type": "application/json"}).status_code == 422
+    assert (
+        httpx.put(
+            f"{base}/api/settings", content=b"{not json", headers={"content-type": "application/json"}
+        ).status_code
+        == 422
+    )
     assert settings.anthropic_api_key == "", "add-on options are not reachable from the GUI"
     assert any(op.get("x-milestone") == "M2" for op in OPENAPI["paths"]["/api/settings"].values())

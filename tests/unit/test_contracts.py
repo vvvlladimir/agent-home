@@ -11,7 +11,7 @@ import yaml
 from openapi_spec_validator import validate
 
 ROOT = Path(__file__).resolve().parents[2]
-DONE = {"M1", "M2", "M3"}  # milestones whose operations must all be routed
+DONE = {"M1", "M2", "M3", "M4", "M5"}  # milestones whose operations must all be routed
 SCHEMAS = sorted((ROOT / "contracts" / "schemas").glob("*.schema.json"))
 MILESTONES = {"M1", "M2", "M3", "M4", "M5"}
 
@@ -60,12 +60,23 @@ def test_agent_config_example_and_defaults():
 def test_implemented_operations_are_not_answered_by_the_501_fallback():
     """Guards against the contract and the router drifting apart."""
     from app.api.agents import router as agents_router
+    from app.api.automations import router as automations_router
+    from app.api.chat import router as chat_router
+    from app.api.council import router as council_router
+    from app.api.migration import router as migration_router
     from app.api.routes import router
 
     spec = yaml.safe_load((ROOT / "contracts" / "openapi.yaml").read_text())
     routes = {
         (r.path, m.lower())
-        for r in (*agents_router.routes, *router.routes)
+        for r in (
+            *agents_router.routes,
+            *router.routes,
+            *automations_router.routes,
+            *migration_router.routes,
+            *chat_router.routes,
+            *council_router.routes,
+        )
         for m in r.methods
         if "{path:path}" not in r.path
     }

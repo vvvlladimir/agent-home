@@ -53,6 +53,9 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "automation"
 
 
+AGENT_HOUSE_USER = "sim-agent-house-user"
+
+
 def _ctx() -> dict:
     return {"id": uuid.uuid4().hex[:26].upper(), "parent_id": None, "user_id": None}
 
@@ -82,6 +85,8 @@ class HAState:
         self.service_calls: list[dict] = []
         self.config_writes: list[dict] = []
         self.history: dict[str, list[dict]] = {}
+        self.logbook_rows: list[dict] = []  # what GET /api/logbook answers (M5 insights)
+        self._origins: dict[str, dict] = {}  # context id → the logbook's context_* fields
         self._fail, self._fail_status = 0, 500
         if self._populate_on_reset:
             self._populate()
@@ -93,7 +98,14 @@ class HAState:
         self._fail, self._fail_status = n, status
 
     # ---- state + events -------------------------------------------------------------------
-    def set_state(self, entity_id: str, state: str, attributes: dict | None = None, ts: Any = None) -> dict:
+    def set_state(
+        self,
+        entity_id: str,
+        state: str,
+        attributes: dict | None = None,
+        ts: Any = None,
+        context: dict | None = None,
+    ) -> dict:
         now = _dt(ts)
         old = self.states.get(entity_id)
         attrs = dict(attributes) if attributes is not None else dict(old["attributes"] if old else {})
@@ -104,13 +116,51 @@ class HAState:
             "attributes": attrs,
             "last_changed": changed,
             "last_updated": now.isoformat(),
-            "context": _ctx(),
+            "context": context or _ctx(),
         }
         if old:
             self.history.setdefault(entity_id, []).append(old)
+        if not old or old["state"] != new["state"]:
+            origin = self._origins.get(new["context"]["id"], {})
+            user = new["context"].get("user_id")
+            self.logbook_rows.append({
+                "when": now.isoformat(), "entity_id": entity_id, "state": new["state"],
+                "name": attrs.get("friendly_name") or entity_id,
+                **({"context_user_id": user} if user else {}), **origin,
+            })  # fmt: skip
         self.states[entity_id] = new
         self.fire_event("state_changed", {"entity_id": entity_id, "old_state": old, "new_state": new})
         return new
+
+    # ---- causes, as the logbook reports them (M5 insights) ---------------------------------
+    def user_change(self, entity_id: str, state: str, ts: Any = None, user: str = "sim-owner") -> dict:
+        """The owner in the HA UI: a call_service context with the owner's user id."""
+        context = {**_ctx(), "user_id": user}
+        domain = entity_id.split(".")[0]
+        self._origins[context["id"]] = {"context_event_type": "call_service", "context_domain": domain,
+                                        "context_service": f"turn_{state}"}  # fmt: skip
+        cur = self.states.get(entity_id) or {"attributes": {}}
+        return self.set_state(entity_id, state, cur["attributes"], ts=ts, context=context)
+
+    def physical_change(self, entity_id: str, state: str, ts: Any = None) -> dict:
+        """A wall switch or a sensor: no parent, no user, so the logbook carries no context."""
+        cur = self.states.get(entity_id) or {"attributes": {}}
+        return self.set_state(entity_id, state, cur["attributes"], ts=ts)
+
+    def run_automation(self, entity_id: str, changes: list[tuple[str, str]], ts: Any = None) -> None:
+        """An automation fires (`automation_triggered`) and its actions change states in its context."""
+        context = _ctx()
+        self._origins[context["id"]] = {
+            "context_event_type": "automation_triggered", "context_domain": "automation",
+            "context_entity_id": entity_id, "context_name": entity_id,
+        }  # fmt: skip
+        self.fire_event("automation_triggered", {"name": entity_id, "entity_id": entity_id})
+        for target, state in changes:
+            cur = self.states.get(target) or {"attributes": {}}
+            self.set_state(target, state, cur["attributes"], ts=ts, context=context)
+
+    def logbook_for(self, start: datetime, end: datetime) -> list[dict]:
+        return [r for r in self.logbook_rows if start <= _dt(r["when"]) <= end]
 
     def remove_state(self, entity_id: str) -> None:
         old = self.states.pop(entity_id, None)
@@ -147,7 +197,7 @@ class HAState:
             asyncio.run_coroutine_threadsafe(_close(), self.loop)
 
     # ---- services -------------------------------------------------------------------------
-    def call_service(self, domain: str, service: str, data: dict) -> list[dict]:
+    def call_service(self, domain: str, service: str, data: dict, context: dict | None = None) -> list[dict]:
         data = dict(data)
         ids = data.get("entity_id") or []
         ids = [ids] if isinstance(ids, str) else list(ids)
@@ -156,7 +206,11 @@ class HAState:
         def upd(eid: str, state: str | None = None, **attrs: Any) -> None:
             cur = self.states.get(eid)
             if cur:
-                changed.append(self.set_state(eid, state or cur["state"], {**cur["attributes"], **attrs}))
+                changed.append(
+                    self.set_state(
+                        eid, state or cur["state"], {**cur["attributes"], **attrs}, context=context
+                    )
+                )
 
         key = (domain, service)
         if service in ("turn_on", "turn_off", "toggle") and (
@@ -196,6 +250,13 @@ class HAState:
         elif domain == "lock" and service in ("lock", "unlock"):
             for eid in ids:
                 upd(eid, "locked" if service == "lock" else "unlocked")
+        elif key == ("input_select", "select_option"):
+            for eid in ids:
+                cur = self.states.get(eid)
+                if cur and data.get("option") in (cur["attributes"].get("options") or []):
+                    upd(eid, str(data["option"]))
+                elif cur:
+                    raise HAError(400, f"Invalid option: {data.get('option')}")
         elif key == ("automation", "trigger"):
             for eid in ids:
                 upd(eid, last_triggered=_dt().isoformat())
@@ -448,6 +509,7 @@ class HAState:
             }
             self.put_automation(cid, self.automations[cid])
         self.history.clear()
+        self.logbook_rows.clear()
 
 
 # ---- HTTP ---------------------------------------------------------------------------------
@@ -520,6 +582,11 @@ def create_app(state: HAState | None = None) -> FastAPI:
         ids = q.get("filter_entity_id")
         ids = ids.split(",") if ids else list(ha.states)
         return ha.history_for(ids, start, end)
+
+    @r.get("/logbook/{timestamp}")
+    async def logbook(timestamp: str, request: Request):
+        end = request.query_params.get("end_time")
+        return ha.logbook_for(_dt(timestamp), _dt(end) if end else _dt(timestamp) + timedelta(days=1))
 
     r.get("/history/period")(history)
     r.get("/history/period/{timestamp}")(history)
@@ -632,11 +699,31 @@ async def _handle(ha: HAState, conn: _Conn, msg: dict) -> None:
         tgt = (msg.get("target") or {}).get("entity_id")
         if tgt and "entity_id" not in data:
             data["entity_id"] = tgt
+        context = {**_ctx(), "user_id": AGENT_HOUSE_USER}  # the add-on's own Supervisor user
+        ha._origins[context["id"]] = {
+            "context_event_type": "call_service",
+            "context_domain": msg.get("domain"),
+            "context_service": msg.get("service"),
+        }
         try:
-            changed = ha.call_service(msg.get("domain", ""), msg.get("service", ""), data)
-            ok({"context": changed[0]["context"] if changed else _ctx(), "response": None})
+            ha.call_service(msg.get("domain", ""), msg.get("service", ""), data, context=context)
+            ok({"context": context, "response": None})
         except HAError:
             fail("service_not_found", f"Service {msg.get('domain')}.{msg.get('service')} not found.")
+    elif typ == "input_select/create":
+        entity_id = f"input_select.{slugify(str(msg.get('name') or 'input_select'))}"
+        options = [str(o) for o in msg.get("options") or []]
+        if entity_id in ha.states or not options:
+            fail("invalid_format", "already exists or no options")
+        else:
+            ha.entity_registry.append({
+                "entity_id": entity_id, "area_id": None, "device_id": None, "platform": "input_select",
+                "name": None, "original_name": msg.get("name"), "disabled_by": None, "hidden_by": None,
+                "entity_category": None, "unique_id": entity_id, "labels": [], "id": uuid.uuid4().hex,
+            })  # fmt: skip
+            ha.set_state(entity_id, options[0], {"options": options, "friendly_name": msg.get("name")})
+            ha.fire_event("entity_registry_updated", {"action": "create", "entity_id": entity_id})
+            ok({"id": entity_id.split(".")[1], "name": msg.get("name"), "options": options})
     elif typ == "validate_config":
         singular = [k for k in ("trigger", "condition", "action") if k in msg]
         if singular:  # real HA wants the plural keys (docs/RESEARCH.md §3)

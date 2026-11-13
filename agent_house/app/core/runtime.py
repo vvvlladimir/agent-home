@@ -50,7 +50,10 @@ Rules:
 - Do only what the wake reason or a stated house rule asks for. If nothing needs doing, do nothing.
 - "Check your room" means: read the states below (get_state for fresh values); if all is fine,
   answer in one sentence. Use schedule_wake only while something is still going on (a door
-  open, a light left on in an empty room); use ask_agent only for something in another room.
+  open, a light left on in an empty room). Something another agent owns: ask_agent (it goes
+  through the orchestrator); never act on it yourself.
+- When neighbours should know something about your room (someone went to bed, the room is empty
+  with the TV on), post it once with post_fact. Their facts are listed under "Neighbours".
 - People coming and going is normal: an occupancy or motion change alone is not worth a report.
 - Describe only states you read; never claim a state you did not see.
 - If the situation is dangerous, unclear, or needs something outside your room or permissions,
@@ -93,6 +96,7 @@ class AgentRuntime:
         self.actuator = None  # set by the application factory (both need each other)
         self.gate = None
         self.orchestrator = None
+        self.council = None  # M5: board, house mode, ownership, tasks
         self._busy: set[str] = set()
         self._waiting: dict[str, list[dict]] = {}
         self._tasks: set[asyncio.Task] = set()
@@ -148,7 +152,7 @@ class AgentRuntime:
         now = now or datetime.now().astimezone()
         while True:
             table = (
-                "\n".join(f"- {e} ({self._name(e)}) [{self.tier(agent, e)}]" for e in included) or "(none)"
+                "\n".join(f"- {e} ({self._name(e)}) [{self._label(agent, e)}]" for e in included) or "(none)"
             )
             if dropped:
                 table += f"\n({len(dropped)} more in your room: find them with list_entities + a search word)"
@@ -168,6 +172,8 @@ class AgentRuntime:
             lines += [f"{entity}: {text}" for entity, text in states.items()]
             if memory:
                 lines += ["", "Your notes:"] + [f"- {key}: {value}" for key, value in memory.items()]
+            if self.council is not None:
+                lines += ["", *self.council.prompt_lines(agent.id)]
             lines += ["", f"Wake reason: {reason}"]
             user = "\n".join(lines)
             tokens = estimate_tokens(system) + estimate_tokens(user) + tools_tokens
@@ -186,6 +192,16 @@ class AgentRuntime:
             "states": {e: str(self.ha.states[e].get("state")) for e in included},
             "tiers": {e: self.tier(agent, e) for e in included},
         }
+
+    def owner(self, entity_id: str) -> str | None:
+        return self.council.ownership.owner_of(entity_id) if self.council is not None else None
+
+    def _label(self, agent: AgentConfig, entity_id: str) -> str:
+        """The tier, or whose it is when another agent owns the entity (read-only for this one)."""
+        owner = self.owner(entity_id)
+        if self.council is not None and owner != agent.id:
+            return f"read-only, owned by {owner}"
+        return self.tier(agent, entity_id)
 
     def _name(self, entity_id: str) -> str:
         attrs = self.ha.states.get(entity_id, {}).get("attributes") or {}
@@ -302,9 +318,7 @@ class AgentRuntime:
             "manual": Priority.INTERACTIVE,
             "chat": Priority.INTERACTIVE,
             "replay": Priority.BACKGROUND,
-        }.get(
-            run["wake_source"], Priority.INTERACTIVE if run["priority"] == "alarm" else Priority.AGENT
-        )
+        }.get(run["wake_source"], Priority.INTERACTIVE if run["priority"] == "alarm" else Priority.AGENT)
         spent, bad_turns, seen = 0.0, 0, {}
         try:
             for _ in range(limits.max_steps):
@@ -460,6 +474,8 @@ class AgentRuntime:
             "UPDATE runs SET status=?, ended=?, latency_ms=?, summary=?, error=? WHERE id=?",
             (status, run["ended"], latency, (summary or "")[:300] or None, error, run["id"]),
         )
+        if run.get("wake_source") == "task" and not run.get("replay_of") and self.council is not None:
+            self.council.task_done(run["agent_id"], run["id"], status, summary or error)
         text = f"{run['agent_id']}: run {status} after {run.get('steps', 0)} steps, {latency} ms"
         detail = summary or error
         self.feed.add(

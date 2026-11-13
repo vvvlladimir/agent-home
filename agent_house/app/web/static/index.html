@@ -622,6 +622,32 @@
       </div>
     </article>
 
+    <article class="card" style="margin-bottom: 1rem">
+      <h2 x-text="t('Found in the history')"></h2>
+      <p class="muted small" x-text="t('Counted without a model: things you do by hand after a sensor or at the same time of day, automations you undo, automations that fight. The daily review drafts the new ones.')"></p>
+      <div class="toolbar">
+        <button class="btn" @click="scanHistory()" :disabled="findingBusy" x-text="findingBusy ? t('Working…') : t('Scan history')"></button>
+        <span class="muted small" x-text="findingMsg"></span>
+      </div>
+      <div class="table-wrap" x-show="findings.length">
+        <table>
+          <thead><tr><th x-text="t('Kind')"></th><th x-text="t('Title')"></th><th x-text="t('Room')"></th>
+            <th x-text="t('Status')"></th><th></th></tr></thead>
+          <tbody>
+            <template x-for="f in findings" :key="f.id">
+              <tr>
+                <td x-text="f.kind"></td><td x-text="f.title"></td><td x-text="f.room || '–'"></td><td x-text="f.status"></td>
+                <td>
+                  <button class="btn" x-show="['new', 'failed'].includes(f.status)" @click="findingAction(f, 'draft')" x-text="t('Draft')"></button>
+                  <button class="btn btn-ghost" x-show="f.status !== 'drafting'" @click="findingAction(f, 'dismiss')" x-text="t('Dismiss')"></button>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
     <div class="toolbar">
       <label><span x-text="t('Status')"></span>
         <select x-model="proposalStatus" @change="loadProposals()">
@@ -870,6 +896,12 @@
             <input type="number" min="1" max="100" step="1" x-model="runtimeForm.llm_max_queue"></label>
           <label><span x-text="t('Presence penalty')"></span>
             <input type="number" min="0" max="2" step="0.1" x-model="runtimeForm.llm_presence_penalty" :placeholder="t('profile default')"></label>
+          <label><span x-text="t('Daily review at (HH:MM, empty = off)')"></span>
+            <input type="text" class="mono" x-model="runtimeForm.daily_review_at" placeholder="04:30"></label>
+          <label><span x-text="t('Habit finder: days of history')"></span>
+            <input type="number" min="3" max="30" step="1" x-model="runtimeForm.habit_days"></label>
+          <label><span x-text="t('Habit finder: days a habit must show up on')"></span>
+            <input type="number" min="3" max="50" step="1" x-model="runtimeForm.habit_min_repeats"></label>
           <label><span x-text="t('Kill switch helper (input_boolean, optional)')"></span>
             <input type="text" class="mono" x-model="runtimeForm.kill_switch_entity" placeholder="input_boolean.agent_house_kill"></label>
           <div class="toolbar">

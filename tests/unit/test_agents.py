@@ -187,7 +187,9 @@ def test_watched_and_used_entities_lead_unavailable_and_indicators_trail():
     ha = StubHA()
     ha.add("light.room_box_rgb_light", "on", area="room")
     ha.states["light.room_lamp"]["state"] = "unavailable"
-    agent = parse_agent({**AGENT, "max_entities": 25, "wake_rules": {"events": [{"entities": ["lock.room_door"]}]}})
+    agent = parse_agent(
+        {**AGENT, "max_entities": 25, "wake_rules": {"events": [{"entities": ["lock.room_door"]}]}}
+    )
     shown, _ = resolve_scope(agent, ha, tier_of, usage={"switch.room_heater": 3, "climate.room": 1})
     assert shown[:3] == ["lock.room_door", "switch.room_heater", "climate.room"]
     assert set(shown[-2:]) == {"light.room_box_rgb_light", "light.room_lamp"}
@@ -196,7 +198,9 @@ def test_watched_and_used_entities_lead_unavailable_and_indicators_trail():
 def test_the_owners_livingroom_prompt_shows_working_devices_and_room_sensors():
     """Regression: run r_1a1d4212c23abec23. 20 prompt slots went to unavailable devices and sensor
     boxes' RGB LEDs; the agent could not see its room and looped on list_entities."""
-    case = yaml.safe_load((Path(__file__).parents[1] / "regressions" / "livingroom_owner_run.yaml").read_text())
+    case = yaml.safe_load(
+        (Path(__file__).parents[1] / "regressions" / "livingroom_owner_run.yaml").read_text()
+    )
     ha = StubHA()
     for row in case["room"]["entities"]:
         ha.add(row["entity_id"], row["state"], area="living")

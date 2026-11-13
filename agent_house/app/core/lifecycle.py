@@ -12,6 +12,10 @@ id. The four checks run on every create, edit, approve and rollback:
                  services, no templated targets, no area/device/label targets, no webhook triggers;
 4. ha_validate — Home Assistant's own `validate_config`.
 
+Ownership (M5 council): a draft a room agent asked for may act only on entities that agent owns
+(`owner_of`); drafts of the owner and the orchestrator may act on any entity. Other automations of
+ours that act on the same entities are named in the policy notes, so the owner sees a possible fight.
+
 Approving a proposal counts as the owner's approval for its T2 entities (a human reviewed the
 whole automation); T3 can never be deployed. The kill switch blocks approve, rollback and
 enable; removing or disabling one of our automations stays possible (it only makes things safer).
@@ -102,13 +106,18 @@ def to_yaml(config: dict) -> str:
 
 
 class Lifecycle:
-    def __init__(self, store, feed, ha, safety, protected=lambda: set()) -> None:
+    def __init__(self, store, feed, ha, safety, protected=lambda: set(), owner_of=None) -> None:
         self.store, self.feed, self.ha, self.safety = store, feed, ha, safety
         self.protected = protected
+        self.owner_of = owner_of  # entity_id -> owner agent id (council); None = not wired
 
     # --- checks -----------------------------------------------------------------------------
-    def parse(self, text: str) -> tuple[dict | None, list[dict]]:
-        """(normalized config or None, [yaml, schema, policy] checks)."""
+    def parse(
+        self, text: str, origin: str | None = None, ha_id: str | None = None
+    ) -> tuple[dict | None, list[dict]]:
+        """(normalized config or None, [yaml, schema, policy] checks). `origin`: the room agent that
+        asked for it (ownership); `ha_id`: the automation it would become (excluded from the
+        "also acted on by" note)."""
         try:
             loaded = yaml.safe_load(text)
         except yaml.YAMLError as err:
@@ -123,7 +132,9 @@ class Lifecycle:
         config = normalize(loaded)
         problems = self._schema(config)
         checks.append({"name": "schema", "ok": not problems, "detail": "; ".join(problems) or None})
-        problems, notes = self._policy(config) if not problems else (["schema errors first"], [])
+        problems, notes = (
+            self._policy(config, origin, ha_id) if not problems else (["schema errors first"], [])
+        )
         checks.append(
             {"name": "policy", "ok": not problems, "detail": "; ".join(problems or notes)[:600] or None}
         )
@@ -149,7 +160,7 @@ class Lifecycle:
             problems.append(f"mode must be one of {', '.join(sorted(MODES))}")
         return problems
 
-    def _policy(self, config: dict) -> tuple[list[str], list[str]]:
+    def _policy(self, config: dict, origin: str | None = None, ha_id: str | None = None):
         """(problems that block the proposal, notes for the owner)."""
         problems: list[str] = []
         tiers: dict[str, str] = {}
@@ -157,7 +168,17 @@ class Lifecycle:
             if trigger.get("trigger") in BLOCKED_TRIGGERS:
                 problems.append(f"{trigger.get('trigger')} triggers are not allowed")
         self._steps(config.get("actions") or [], problems, tiers, "actions")
+        if origin and origin != "orchestrator":
+            for entity_id in sorted(tiers):
+                owner = self.owner_of(entity_id) if self.owner_of else None
+                if owner != origin:
+                    problems.append(f"{entity_id} is owned by {owner or 'nobody'}, not by {origin}")
         notes = []
+        others = self.acting_on(set(tiers), exclude=ha_id)
+        if others:
+            notes.append(
+                "also acted on by " + ", ".join(f"{e} ({', '.join(ids)})" for e, ids in others.items())
+            )
         t2 = sorted(e for e, t in tiers.items() if t == "T2")
         if t2:
             notes.append(f"T2, approved with this automation: {', '.join(t2)}")
@@ -264,8 +285,26 @@ class Lifecycle:
         errors = [f"{k}: {v.get('error')}" for k, v in (result or {}).items() if not (v or {}).get("valid")]
         return {"name": "ha_validate", "ok": not errors, "detail": "; ".join(errors)[:300] or None}
 
-    async def check(self, text: str) -> tuple[dict | None, list[dict]]:
-        config, checks = self.parse(text)
+    def acting_on(self, entities: set[str], exclude: str | None = None) -> dict[str, list[str]]:
+        """entity_id → our deployed automations (current version) whose actions name it."""
+        out: dict[str, list[str]] = {}
+        if not entities:
+            return out
+        rows = self.store.query(
+            "SELECT d.ha_id, v.yaml FROM deployed d JOIN automation_versions v "
+            "ON v.ha_id=d.ha_id AND v.version=d.current_version WHERE d.removed=0"
+        )
+        for row in rows:
+            if row["ha_id"] == exclude:
+                continue
+            for entity_id in action_entities(row["yaml"]) & entities:
+                out.setdefault(entity_id, []).append(row["ha_id"])
+        return out
+
+    async def check(
+        self, text: str, origin: str | None = None, ha_id: str | None = None
+    ) -> tuple[dict | None, list[dict]]:
+        config, checks = self.parse(text, origin, ha_id)
         if config is not None and all(c["ok"] for c in checks):
             checks.append(await self._ha_check(config))
         else:
@@ -343,7 +382,7 @@ class Lifecycle:
     ) -> dict:
         """A new draft. `ha_id` = one of our deployed automations to change; else a new id.
         `replaces_original` = the id of an imported original this draft is meant to replace."""
-        config, checks = await self.check(text)
+        config, checks = await self.check(text, origin_agent, ha_id)
         title = (title or (config or {}).get("alias") or "Untitled automation").strip()[:120]
         if ha_id is not None:
             guard_ours(ha_id)
@@ -391,8 +430,8 @@ class Lifecycle:
         return proposal
 
     async def edit(self, proposal_id: str, text: str) -> dict:
-        self._open(proposal_id)
-        config, checks = await self.check(text)
+        proposal = self._open(proposal_id)
+        config, checks = await self.check(text, proposal["origin_agent"], proposal["ha_id"])
         self.store.execute(
             "UPDATE proposals SET yaml=?, checks=?, status=?, evidence=NULL, updated=? WHERE id=?",
             (
@@ -404,6 +443,12 @@ class Lifecycle:
             ),
         )
         return self.get(proposal_id)
+
+    def annotate(self, proposal_id: str, evidence_text: str) -> None:
+        """Append deterministic evidence (habit counts, undo rates) to the model's rationale."""
+        proposal = self.get(proposal_id)
+        text = f"{proposal['rationale'] or ''}\n\nEvidence: {evidence_text}".strip()[:2000]
+        self.store.execute("UPDATE proposals SET rationale=? WHERE id=?", (text, proposal_id))
 
     def reject(self, proposal_id: str, note: str | None = None) -> dict:
         self._open(proposal_id)
@@ -475,7 +520,7 @@ class Lifecycle:
             raise LifecycleError("conflict", "the proposal is already being approved")
         try:
             # Policy, entities or HA may have changed since the draft: check again, as of now.
-            config, checks = await self.check(proposal["yaml"])
+            config, checks = await self.check(proposal["yaml"], proposal["origin_agent"], proposal["ha_id"])
             if config is None or not all(c["ok"] for c in checks):
                 self.store.execute(
                     "UPDATE proposals SET status='blocked', checks=? WHERE id=?",
@@ -565,7 +610,7 @@ class Lifecycle:
             raise LifecycleError("not_found", f"{ha_id} has no version {version}")
         if int(version) == current["current_version"]:
             raise LifecycleError("conflict", f"v{version} is already deployed")
-        config, checks = await self.check(target["yaml"])
+        config, checks = await self.check(target["yaml"], ha_id=ha_id)
         if config is None or not all(c["ok"] for c in checks):
             failed = "; ".join(f"{c['name']}: {c['detail']}" for c in checks if not c["ok"])
             raise LifecycleError("blocked", f"v{version} no longer passes the checks: {failed}"[:500])
@@ -605,6 +650,36 @@ class Lifecycle:
         self.store.execute("UPDATE deployed SET enabled=? WHERE ha_id=?", (int(enabled), ha_id))
         self.feed.add("deploy", f"{'Enabled' if enabled else 'Disabled'} {ha_id}", level="info")
         return self.get_deployed(ha_id)
+
+
+def action_entities(text: str) -> set[str]:
+    """Entity ids named as targets in the actions of an automation YAML (best effort)."""
+    try:
+        config = normalize(yaml.safe_load(text) or {})
+    except (yaml.YAMLError, AttributeError, TypeError):
+        return set()
+    found: set[str] = set()
+
+    def walk(steps) -> None:
+        for step in steps if isinstance(steps, list) else [steps]:
+            if not isinstance(step, dict):
+                continue
+            step = _action_key(step)
+            if "action" in step:
+                for source in ((step.get("target") or {}), (step.get("data") or {}), step):
+                    if isinstance(source, dict):
+                        found.update(e for e in _as_list(source.get("entity_id")) if isinstance(e, str))
+            for key in ("then", "else", "sequence", "default"):
+                if key in step:
+                    walk(step[key])
+            for option in _as_list(step.get("choose")):
+                if isinstance(option, dict):
+                    walk(option.get("sequence", []))
+            if isinstance(step.get("repeat"), dict):
+                walk(step["repeat"].get("sequence", []))
+
+    walk(config.get("actions") or [])
+    return found
 
 
 def _as_list(value) -> list:

@@ -11,7 +11,7 @@
       "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
       "default": {
         "light": "T0", "media_player": "T0", "fan": "T0",
-        "scene": "T2", "input_boolean": "T2", "humidifier": "T1", "vacuum": "T1",
+        "scene": "T2", "input_boolean": "T2", "input_select": "T2", "humidifier": "T1", "vacuum": "T1",
         "climate": "T2", "cover": "T2", "switch": "T2", "water_heater": "T2", "input_number": "T2",
         "lock": "T3", "alarm_control_panel": "T3", "valve": "T3", "siren": "T3", "camera": "T3"
       }
@@ -20,7 +20,7 @@
       "type": "object",
       "description": "entity_id or glob -> tier. An exact id beats globs; among globs the strictest wins. If the domain, the exact entry or any matching glob says T3, the entity is T3 and only t3_whitelist can lift it (to T2).",
       "additionalProperties": {"enum": ["T0", "T1", "T2", "T3"]},
-      "default": {"cover.*garage*": "T3"}
+      "default": {"cover.*garage*": "T3", "input_select.agent_house_mode": "T1"}
     },
     "t3_whitelist": {
       "type": "array",
@@ -38,6 +38,7 @@
         "fan": ["turn_on", "turn_off", "set_percentage"],
         "scene": ["turn_on"],
         "input_boolean": ["turn_on", "turn_off"],
+        "input_select": ["select_option"],
         "humidifier": ["turn_on", "turn_off", "set_humidity"],
         "vacuum": ["start", "return_to_base"],
         "climate": ["set_temperature", "set_hvac_mode", "turn_on", "turn_off"],

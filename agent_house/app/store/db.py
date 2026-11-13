@@ -168,6 +168,35 @@ MIGRATIONS: list[str] = [
         updated REAL NOT NULL
     );
     """,
+    # 7 — M5 council: the shared board (short facts with an expiry, tasks, reports, escalations)
+    # and findings (habits, undone automations, conflicts) the daily review turns into proposals
+    """
+    CREATE TABLE board (
+        id INTEGER PRIMARY KEY,
+        ts REAL NOT NULL,
+        agent_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        text TEXT NOT NULL,
+        expires REAL NOT NULL,
+        target TEXT,
+        run_id TEXT
+    );
+    CREATE INDEX board_expires ON board (expires);
+    CREATE TABLE findings (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        request TEXT NOT NULL,
+        data TEXT NOT NULL,
+        room TEXT,
+        ha_id TEXT,
+        proposal_id TEXT,
+        run_id TEXT,
+        created REAL NOT NULL,
+        updated REAL NOT NULL
+    );
+    """,
 ]
 
 

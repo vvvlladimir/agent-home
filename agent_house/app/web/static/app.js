@@ -96,6 +96,10 @@ function app() {
     proposalBusy: false,
     draftForm: { request: '', room: '', yaml: '', mode: 'request' },
     evidenceDays: 7,
+    // history findings: habits, undone automations, conflicts (M5)
+    findings: [],
+    findingMsg: '',
+    findingBusy: false,
     deployedList: [],
     deployedSel: null,
     deployedMsg: '',
@@ -162,7 +166,7 @@ function app() {
       if (this.page === 'runs') { this.loadRuns(); this.loadActions(); this.loadAgents(); }
       if (this.page === 'settings') { this.loadSettings(); this.loadLogs(); }
       if (this.page === 'models') this.loadModels();
-      if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); }
+      if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); this.loadFindings(); }
       if (this.page === 'automations') this.loadDeployed();
       if (this.page === 'migration') this.loadOriginals();
       if (this.page === 'chat') this.loadAgents();
@@ -199,8 +203,12 @@ function app() {
     async saveRuntime() {
       // '' = "use the default" (the field becomes null); everything else is sent as a number
       const body = {};
-      const TEXT = ['kill_switch_entity'];
-      for (const [k, v] of Object.entries(this.runtimeForm)) body[k] = v === '' ? null : (TEXT.includes(k) ? v.trim() : Number(v));
+      const TEXT = ['kill_switch_entity', 'orchestrator_mode', 'night_window'];
+      for (const [k, v] of Object.entries(this.runtimeForm)) {
+        if (k === 'daily_review_at') body[k] = v.trim();  // '' = no daily review
+        else if (k === 'auto_house_mode') body[k] = v === true || v === 'true';
+        else body[k] = v === '' ? null : (TEXT.includes(k) ? v.trim() : Number(v));
+      }
       this.runtimeMsg = ''; this.runtimeError = '';
       try {
         this.settings = await this.put('api/settings', body);
@@ -458,6 +466,28 @@ function app() {
     async loadProposals() {
       const query = this.proposalStatus ? '?status=' + encodeURIComponent(this.proposalStatus) : '';
       try { this.proposals = await this.api('api/proposals' + query); } catch (e) { this.proposalError = e.message; }
+    },
+    async loadFindings() {
+      try { this.findings = (await this.api('api/findings')).filter((f) => f.status !== 'dismissed'); }
+      catch (e) { this.findingMsg = e.message; }
+    },
+    async scanHistory() {
+      this.findingBusy = true; this.findingMsg = '';
+      try {
+        const r = await this.post('api/council/scan');
+        this.findingMsg = r.changes + ' ' + this.t('changes scanned') + ', ' + r.manual + ' ' + this.t('by hand') + ', '
+          + r.findings.length + ' ' + this.t('findings');
+        await this.loadFindings();
+      } catch (e) { this.findingMsg = e.message; }
+      this.findingBusy = false;
+    },
+    async findingAction(f, action) {
+      this.findingMsg = '';
+      try {
+        await this.post('api/findings/' + encodeURIComponent(f.id) + '/' + action);
+        if (action === 'draft') this.findingMsg = this.t('Drafting; the proposal appears below.');
+        await this.loadFindings();
+      } catch (e) { this.findingMsg = e.message; }
     },
     openProposal(p) {
       this.proposalSel = p;

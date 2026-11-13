@@ -67,9 +67,15 @@ class Actuator:
         scope_of: Callable[[object], set[str]],
         protected: Callable[[], set[str]] = lambda: set(),
         clock: Callable[[], float] = time.time,
+        owner_of: Callable[[str], str | None] = lambda entity_id: None,
+        pseudo: Callable[[str], object] = lambda agent_id: None,
     ) -> None:
+        """`owner_of(entity_id)`: the agent that owns the entity (council); the default owns
+        nothing, so an unwired actuator denies everything. `pseudo(agent_id)`: configs of agents
+        that are not room agents (the orchestrator, which may switch the house mode)."""
         self.store, self.feed, self.ha, self.safety, self.agents = store, feed, ha, safety, agents
         self.scope_of, self.protected, self.clock = scope_of, protected, clock
+        self.owner_of, self.pseudo = owner_of, pseudo
         self.rates = RateWindow(time.monotonic)
         # An approval that was being sent when the add-on stopped: nobody knows if HA got it.
         self.store.execute(
@@ -79,9 +85,10 @@ class Actuator:
 
     # --- the decision ---------------------------------------------------------------------
     def _decide(self, agent_id, domain, service, entity_id, data, *, approved=False, force_shadow=False):
-        agent = self.agents.get(agent_id) if isinstance(agent_id, str) else None
+        agent = (self.agents.get(agent_id) or self.pseudo(agent_id)) if isinstance(agent_id, str) else None
         try:
             scope = set(self.scope_of(agent)) if agent is not None else set()
+            owner = self.owner_of(entity_id) if isinstance(entity_id, str) else None
             recent = self.rates.counts(agent_id, entity_id)
             protected = set(self.protected())
             policy = self.safety.policy
@@ -103,6 +110,7 @@ class Actuator:
             approved=approved,
             force_shadow=force_shadow,
             protected=protected,
+            owner=owner,
         )
 
     async def request(

@@ -18,6 +18,7 @@ tags:
   - {name: automations}
   - {name: migration}
   - {name: chat}
+  - {name: council}
   - {name: models}
   - {name: settings}
 
@@ -417,6 +418,90 @@ paths:
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Original"}}}}
 
+  /api/council:
+    get:
+      tags: [council]
+      operationId: getCouncil
+      x-milestone: M5
+      summary: House mode, ownership summary, the shared board, the daily review's state
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Council"}}}}
+  /api/council/owner/{entity_id}:
+    parameters: [{name: entity_id, in: path, required: true, schema: {type: string}}]
+    get:
+      tags: [council]
+      operationId: getOwner
+      x-milestone: M5
+      summary: The one agent that owns an entity (`orchestrator` for entities without a room agent)
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entity_id, owner]
+                properties:
+                  entity_id: {type: string}
+                  owner: {type: string}
+                  area: {type: [string, "null"]}
+        "404": {$ref: "#/components/responses/Error"}
+  /api/council/mode-helper:
+    post:
+      tags: [council]
+      operationId: createModeHelper
+      x-milestone: M5
+      summary: Create input_select.agent_house_mode in HA (owner click; refuses when it exists)
+      responses:
+        "201": {description: created, content: {application/json: {schema: {type: object, required: [entity_id], properties: {entity_id: {type: string}}}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/council/review:
+    post:
+      tags: [council]
+      operationId: runReview
+      x-milestone: M5
+      summary: Run the daily house review now (in the background; the result goes to the inbox)
+      responses:
+        "202": {description: started, content: {application/json: {schema: {type: object, properties: {status: {type: string}}}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/council/scan:
+    post:
+      tags: [council]
+      operationId: scanHistory
+      x-milestone: M5
+      summary: Deterministic logbook scan for habits, undone automations and conflicts (no model)
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/ScanResult"}}}}
+        "502": {$ref: "#/components/responses/Error"}
+  /api/findings:
+    get:
+      tags: [council]
+      operationId: listFindings
+      x-milestone: M5
+      parameters: [{name: status, in: query, schema: {type: string, enum: [new, drafting, drafted, failed, dismissed]}}]
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Finding"}}}}}
+  /api/findings/{finding_id}/draft:
+    parameters: [{name: finding_id, in: path, required: true, schema: {type: string}}]
+    post:
+      tags: [council]
+      operationId: draftFinding
+      x-milestone: M5
+      summary: Ask the orchestrator for one proposal from this finding
+      responses:
+        "202": {description: drafting, content: {application/json: {schema: {type: object, properties: {status: {type: string}}}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/findings/{finding_id}/dismiss:
+    parameters: [{name: finding_id, in: path, required: true, schema: {type: string}}]
+    post:
+      tags: [council]
+      operationId: dismissFinding
+      x-milestone: M5
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Finding"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+
   /api/chat:
     post:
       tags: [chat]
@@ -710,7 +795,7 @@ components:
         ts: {type: number}
         kind:
           type: string
-          description: "state | wake | gate_drop | run | action | approval | report | proposal | deploy | system"
+          description: "state | wake | gate_drop | run | action | approval | report | proposal | deploy | system | board | council"
         summary: {type: string}
         agent_id: {type: [string, "null"]}
         entity_id: {type: [string, "null"]}
@@ -741,7 +826,7 @@ components:
         id: {type: string}
         agent_id: {type: string, description: "agent id or `orchestrator`"}
         status: {$ref: "#/components/schemas/RunStatus"}
-        wake_source: {type: string, enum: [event, cron, poke, chat, manual, replay, schedule]}
+        wake_source: {type: string, enum: [event, cron, poke, chat, manual, replay, schedule, task, review]}
         wake_reason: {type: [string, "null"]}
         started: {type: number}
         ended: {type: [number, "null"]}
@@ -869,6 +954,76 @@ components:
               yaml: {type: string}
               proposal_id: {type: [string, "null"]}
               note: {type: [string, "null"]}
+    BoardEntry:
+      type: object
+      required: [id, ts, agent_id, kind, text, expires]
+      properties:
+        id: {type: integer}
+        ts: {type: number}
+        agent_id: {type: string}
+        kind: {type: string, enum: [fact, task, report, escalation]}
+        text: {type: string, maxLength: 160}
+        expires: {type: number}
+        target: {type: [string, "null"]}
+        run_id: {type: [string, "null"]}
+    Council:
+      type: object
+      required: [mode, mode_entity, mode_entity_present, modes, auto_house_mode, orchestrator_mode, ownership, board, review]
+      properties:
+        mode: {type: [string, "null"], enum: [home, away, night, guests, work, null]}
+        mode_entity: {type: string, const: input_select.agent_house_mode}
+        mode_entity_present: {type: boolean}
+        modes: {type: array, items: {type: string}}
+        auto_house_mode: {type: boolean}
+        orchestrator_mode: {$ref: "#/components/schemas/Mode"}
+        night_window: {type: string}
+        ownership:
+          type: object
+          properties:
+            counts: {type: object, additionalProperties: {type: integer}, description: "owner → number of entities"}
+            shared_rooms: {type: object, additionalProperties: {type: array, items: {type: string}}}
+        board: {type: array, items: {$ref: "#/components/schemas/BoardEntry"}}
+        review:
+          type: object
+          properties:
+            at: {type: [string, "null"]}
+            running: {type: boolean}
+            last: {type: [object, "null"]}
+        last_scan: {type: [object, "null"]}
+    Finding:
+      type: object
+      required: [id, kind, status, title, request, data, created, updated]
+      properties:
+        id: {type: string, description: "stable key, e.g. habit:<entity>:<state>:<trigger>:<state>"}
+        kind: {type: string, enum: [habit, undo, conflict]}
+        status: {type: string, enum: [new, drafting, drafted, failed, dismissed]}
+        title: {type: string}
+        request: {type: string, description: what the orchestrator is asked to draft}
+        data: {type: object, description: the counts behind it (deterministic evidence)}
+        room: {type: [string, "null"]}
+        ha_id: {type: [string, "null"]}
+        proposal_id: {type: [string, "null"]}
+        run_id: {type: [string, "null"]}
+        created: {type: number}
+        updated: {type: number}
+    ScanResult:
+      type: object
+      required: [changes, manual, findings, feedback, scanned]
+      properties:
+        changes: {type: integer}
+        manual: {type: integer}
+        findings: {type: array, items: {$ref: "#/components/schemas/Finding"}}
+        feedback:
+          type: array
+          items:
+            type: object
+            properties:
+              ha_id: {type: string}
+              acted: {type: integer}
+              undone: {type: integer}
+              rate: {type: number}
+              flagged: {type: boolean}
+        scanned: {type: number}
     Original:
       type: object
       required: [id, source, title, enabled]

@@ -57,10 +57,10 @@ def test_context_is_trimmed_to_the_token_budget_sensors_first(tmp_path):
     roomy = stack.rt.build_context(agent, "x")
     assert roomy["entities_included"] == 25 and roomy["entities_dropped"] == []
     tight = agent.model_copy(
-        update={"limits": agent.limits.model_copy(update={"context_budget_tokens": 1800})}
+        update={"limits": agent.limits.model_copy(update={"context_budget_tokens": 1900})}
     )
     trimmed = stack.rt.build_context(tight, "x")
-    assert trimmed["tokens_estimate"] <= 1800 < roomy["tokens_estimate"]
+    assert trimmed["tokens_estimate"] <= 1900 < roomy["tokens_estimate"]
     assert trimmed["entities_dropped"] and all(e.startswith("sensor.") for e in trimmed["entities_dropped"])
     assert CEILING in trimmed["system"]
 
@@ -289,17 +289,20 @@ async def test_schedule_wake_and_ask_agent(tmp_path):
     assert tools[0]["ok"] and not tools[1]["ok"]
     assert stack.store.query("SELECT reason FROM scheduled_wakes") == [{"reason": "check the heater"}]
     assert (
-        tools[2]["status"] == "queued"
+        tools[2]["status"] == "forwarded"
+        and tools[2]["to"] == "hall"
         and "one question" in tools[3]["error"]
-        and "unknown agent" in tools[4]["error"]
+        and "one question" in tools[4]["error"]
     )
-    poked = stack.rt.list_runs(agent="hall")[0]
-    assert (
-        poked["wake_source"] == "poke" and 'Agent "room" asks: Is anyone in the hall?' in poked["wake_reason"]
-    )
-    answer = steps(stack.rt.get_run(poked["id"]), "tool")[0]["result"]
-    assert not answer["ok"], "a poked agent cannot poke back: no chains"
+    # M5: the question goes through the orchestrator, which gives the hall agent a task
+    asked = stack.rt.list_runs(agent="hall")[0]
+    assert asked["wake_source"] == "task"
+    assert "Task from the orchestrator (asked by room): Is anyone in the hall?" in asked["wake_reason"]
+    answer = steps(stack.rt.get_run(asked["id"]), "tool")[0]["result"]
+    assert not answer["ok"], "a task cannot ask further: no chains"
     assert len(stack.rt.list_runs()) == 2
+    board = {(r["agent_id"], r["kind"]) for r in stack.council.board.list()}
+    assert {("room", "escalation"), ("orchestrator", "task"), ("hall", "report")} <= board
 
 
 # --- queueing ---------------------------------------------------------------------------------

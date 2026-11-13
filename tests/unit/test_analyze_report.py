@@ -38,7 +38,12 @@ def hardware(report: dict, name: str, **changes) -> dict:
     measured = copy.deepcopy(report)
     measured["source"] = "jetson"
     measured["profile"]["name"] = name
-    measured["resources"] = {"ram_peak_mb": 5000, "ram_total_mb": 7620, "ram_free_min_mb": 2600, "swap_peak_mb": 0}
+    measured["resources"] = {
+        "ram_peak_mb": 5000,
+        "ram_total_mb": 7620,
+        "ram_free_min_mb": 2600,
+        "swap_peak_mb": 0,
+    }
     measured["speed"]["e2e_wake_ms_warm"] = 3000.0
     for key, value in changes.items():
         section, field = key.split("__")
@@ -61,7 +66,11 @@ def test_simulator_reports_never_recommend(tmp_path, sim_report):
 def test_recommends_the_most_accurate_qualifying_profile(tmp_path, sim_report):
     analyze = load(ROOT / "tools" / "analyze_report.py", "analyze_report").analyze
     write(tmp_path, "a.json", hardware(sim_report, "qwen35-4b-balanced", speed__decode_tps=15.0))
-    write(tmp_path, "b.json", hardware(sim_report, "qwen35-2b-fast", speed__decode_tps=30.0, toolcall__passed=10))
+    write(
+        tmp_path,
+        "b.json",
+        hardware(sim_report, "qwen35-2b-fast", speed__decode_tps=30.0, toolcall__passed=10),
+    )
     write(tmp_path, "c.json", hardware(sim_report, "qwen35-9b-experimental", resources__ram_free_min_mb=300))
     write(tmp_path, "broken.json", {"kind": "nope"})
     block = analyze(tmp_path)

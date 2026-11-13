@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from app.core.actuator import Actuator
 from app.core.agents import AgentStore, parse_agent
+from app.core.council import Council
 from app.core.gate import EventGate
 from app.core.llm import LLMResult
 from app.core.runtime import AgentRuntime
@@ -135,12 +136,17 @@ def make_stack(
     runtime = AgentRuntime(
         agents=agent_store, ha=ha, llm=llm, store=store, feed=feed, safety=safety, runtime_settings=settings
     )
-    actuator = Actuator(store, feed, ha, safety, agent_store, runtime.scope)
+    council = Council(store, feed, ha, agent_store, safety, settings)
+    actuator = Actuator(
+        store, feed, ha, safety, agent_store, runtime.scope, owner_of=council.ownership.owner_of,
+        pseudo=council.agent_config,
+    )  # fmt: skip
     gate = EventGate(agent_store, feed, store, runtime.scope, runtime.wake)
-    runtime.actuator, runtime.gate = actuator, gate
+    runtime.actuator, runtime.gate, runtime.council = actuator, gate, council
+    council.rt, council.actuator, council.gate = runtime, actuator, gate
     return SimpleNamespace(
         ha=ha, llm=llm, store=store, feed=feed, safety=safety, agents=agent_store, rt=runtime,
-        actuator=actuator, gate=gate,
+        actuator=actuator, gate=gate, council=council,
     )  # fmt: skip
 
 
@@ -178,6 +184,7 @@ class AutomationHA(StubHA):
         self.automations: dict[str, dict] = {"1700000000001": {"id": "1700000000001", "alias": "Owner's own"}}
         self.writes: list[tuple] = []
         self.history_rows: dict[str, list[dict]] = {}
+        self.logbook_rows: list[dict] = []
 
     async def validate_automation(self, config: dict) -> dict:
         from sim.fake_ha import HAState
@@ -220,3 +227,9 @@ class AutomationHA(StubHA):
 
     async def history(self, entity_id, start, end) -> list[dict]:
         return self.history_rows.get(entity_id, [])
+
+    async def logbook(self, start: str, end: str) -> list[dict]:
+        from datetime import datetime
+
+        lo, hi = datetime.fromisoformat(start).timestamp(), datetime.fromisoformat(end).timestamp()
+        return [r for r in self.logbook_rows if lo <= datetime.fromisoformat(r["when"]).timestamp() < hi]

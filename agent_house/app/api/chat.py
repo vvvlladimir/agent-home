@@ -146,6 +146,7 @@ async def import_config(request: Request):
     if runtime is not None and runtime != ctx.runtime:
         save_runtime(ctx.settings.data_dir, runtime)
         ctx.runtime = ctx.llm.runtime = ctx.agents_rt.settings = runtime
+        ctx.council.settings = ctx.insights.settings = ctx.review.settings = runtime
     ctx.gate.reload()
     ctx.feed.add(
         "system",

@@ -33,8 +33,9 @@ def lc(tmp_path):
     ha = AutomationHA()
     ha.add("input_boolean.agent_house_kill", "off")
     life = Lifecycle(
-        store, feed, ha, Safety(store, feed, tmp_path), protected=lambda: {"input_boolean.agent_house_kill"}
-    )
+        store, feed, ha, Safety(store, feed, tmp_path), protected=lambda: {"input_boolean.agent_house_kill"},
+        owner_of=lambda entity_id: "room" if ha.registry.area_of(entity_id) == "room" else "orchestrator",
+    )  # fmt: skip
     life.ha_stub = ha
     return life
 

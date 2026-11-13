@@ -198,6 +198,15 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    the answer shows `shadow: light.turn_on …`, nothing moves). Note the wait per answer on the Jetson.
 7. **Settings → Config export**: download the YAML, check it has no token or key, import it back:
    the message lists the agents and that they were set to shadow.
+8. **Habit finder** (`[UNVERIFIED-ON-HW]`: the logbook fields `context_user_id`,
+   `context_event_type`, `context_domain`, `context_entity_id` and that a wall switch leaves them
+   empty). After a week or more of normal use: **Proposals → Found in the history → Scan history**.
+   The line under the button says how many changes were read and how many were by hand; if "by
+   hand" is 0 although you switch things yourself, send a diagnostics bundle and one
+   `GET /api/logbook/<start>` row of a light you switched. Each habit row names the device, the
+   sensor or time and the count; **Draft** one: a proposal appears with `Evidence:` in its rationale.
+   Note in `owner-reports/m5/README.md` which habits were real and which were noise (the thresholds
+   `habit_days` / `habit_min_repeats` are in Settings).
 
 ## Unverified facts to watch for (from RESEARCH.md)
 

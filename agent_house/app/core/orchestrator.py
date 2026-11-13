@@ -7,6 +7,11 @@ Providers (add-on option `orchestrator_provider`, D11, D16):
 - `auto`      — local first; then every cloud provider that has a key (Claude, then OpenAI) when
                 the local model is unreachable or fails a turn.
 
+Per task (M5, D21): `routine` work (the daily review's summary) runs on the local model only; the
+cloud is the expert for `draft`, `habit`, `undo` and `conflict` drafts. With `auto`, a draft the
+local model could not finish (no submission, or a proposal that is still blocked) is tried once
+more by the cloud alone — the low-confidence case.
+
 Cloud calls carry redacted text only (`redact.py`, unless `redact_cloud` is off) and are paid
 from a daily budget in EUR with a hard stop: a call whose worst case (prompt + `max_tokens`) would
 cross the limit is not made. Spend is stored per day in the `spend` table.
@@ -99,6 +104,8 @@ YAML_RULES = """YAML rules:
   plus notify.<target> and persistent_notification.create for messages.
 - Entities marked T3 can never be in actions. No `event:` steps, no scripts, no automation.* or
   homeassistant.* services, no webhook triggers.
+- The house mode is input_select.agent_house_mode (home, away, night, guests, work). Prefer a
+  state condition on it over re-deriving presence or bedtime from sensors.
 - Keep it as small as the request allows."""
 
 TOOLS = [
@@ -135,6 +142,13 @@ TOOLS = [
 ]
 CHAT_TOOLS = TOOLS[:2]  # find_entities, submit_automation: a chat answer needs no `decline`
 CHAT_HISTORY_TURNS = 8
+
+
+EXPERT_TASKS = frozenset({"draft", "habit", "undo", "conflict"})
+REVIEW_SYSTEM = """You are the orchestrator of Agent House. Once a day you write the owner a short \
+review of the house: what the room agents reported, what was escalated, what the history scan found \
+and which proposals are being drafted. Plain text, at most 8 short lines, in English, no tool calls. \
+Mention conflicts and undone automations first. Do not invent anything that is not in the data."""
 
 
 class OrchestratorError(Exception):
@@ -567,6 +581,8 @@ class Orchestrator:
         self.cloud = AnthropicProvider(settings, self.budget)
         self.openai = OpenAIProvider(settings, self.budget)
         self._tasks: set[asyncio.Task] = set()
+        self._local_tried = False
+        self.council = None  # set by the app factory
 
     async def stop(self) -> None:
         for task in list(self._tasks):
@@ -574,12 +590,26 @@ class Orchestrator:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # --- status -----------------------------------------------------------------------------
-    def providers(self) -> list:
-        return {
+    def providers(self, task: str = "draft", expert: bool = False) -> list:
+        """The providers to try for one kind of task, in order. `routine` stays on the local model;
+        `expert` (a retry after the local model gave up) uses the clouds only."""
+        configured = {
             "local": [self.local],
             "anthropic": [self.cloud],
             "openai": [self.openai],
         }.get(self.settings.orchestrator_provider, [self.local, self.cloud, self.openai])
+        if task == "routine":
+            return [self.local]
+        if expert:
+            return [p for p in configured if p is not self.local and p.has_key]
+        return configured
+
+    def can_ask_expert(self, task: str) -> bool:
+        return (
+            self.settings.orchestrator_provider == "auto"
+            and task in EXPERT_TASKS
+            and any(p.available for p in self.providers(task, expert=True))
+        )
 
     def status(self) -> dict:
         usable = [p for p in self.providers() if p.available]
@@ -596,10 +626,11 @@ class Orchestrator:
 
     # --- one model turn, with fallback ------------------------------------------------------
     async def turn(
-        self, system: str, transcript: list[dict], tools: list[dict], priority: Priority, redactor: Redactor
-    ) -> Turn:
+        self, system: str, transcript: list[dict], tools: list[dict], priority: Priority, redactor: Redactor,
+        task: str = "draft", expert: bool = False,
+    ) -> Turn:  # fmt: skip
         errors = []
-        for provider in self.providers():
+        for provider in self.providers(task, expert):
             if self.safety.kill_engaged:
                 raise OrchestratorError("kill_switch", "the kill switch is engaged")
             cloud = provider is not self.local
@@ -751,7 +782,29 @@ class Orchestrator:
         trace.step("tool", {"name": "find_entities", "arguments": args, "result": found[:2000]})
         return {"id": call["id"], "content": found}
 
-    async def draft(
+    async def draft(self, request: str, *, task: str = "draft", **kwargs) -> dict:
+        """Ask the model for an automation; return the proposal (draft or blocked). Never deploys.
+        With `auto`, a local attempt that ends without a passing draft is retried once by the cloud
+        (the expert); the blocked local proposal is then rejected in favour of the expert's."""
+        try:
+            proposal = await self._draft(request, task=task, **kwargs)
+        except OrchestratorError as err:
+            if err.code != "failed" or not self._local_tried or not self.can_ask_expert(task):
+                raise
+            kwargs.pop("new_run_id", None)
+            return await self._draft(request, task=task, expert=True, **kwargs)
+        if proposal["status"] == "blocked" and self._local_tried and self.can_ask_expert(task):
+            kwargs.pop("new_run_id", None)
+            try:
+                better = await self._draft(request, task=task, expert=True, **kwargs)
+            except OrchestratorError:
+                return proposal
+            if better["status"] == "draft":
+                self.lifecycle.reject(proposal["id"], f"replaced by the expert's draft {better['id']}")
+                return better
+        return proposal
+
+    async def _draft(
         self,
         request: str,
         *,
@@ -762,9 +815,12 @@ class Orchestrator:
         priority: Priority = Priority.INTERACTIVE,
         replaces_original: str | None = None,
         new_run_id: str | None = None,
+        task: str = "draft",
+        expert: bool = False,
     ) -> dict:
-        """Ask the model for an automation; return the proposal (draft or blocked). Never deploys.
-        `new_run_id`: the id this draft's run gets (a caller that answers before the draft is done)."""
+        """One drafting conversation. `new_run_id`: the id this draft's run gets (a caller that
+        answers before the draft is done)."""
+        self._local_tried = False
         if self.safety.kill_engaged:
             raise OrchestratorError("kill_switch", "the kill switch is engaged")
         request = request.strip()[:2000]
@@ -778,9 +834,10 @@ class Orchestrator:
             "\n".join(lines) or "(none)"
         )
         transcript: list[dict] = [{"role": "user", "text": user}]
+        who = "the cloud expert, " if expert else ""
         trace = _Trace(
             self,
-            f"{origin_agent or 'owner'} asks for an automation: {request}",
+            f"{who}{origin_agent or 'owner'} asks for an automation: {request}",
             "manual" if priority is Priority.INTERACTIVE else "poke",
             run_id=new_run_id,
             origin=(origin_agent, run_id),
@@ -791,7 +848,8 @@ class Orchestrator:
         searched, pushed_back = 0, False
         try:
             for _ in range(MAX_TURNS):
-                turn = await self.turn(self._system(), transcript, TOOLS, priority, redactor)
+                turn = await self.turn(self._system(), transcript, TOOLS, priority, redactor, task, expert)
+                self._local_tried = self._local_tried or turn.provider == "local"
                 trace.llm(turn)
                 if not turn.calls:
                     if proposal is not None:
@@ -899,6 +957,8 @@ class Orchestrator:
                     for a in agents
                 )
             )
+        if self.council is not None:
+            lines.append(f"House mode: {self.council.mode or 'unknown'}")
         lines.append(
             f"Proposals waiting for review: {self.lifecycle.count_open()}; "
             f"deployed automations: {self.lifecycle.count_deployed()}"
@@ -978,6 +1038,26 @@ class Orchestrator:
         trace.step("final", {"text": reply})
         trace.finish("ok", summary=reply)
         return reply, trace.run_id
+
+    async def summarize(self, data: str) -> tuple[str, str]:
+        """The daily review's text for the owner: a `routine` task, local model only, no tools.
+        → (text, run id). Raises OrchestratorError when the local model is unavailable."""
+        trace = _Trace(self, "daily house review", "review")
+        trace.step("context", {"system": REVIEW_SYSTEM, "user": data})
+        try:
+            turn = await self.turn(
+                REVIEW_SYSTEM, [{"role": "user", "text": data}], [], Priority.BACKGROUND,
+                Redactor.for_home(self.ha), "routine",
+            )  # fmt: skip
+        except OrchestratorError as err:
+            trace.finish("error", error=str(err))
+            raise
+        trace.llm(turn)
+        text = turn.text.strip()[:2000]
+        trace.finish(
+            "ok" if text else "escalated", summary=text[:300] or None, error=None if text else "empty"
+        )
+        return text, trace.run_id
 
     def request_draft(self, agent_id: str, run_id: str | None, description: str, room: str | None) -> bool:
         """A room agent's idea, drafted in the background. False when too many are waiting."""

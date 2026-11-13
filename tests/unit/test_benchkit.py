@@ -41,7 +41,9 @@ def test_eval_file_matches_its_schema_and_the_policy():
 def test_scoring_rules():
     scenario = {
         "expect": {
-            "calls": [{"tool": "call_service", "args": {"service": "turn_on", "entity_id": ["light.a", "light.b"]}}],
+            "calls": [
+                {"tool": "call_service", "args": {"service": "turn_on", "entity_id": ["light.a", "light.b"]}}
+            ],
             "forbid_calls": [{"tool": "call_service", "args": {"domain": "lock"}}],
             "max_steps": 2,
         }
@@ -58,33 +60,54 @@ def test_scoring_rules():
     assert benchkit.score(quiet, [{"tool": "report", "args": {}}], 1)[0]
     assert not benchkit.score(quiet, [on], 1)[0]
     nested = {"expect": {"calls": [{"tool": "call_service", "args": {"data": {"brightness_pct": 30}}}]}}
-    assert benchkit.score(nested, [{"tool": "call_service", "args": {"data": {"brightness_pct": "30", "x": 1}}}], 1)[0]
-    assert not benchkit.score(nested, [{"tool": "call_service", "args": {"data": {"brightness_pct": 31}}}], 1)[0]
+    assert benchkit.score(
+        nested, [{"tool": "call_service", "args": {"data": {"brightness_pct": "30", "x": 1}}}], 1
+    )[0]
+    assert not benchkit.score(
+        nested, [{"tool": "call_service", "args": {"data": {"brightness_pct": 31}}}], 1
+    )[0]
     assert not benchkit.score(nested, [{"tool": "call_service", "args": {}}], 1)[0]
 
 
 def test_normalize_and_room_sim():
-    assert benchkit.normalize_call("call_service", {"service": "light.turn_on", "entity_id": ["light.a", "light.b"]}) == [
+    assert benchkit.normalize_call(
+        "call_service", {"service": "light.turn_on", "entity_id": ["light.a", "light.b"]}
+    ) == [
         {"service": "turn_on", "entity_id": "light.a", "domain": "light"},
         {"service": "turn_on", "entity_id": "light.b", "domain": "light"},
     ]
     room = benchkit.RoomSim(DOC["room"], {"light.living_room_lamp": "on"})
     assert room.execute("get_state", {"entity_id": "light.living_room_lamp"})["state"] == "on"
-    ok = room.execute("call_service", {"domain": "light", "service": "turn_off", "entity_id": "light.living_room_lamp"})
+    ok = room.execute(
+        "call_service", {"domain": "light", "service": "turn_off", "entity_id": "light.living_room_lamp"}
+    )
     assert ok["status"] == "executed" and room.entities["light.living_room_lamp"]["state"] == "off"
-    denied = room.execute("call_service", {"domain": "lock", "service": "unlock", "entity_id": "lock.balcony_door"})
+    denied = room.execute(
+        "call_service", {"domain": "lock", "service": "unlock", "entity_id": "lock.balcony_door"}
+    )
     assert denied["ok"] is False and "T3" in denied["error"]
     assert room.entities["lock.balcony_door"]["state"] == "locked"
-    pending = room.execute("call_service", {"domain": "cover", "service": "close_cover", "entity_id": "cover.living_room_blinds"})
-    assert pending["status"] == "pending_approval" and room.entities["cover.living_room_blinds"]["state"] == "open"
-    assert not room.execute("call_service", {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"})["ok"]
-    assert not room.execute("call_service", {"domain": "switch", "service": "turn_on", "entity_id": "light.living_room_lamp"})["ok"]
+    pending = room.execute(
+        "call_service", {"domain": "cover", "service": "close_cover", "entity_id": "cover.living_room_blinds"}
+    )
+    assert (
+        pending["status"] == "pending_approval"
+        and room.entities["cover.living_room_blinds"]["state"] == "open"
+    )
+    assert not room.execute(
+        "call_service", {"domain": "light", "service": "turn_on", "entity_id": "light.kitchen"}
+    )["ok"]
+    assert not room.execute(
+        "call_service", {"domain": "switch", "service": "turn_on", "entity_id": "light.living_room_lamp"}
+    )["ok"]
 
 
 def test_prompt_prefix_is_stable_and_states_are_in_the_user_message():
     first, second = DOC["scenarios"][0], DOC["scenarios"][1]
     assert benchkit.system_prompt(DOC["room"]) == benchkit.system_prompt(DOC["room"])
-    assert "lock.balcony_door" in benchkit.system_prompt(DOC["room"]) and "[T3]" in benchkit.system_prompt(DOC["room"])
+    assert "lock.balcony_door" in benchkit.system_prompt(DOC["room"]) and "[T3]" in benchkit.system_prompt(
+        DOC["room"]
+    )
     assert "sensor.living_room_illuminance: 4" in benchkit.wake_message(DOC["room"], first)
     assert benchkit.wake_message(DOC["room"], first) != benchkit.wake_message(DOC["room"], second)
 
@@ -115,7 +138,9 @@ def test_a_perfect_model_passes_every_scenario(llm_sim, llm_server, quick):
     llm_sim.script.extend(script_for_bench(DOC, scenarios, runs))
     seen = []
     profile = profiles.get_profile("qwen35-4b-balanced")
-    plan = benchkit.bench_plan(DOC, profiles.sampling(profile), quick=quick, runs=runs, progress=lambda *a: seen.append(a))
+    plan = benchkit.bench_plan(
+        DOC, profiles.sampling(profile), quick=quick, runs=runs, progress=lambda *a: seen.append(a)
+    )
     parts = benchkit.drive(plan, _http_chat(llm_server.url))
     assert llm_sim.script == [], "the plan made exactly the scripted number of requests"
     tool = parts["toolcall"]
@@ -144,7 +169,9 @@ def test_the_default_sim_policy_fails_most_scenarios_with_reasons(llm_server):
 def test_broken_arguments_and_server_errors(llm_sim, llm_server):
     scenario = DOC["scenarios"][0]
     good = steps_for(scenario)[0]["tool_calls"][0]["arguments"]
-    llm_sim.script.extend([{"raw_arguments": json.dumps(good)[:-1] + ",}", "name": "call_service"}, {"text": "Done."}])
+    llm_sim.script.extend(
+        [{"raw_arguments": json.dumps(good)[:-1] + ",}", "name": "call_service"}, {"text": "Done."}]
+    )
     outcome = benchkit.drive(benchkit.run_scenario(DOC, scenario, {}), _http_chat(llm_server.url))
     assert outcome["passed"] and outcome["json_valid"] is False, "repaired JSON passes but is counted"
 
@@ -163,7 +190,9 @@ def test_broken_arguments_and_server_errors(llm_sim, llm_server):
     outcome = benchkit.drive(benchkit.run_scenario(DOC, scenario, {}), _http_chat(llm_server.url))
     assert not outcome["passed"] and outcome["failed_request"] and "HTTP 500" in outcome["reason"]
 
-    llm_sim.script.extend([{"tool_calls": [{"name": "get_state", "arguments": {"entity_id": "light.living_room_lamp"}}]}] * 10)
+    llm_sim.script.extend(
+        [{"tool_calls": [{"name": "get_state", "arguments": {"entity_id": "light.living_room_lamp"}}]}] * 10
+    )
     outcome = benchkit.drive(benchkit.run_scenario(DOC, scenario, {}), _http_chat(llm_server.url))
     assert not outcome["passed"] and "still calling tools" in outcome["reason"]
 
@@ -172,7 +201,10 @@ def test_eval_gives_up_when_the_server_keeps_failing(llm_sim, llm_server):
     llm_sim.script.extend([{"status": 500}] * 200)
     parts = benchkit.drive(benchkit.bench_plan(DOC, {}, quick=True), _http_chat(llm_server.url))
     assert parts["toolcall"]["passed"] == 0 and parts["speed"]["decode_tps"] is None
-    assert sum("not run" in f["reason"] for f in parts["toolcall"]["failures"]) == 12 - benchkit.ABORT_AFTER_ERRORS
+    assert (
+        sum("not run" in f["reason"] for f in parts["toolcall"]["failures"])
+        == 12 - benchkit.ABORT_AFTER_ERRORS
+    )
     assert parts["errors"]
 
 
@@ -183,8 +215,18 @@ def test_soak_and_resource_tracker(llm_server):
     assert soak["requests"] >= 2 and soak["decode_tps_min"] == 20.0
 
     tracker = benchkit.ResourceTracker()
-    tracker.add({"ram_used_mb": 4000, "ram_total_mb": 7600, "swap_used_mb": 0, "temp_tj_c": 50, "power_mw": 9000})
-    tracker.add({"ram_used_mb": 6900, "ram_total_mb": 7600, "swap_used_mb": 300, "temp_gpu_c": 71.5, "throttled": True})
+    tracker.add(
+        {"ram_used_mb": 4000, "ram_total_mb": 7600, "swap_used_mb": 0, "temp_tj_c": 50, "power_mw": 9000}
+    )
+    tracker.add(
+        {
+            "ram_used_mb": 6900,
+            "ram_total_mb": 7600,
+            "swap_used_mb": 300,
+            "temp_gpu_c": 71.5,
+            "throttled": True,
+        }
+    )
     tracker.add({"ram_used_mb": None, "raw": "garbage"})
     tracker.add(None)
     assert tracker.summary() == {

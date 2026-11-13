@@ -16,18 +16,22 @@ from . import __version__
 from .api.agents import router as agents_router
 from .api.automations import router as automations_router
 from .api.chat import router as chat_router
+from .api.council import router as council_router
 from .api.migration import router as migration_router
 from .api.routes import router
 from .config import RuntimeSettings, Settings, load_runtime, load_settings
 from .core.actuator import Actuator
 from .core.agents import AgentStore
 from .core.bench import BenchRunner
+from .core.council import Council
 from .core.gate import EventGate
+from .core.insights import Insights
 from .core.lifecycle import Lifecycle
 from .core.llm import LLMManager
 from .core.migration import Migration
 from .core.monitor import JetsonMonitor
 from .core.orchestrator import Orchestrator
+from .core.review import Review
 from .core.runtime import AgentRuntime, WakeRefused
 from .core.safety import KILL_EVENT, Safety
 from .ha.client import HAClient
@@ -57,6 +61,9 @@ class Context:
     lifecycle: Lifecycle
     orchestrator: Orchestrator
     migration: Migration
+    council: Council
+    insights: Insights
+    review: Review
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -116,7 +123,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def kill_entity() -> set[str]:
         return {ctx.runtime.kill_switch_entity} if ctx.runtime.kill_switch_entity else set()
 
-    actuator = Actuator(store, feed, ha, safety, agents, agents_rt.scope, protected=kill_entity)
+    council = Council(store, feed, ha, agents, safety, runtime)
+    owner_of = council.ownership.owner_of
+    actuator = Actuator(
+        store, feed, ha, safety, agents, agents_rt.scope, protected=kill_entity, owner_of=owner_of,
+        pseudo=council.agent_config,
+    )  # fmt: skip
 
     def wake(agent_id: str, **kwargs) -> None:
         try:
@@ -125,9 +137,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             feed.add("gate_drop", f"{agent_id}: not woken, {err}", level="debug", agent_id=agent_id)
 
     gate = EventGate(agents, feed, store, agents_rt.scope, wake)
-    lifecycle = Lifecycle(store, feed, ha, safety, protected=kill_entity)
+    lifecycle = Lifecycle(store, feed, ha, safety, protected=kill_entity, owner_of=owner_of)
     orchestrator = Orchestrator(settings, llm, store, feed, ha, safety, lifecycle, agents_rt)
     agents_rt.actuator, agents_rt.gate, agents_rt.orchestrator = actuator, gate, orchestrator
+    agents_rt.council = orchestrator.council = council
+    council.rt, council.actuator, council.gate = agents_rt, actuator, gate
+    insights = Insights(store, feed, ha, lifecycle, runtime)
+    council.review = Review(store, feed, orchestrator, insights, council, agents_rt, runtime, lifecycle)
     ctx = Context(
         settings=settings,
         store=store,
@@ -145,6 +161,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifecycle=lifecycle,
         orchestrator=orchestrator,
         migration=Migration(settings, store, feed, ha, lifecycle, orchestrator, safety),
+        council=council,
+        insights=insights,
+        review=council.review,
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -165,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     ctx.ha.on_state_changed(on_state)
     ctx.ha.on_state_changed(gate.on_state)
+    ctx.ha.on_state_changed(council.on_state)
     ctx.ha.on_event(KILL_EVENT, on_kill_event)
 
     @asynccontextmanager
@@ -177,6 +197,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await ctx.monitor.start()
         await ctx.llm.start()
         await ctx.gate.start()
+        await ctx.council.start()
 
         async def sync_kill_helper() -> None:
             """The helper may have been switched on while the add-on was down."""
@@ -189,6 +210,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             helper_sync.cancel()
+            await ctx.council.stop()
             await ctx.gate.stop()
             await ctx.orchestrator.stop()
             await ctx.agents_rt.stop()
@@ -204,6 +226,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(automations_router)
     app.include_router(migration_router)
     app.include_router(chat_router)
+    app.include_router(council_router)
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)

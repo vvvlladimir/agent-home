@@ -221,7 +221,9 @@ async def test_tool_calls_in_the_text_and_repaired_arguments(make_llm, llm_sim):
     result = await llm.chat(say("hi"), TOOLS)
     assert result.tool_calls[0].arguments == args and "<tool_call>" not in result.text
 
-    llm_sim.script.append({"name": "call_service", "raw_arguments": '{"domain": "light", "service": "turn_on",}'})
+    llm_sim.script.append(
+        {"name": "call_service", "raw_arguments": '{"domain": "light", "service": "turn_on",}'}
+    )
     result = await llm.chat(say("hi"), TOOLS)
     assert result.tool_calls[0].arguments == {"domain": "light", "service": "turn_on"}
 
