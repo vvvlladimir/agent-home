@@ -197,6 +197,11 @@ MIGRATIONS: list[str] = [
         updated REAL NOT NULL
     );
     """,
+    # 8 — M5 council: our automations a proposal supersedes (JSON list of `agent_house_` ids,
+    # disabled when the proposal is approved, so two of ours never fight over one entity)
+    """
+    ALTER TABLE proposals ADD COLUMN supersedes TEXT NOT NULL DEFAULT '[]';
+    """,
 ]
 
 

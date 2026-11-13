@@ -228,12 +228,12 @@ class LLMManager:
         if response.status_code == 200:
             if self._health != "ok":
                 log.info("llama-server is healthy at %s", self.settings.masked()["jetson_llm_url"])
+            if self.model is None:
+                await self._read_model()  # before `ok`: a status that says ok names the model
             self.end_swap()
             self._health = "degraded" if self._failures >= DEGRADED_AFTER else "ok"
             if self._health == "ok":
                 self.last_error = None
-            if self.model is None:
-                await self._read_model()
         elif response.status_code == 503:  # llama-server answers 503 while the model loads
             self._health, self.last_error = "warming", "model is loading"
         else:

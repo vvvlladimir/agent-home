@@ -17,7 +17,13 @@
   is off"); the run's final answer is posted to the board as a report. `ask_agent` no longer wakes
   a neighbour directly: it goes to the orchestrator, which forwards it as a task to the owner of the
   thing asked about. A task cannot ask further (depth 1). `report(severity=escalate)` lands on the
-  board for the orchestrator (and in the owner's inbox, as before).
+  board for the orchestrator (and in the owner's inbox, as before); when it names an entity owned
+  by another agent, the orchestrator forwards it as a task to that owner through the same bounded
+  path as `ask` (rate limit per agent, depth 1, never from a task or chat run). Deterministic, no
+  model. Everything else waits on the board for the daily review.
+- The orchestrator's wake rules are fixed (`WAKES`) and shown with the last time each fired
+  (kv `orchestrator_wakes`): house mode changes, people coming and going (with `auto_house_mode`),
+  the daily review, escalations.
 """
 
 from __future__ import annotations
@@ -46,6 +52,14 @@ MAX_FACTS_IN_PROMPT = 8
 MAX_POSTS_PER_RUN = 2
 ASKS_PER_HOUR = 6  # per asking agent, forwarded through the orchestrator
 TICK_S = 30.0
+NO_FORWARD_SOURCES = frozenset({"task", "chat", "poke", "replay"})  # depth 1: these never wake another agent
+WAKES = (
+    ("house_mode", "the house mode changes: rooms get a task (away, night)"),
+    ("person", "a person comes or goes (only with auto_house_mode): the mode is re-evaluated"),
+    ("daily_review", "the daily review time: scan, digest, drafts"),
+    ("escalation", "a room escalates: forwarded to the owner of an entity it names, else to the review"),
+)
+WAKES_KEY = "orchestrator_wakes"
 MODE_TASKS = {
     "away": "House mode is now away (nobody is home). Check your room: lights, media and heaters "
     "that should be off. Switch off what is allowed, report the rest. Finish with one short sentence.",
@@ -291,12 +305,14 @@ class Council:
             if new_state in MODES:
                 self.mode_changed(old_state, new_state)
         elif entity_id.startswith("person.") and getattr(self.settings, "auto_house_mode", False):
+            self.wake_fired("person")
             if self._evaluate is None or self._evaluate.done():
                 self._evaluate = asyncio.get_running_loop().create_task(
                     self.evaluate_mode(f"{entity_id} is {new_state}"), name="council-mode"
                 )
 
     def mode_changed(self, old: str | None, new: str) -> list[str]:
+        self.wake_fired("house_mode")
         self.board.post(ORCHESTRATOR, f"house mode is {new} (was {old or 'unknown'})", ttl_s=FACT_TTL_MAX_S)
         task = MODE_TASKS.get(new)
         if not task:
@@ -339,17 +355,13 @@ class Council:
     def ask(self, from_agent: str, target: str, question: str, run_id: str | None = None) -> dict:
         """`ask_agent`: a room's question goes to the orchestrator, which forwards it as a task to
         the agent asked for (or to the owner of an entity named in it). Bounded per hour."""
-        recent = self._asks.setdefault(from_agent, deque())
-        now = self.clock()
-        while recent and recent[0] <= now - 3600:
-            recent.popleft()
-        if len(recent) >= ASKS_PER_HOUR:
+        if not self._may_ask(from_agent):
             return {"ok": False, "error": f"at most {ASKS_PER_HOUR} questions per hour; report it instead"}
         recipient = self._recipient(target, question)
         if recipient is None or recipient == from_agent:
             known = [a.id for a in self.agents.list() if a.enabled and a.id != from_agent]
             return {"ok": False, "error": f"unknown agent {target!r}; agents: {', '.join(known) or 'none'}"}
-        recent.append(now)
+        self._asks[from_agent].append(self.clock())
         self.board.post(from_agent, question, kind="escalation", target=recipient, run_id=run_id, ttl_s=3600)
         if recipient == ORCHESTRATOR:
             return {"ok": True, "status": "escalated", "note": "the orchestrator and the owner will see it"}
@@ -358,24 +370,85 @@ class Council:
         note = "the answer is posted to the shared board; you will see it on a later wake"
         return {"ok": True, "status": "forwarded", "to": recipient, "note": note}
 
+    def _may_ask(self, from_agent: str) -> bool:
+        """The hourly bound shared by `ask` and forwarded escalations (one budget per agent)."""
+        recent = self._asks.setdefault(from_agent, deque())
+        now = self.clock()
+        while recent and recent[0] <= now - 3600:
+            recent.popleft()
+        return len(recent) < ASKS_PER_HOUR
+
+    @staticmethod
+    def _entity_words(text: str):
+        for word in text.replace(",", " ").split():
+            yield word.strip(".?!:;()'\"")
+
     def _recipient(self, target: object, question: str) -> str | None:
         """The agent asked for; else the owner of an entity named in the question; else the
         orchestrator itself when it was asked; else nobody."""
         agent = self.agents.get(target) if isinstance(target, str) else None
         if agent is not None and agent.enabled:
             return agent.id
-        for word in question.replace(",", " ").split():
-            word = word.strip(".?!:;()'\"")
+        for word in self._entity_words(question):
             if word in self.ha.states:
                 owner = self.ownership.owner_of(word)
                 if owner == ORCHESTRATOR or self.agents.get(owner) is not None:
                     return owner
         return ORCHESTRATOR if target == ORCHESTRATOR else None
 
-    def escalate(self, agent_id: str, summary: str, run_id: str | None = None) -> None:
-        self.board.post(
-            agent_id, summary, kind="escalation", target=ORCHESTRATOR, run_id=run_id, ttl_s=6 * 3600
-        )
+    def escalate(
+        self, agent_id: str, summary: str, run_id: str | None = None, source: str | None = None
+    ) -> dict:
+        """`report(severity=escalate)`: on the board for the orchestrator; forwarded as a task to
+        the owner of the first entity it names that belongs to another (enabled) room agent. Never
+        from a task, chat or replay run (depth 1), and within the hourly bound of `ask`."""
+        self.wake_fired("escalation")
+        recipient = self._escalation_owner(agent_id, summary)
+        if recipient is None:
+            note = "no other owner named"
+        elif source is None or source in NO_FORWARD_SOURCES:
+            note, recipient = f"not forwarded from a {source or 'unknown'} run", None
+        elif not self._may_ask(agent_id):
+            note, recipient = f"at most {ASKS_PER_HOUR} per hour", None
+        else:
+            self._asks[agent_id].append(self.clock())
+            note = ""
+        target = recipient or ORCHESTRATOR
+        self.board.post(agent_id, summary, kind="escalation", target=target, run_id=run_id, ttl_s=6 * 3600)
+        if recipient is None:
+            return {"status": "on_board", "note": f"kept for the daily review ({note})"}
+        if self.assign_task(recipient, summary, asked_by=agent_id) is None:
+            self._asks[agent_id].pop()  # nothing was forwarded: the hourly slot is not used up
+            return {"status": "on_board", "note": f"{recipient} cannot take a task now; kept for the review"}
+        return {"status": "forwarded", "to": recipient}
+
+    def _escalation_owner(self, agent_id: str, text: str) -> str | None:
+        """The owner of the first entity named in `text` that belongs to another enabled room agent."""
+        for word in self._entity_words(text):
+            if word not in self.ha.states:
+                continue
+            owner = self.ownership.owner_of(word)
+            agent = self.agents.get(owner) if owner not in (ORCHESTRATOR, agent_id) else None
+            if agent is not None and agent.enabled:
+                return owner
+        return None
+
+    # --- the orchestrator's wake rules ------------------------------------------------------
+    def wake_fired(self, wake: str) -> None:
+        fired = self.store.get(WAKES_KEY) or {}
+        fired[wake] = self.clock()
+        self.store.set(WAKES_KEY, fired)
+
+    def wakes(self) -> list[dict]:
+        fired = self.store.get(WAKES_KEY) or {}
+        active = {
+            "person": bool(getattr(self.settings, "auto_house_mode", False)),
+            "daily_review": bool(getattr(self.settings, "daily_review_at", "") or ""),
+        }
+        return [
+            {"id": wake, "rule": rule, "active": active.get(wake, True), "last": fired.get(wake)}
+            for wake, rule in WAKES
+        ]
 
     # --- prompt -----------------------------------------------------------------------------
     def prompt_lines(self, agent_id: str) -> list[str]:
@@ -397,4 +470,5 @@ class Council:
             "night_window": getattr(self.settings, "night_window", ""),
             "ownership": self.ownership.summary(),
             "board": self.board.list(50),
+            "orchestrator_wakes": self.wakes(),
         }

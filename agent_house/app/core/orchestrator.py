@@ -814,6 +814,7 @@ class Orchestrator:
         ha_id: str | None = None,
         priority: Priority = Priority.INTERACTIVE,
         replaces_original: str | None = None,
+        supersedes: list[str] | None = None,
         new_run_id: str | None = None,
         task: str = "draft",
         expert: bool = False,
@@ -905,6 +906,7 @@ class Orchestrator:
                         origin_agent=origin_agent,
                         ha_id=ha_id,
                         replaces_original=replaces_original,
+                        supersedes=supersedes,
                     )
                     done = not failed
                     results.append(

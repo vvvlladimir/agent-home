@@ -6,6 +6,7 @@ const PAGES = [
   { id: 'runs', label: 'Runs & traces' },
   { id: 'agents', label: 'Agents' },
   { id: 'proposals', label: 'Proposals' },
+  { id: 'council', label: 'Council' },
   { id: 'automations', label: 'Deployed automations' },
   { id: 'migration', label: 'Migration' },
   { id: 'chat', label: 'Chat' },
@@ -100,6 +101,12 @@ function app() {
     findings: [],
     findingMsg: '',
     findingBusy: false,
+    // council (M5)
+    council: null,
+    councilError: '',
+    councilMsg: '',
+    ownerQuery: '',
+    ownerResult: '',
     deployedList: [],
     deployedSel: null,
     deployedMsg: '',
@@ -115,6 +122,7 @@ function app() {
       setInterval(() => this.refresh(), 5000);
       setInterval(() => { if (this.page === 'dashboard') this.loadAreas(); }, 30000);
       setInterval(() => { if (this.page === 'models') this.loadModels(); }, 3000);
+      setInterval(() => { if (this.page === 'council') this.loadCouncil(); }, 10000);
       setInterval(() => {
         this.loadPending();
         if (this.page === 'runs') this.loadRuns();
@@ -167,6 +175,7 @@ function app() {
       if (this.page === 'settings') { this.loadSettings(); this.loadLogs(); }
       if (this.page === 'models') this.loadModels();
       if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); this.loadFindings(); }
+      if (this.page === 'council') this.loadCouncil();
       if (this.page === 'automations') this.loadDeployed();
       if (this.page === 'migration') this.loadOriginals();
       if (this.page === 'chat') this.loadAgents();
@@ -466,6 +475,24 @@ function app() {
     async loadProposals() {
       const query = this.proposalStatus ? '?status=' + encodeURIComponent(this.proposalStatus) : '';
       try { this.proposals = await this.api('api/proposals' + query); } catch (e) { this.proposalError = e.message; }
+    },
+    async loadCouncil() {
+      try { this.council = await this.api('api/council'); this.councilError = ''; }
+      catch (e) { this.councilError = e.message; }
+    },
+    async councilPost(path, okText) {
+      this.councilMsg = '';
+      try { await this.post(path); this.councilMsg = this.t(okText); }
+      catch (e) { this.councilMsg = e.message; }
+      await this.loadCouncil();
+    },
+    async lookupOwner() {
+      const id = this.ownerQuery.trim();
+      if (!id) return;
+      try {
+        const r = await this.api('api/council/owner/' + encodeURIComponent(id));
+        this.ownerResult = r.owner + (r.area ? ' · ' + r.area : '');
+      } catch (e) { this.ownerResult = e.message; }
     },
     async loadFindings() {
       try { this.findings = (await this.api('api/findings')).filter((f) => f.status !== 'dismissed'); }

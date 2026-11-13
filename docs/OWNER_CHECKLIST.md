@@ -208,6 +208,45 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    Note in `owner-reports/m5/README.md` which habits were real and which were noise (the thresholds
    `habit_days` / `habit_min_repeats` are in Settings).
 
+## M5 — agent council, daily review, feedback (about 30 minutes, then a few days of Shadow)
+
+Update to 0.1.0, keep the global mode on **Shadow**.
+
+1. **Council → Create the mode helper**. HA → Settings → Helpers shows *Agent House mode* with the
+   options home / away / night / guests / work. `[UNVERIFIED-ON-HW]`: the WebSocket command
+   `input_select/create` and that the entity id becomes `input_select.agent_house_mode`; if it gets
+   another id, rename it in HA to that one.
+2. **Ownership**: the card lists each agent with its number of entities; look up a light of the
+   bedroom (owner: the bedroom agent) and `sun.sun` (owner: orchestrator). A warning under the card
+   means two agents share a room: decide which one keeps it.
+3. **Settings → Automatic house mode** on, night window e.g. `23:00-07:00`, orchestrator mode
+   *shadow*. Leave the house (or set your `person.*` away in HA → Developer tools → States): the
+   feed shows `orchestrator: house mode → away (shadow …)`, nothing changes in HA. With
+   `orchestrator_mode: live` *and* the global mode Live it switches the helper; set it to `guests`
+   by hand: it stays `guests`.
+4. **Board**: switch the helper to `away` by hand. Every enabled room gets a task ("check that
+   everything is off"); its answer appears on the board as a `report`. Note the wait per room on
+   the Jetson.
+5. **Daily review**: Council → *Run review now*. The inbox gets *Daily review: …*; the Council card
+   shows the summary and how many proposals it drafted (at most 3, one per finding, never two for
+   the same entity). Then leave it to run at 04:30 for a few days.
+6. **Feedback**: after a deployed automation has run for some days, undo it by hand a few times
+   (switch the light back within 10 minutes). The next scan lists an `undo` finding; its draft has
+   `Evidence: undone by hand …` in the rationale. `[UNVERIFIED-ON-HW]`: the logbook tells our
+   automation's change from your switch (`context_*` fields).
+7. **Conflict**: if two of our automations fight over one light, the `conflict` proposal replaces
+   one and lists the other under *supersedes*; approving it switches the other one off (tick it on
+   again on Deployed automations to undo).
+8. Send `owner-reports/m5/`: screenshots of Council and Proposals, a diagnostics bundle, and one
+   line per drafted proposal (useful / noise).
+
+## v0.1.0 — release
+
+1. `make analyze-report` after the M2 benchmark (done 2026-11-13): keep `qwen35-4b-balanced` with
+   `llm_presence_penalty: 0` for the room agents (D23).
+2. Update the add-on to 0.1.0 from the repository, take an HA backup first (RUNBOOK → Upgrades).
+3. Go through RUNBOOK → *Going from Shadow to Live* for one room only.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.

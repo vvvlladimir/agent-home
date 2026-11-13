@@ -324,19 +324,36 @@ def find_conflicts(changes: list[Change], ours: dict[str, dict]) -> list[dict]:
     return [p for p in pairs.values() if p["count"] >= FIGHT_MIN]
 
 
-def conflict_request(item: dict, ours: dict[str, dict]) -> tuple[str, str, str | None]:
-    """(title, request, ha_id of ours to change)."""
+def conflict_request(item: dict, ours: dict[str, dict]) -> tuple[str, str, str | None, list[str]]:
+    """(title, request, ha_id of ours to change, other automations of ours it supersedes).
+
+    Two of ours fight: the draft replaces the first and supersedes the other (disabled on
+    approval). The other side is the owner's automation, a script or an agent: nothing of theirs
+    is touched; the request says so and the owner can switch theirs off from Migration."""
     refs = [side.split(":", 1)[1] for side in item["sides"]]
     mine = next((ours[r]["ha_id"] for r in refs if r in ours), None)
-    others = [r for r in refs if not (r in ours and ours[r]["ha_id"] == mine)]
+    supersedes = sorted({ours[r]["ha_id"] for r in refs if r in ours} - {mine})
+    others = [r for r in refs if r not in ours and r.split(".", 1)[0] in ("automation", "script")]
+    agents = [r for r in refs if r not in ours and r not in others]
     request = (
         f"{item['entity_id']} is switched back and forth by {' and '.join(refs)} within "
         f"{int(FIGHT_S)} s ({item['count']} times: " + "; ".join(item["examples"]) + "). "
-        f"Change our automation {mine} so the two no longer fight: one automation must decide this "
-        f"entity (merge the logic of {', '.join(others)} into it if needed, and say in the rationale "
-        "which one the owner should switch off)."
+        f"Change our automation {mine} so that it alone decides this entity."
     )
-    return f"Conflict on {item['entity_id']}: {' vs '.join(refs)}", request, mine
+    if supersedes:
+        request += (
+            f" Merge what {', '.join(supersedes)} does for {item['entity_id']} into it: "
+            f"{', '.join(supersedes)} will be switched off when the owner approves."
+        )
+    if others:
+        request += (
+            f" {', '.join(others)} is not ours and stays as it is: avoid fighting it (a condition, a "
+            "time window or the house mode), and say in the rationale that the owner can switch "
+            f"{', '.join(others)} off from the Migration page if ours should decide."
+        )
+    if agents:
+        request += f" The room agent {', '.join(agents)} also acts on it: do not fight its choices."
+    return f"Conflict on {item['entity_id']}: {' vs '.join(refs)}", request, mine, supersedes
 
 
 # --- the scan --------------------------------------------------------------------------------
@@ -402,7 +419,12 @@ class Insights:
                 key = f"undo:{item['ha_id']}:v{item['version']}"
                 found.append(self._save(key, "undo", title, request, item, None, item["ha_id"]))
         for item in find_conflicts(latest, ours):
-            title, request, ha_id = conflict_request(item, ours)
+            title, request, ha_id, supersedes = conflict_request(item, ours)
+            theirs = [
+                ref for ref in (side.split(":", 1)[1] for side in item["sides"])
+                if ref not in ours and ref.split(".", 1)[0] in ("automation", "script")
+            ]  # fmt: skip
+            item = {**item, "supersedes": supersedes, "theirs": theirs}
             key = f"conflict:{item['entity_id']}:{'|'.join(item['sides'])}"
             found.append(self._save(key, "conflict", title, request, item, area_of(item["entity_id"]), ha_id))
         summary = {

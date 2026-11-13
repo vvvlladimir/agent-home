@@ -76,26 +76,33 @@ steps are written down in `OWNER_CHECKLIST.md`.
       a sensor or a time of day (e.g. desk lamp switched on by hand when radar zone 1 turns on);
       only candidates with enough repeats go to the orchestrator, which drafts a proposal with evidence
       → `core/insights.py`, `Review.draft`, findings on the Proposals page, D20
-- [ ] Daily house review: the orchestrator once a day reads agent reports, the inbox and a history
+- [x] Daily house review: the orchestrator once a day reads agent reports, the inbox and a history
       summary; proposes new automations, fixes for weak ones, and settles conflicts between rooms
       (one proposal per conflict, never two automations fighting over one entity)
-- [ ] Feedback after deploy: count how often the owner undoes what an `agent_house_` automation did
+      → `core/review.py` (one proposal per entity), proposal `supersedes` in `core/lifecycle.py`, D22, S17
+- [x] Feedback after deploy: count how often the owner undoes what an `agent_house_` automation did
       (switches the light back within minutes); above a threshold, propose a fix or a rollback
-- [ ] Agent council — ownership: every entity has exactly one owner agent; room entities belong to
+      → `core/insights.py` (`find_undos`, rollback suggested above 60 %), `Review`, D20
+- [x] Agent council — ownership: every entity has exactly one owner agent; room entities belong to
       their room agent, everything without an area (people, phones, weather, sun, house-wide helpers)
       to the orchestrator; no agent actuates or automates an entity it does not own
-- [ ] Agent council — shared board: agents post short facts ("bedroom: someone went to bed 23:10",
+      → `Ownership` in `core/council.py`, policy step 2b, lifecycle check, D22, S17
+- [x] Agent council — shared board: agents post short facts ("bedroom: someone went to bed 23:10",
       "living room: empty 30 min, TV on") with an expiry; every wake sees its neighbours' fresh facts
       in the prompt; replaces free agent-to-agent chat (no loops, bounded tokens)
-- [ ] Agent council — house modes: the orchestrator owns `input_select.agent_house_mode`
+      → `Board` in `core/council.py`, `Council.prompt_lines`, Council page, D22
+- [x] Agent council — house modes: the orchestrator owns `input_select.agent_house_mode`
       (night / away / home / guests / work); room agents and deployed automations read it, so the
       instant reactions between rooms run in HA, not through a model
-- [ ] Agent council — tasks down, escalation up: the orchestrator gives a room a task ("away: check
+      → `Council.evaluate_mode` / `set_mode`, `HAClient.create_mode_helper`, D22, S17
+- [x] Agent council — tasks down, escalation up: the orchestrator gives a room a task ("away: check
       everything is off") and gets a report on the board; a room escalates to the orchestrator (not to
       a neighbour) when it needs another owner's entity, sees a conflict or danger; `ask_agent` goes
-      through the orchestrator
-- [ ] Orchestrator as an agent: its own wake rules (mode changes, presence of people, daily review),
+      through the orchestrator → `Council.ask` / `Council.escalate` (forwarded to the owner, bounded), D22
+- [x] Orchestrator as an agent: its own wake rules (mode changes, presence of people, daily review),
       routine runs on the Jetson, the cloud only as the expert for drafts, history analysis,
       conflicts and low-confidence cases (provider `auto` per task); 4B profile recommended for the
       room agents (`docs/DECISIONS.md` after the owner's benchmark)
-- [ ] RUNBOOK, README screenshots, `v0.1.0`
+      → `Council.status().orchestrator_wakes`, `Orchestrator.providers(task)`, D21, D23
+- [x] RUNBOOK, README screenshots, `v0.1.0` → `docs/RUNBOOK.md`, `docs/img/v010-*.png`, tag `v0.1.0`
+- [ ] **Owner:** council, daily review and feedback on the real HA (OWNER_CHECKLIST M5 council, v0.1.0)

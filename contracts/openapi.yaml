@@ -908,6 +908,13 @@ components:
         run_id: {type: [string, "null"]}
         ha_id: {type: [string, "null"], description: "agent_house_<slug>; set at creation, used at deploy"}
         replaces_original: {type: [string, "null"]}
+        supersedes:
+          type: array
+          items: {type: string, pattern: "^agent_house_[a-z0-9_]+$"}
+          description: >-
+            Other deployed automations of ours this proposal replaces (never the owner's, never its
+            own ha_id). Approving disables each of them first (reversible from the Deployed page);
+            set only on drafts of the owner or the orchestrator (a settled conflict between two of ours).
         diff: {type: [string, "null"], description: unified diff against the currently deployed version (or against nothing)}
         checks:
           type: array
@@ -968,7 +975,7 @@ components:
         run_id: {type: [string, "null"]}
     Council:
       type: object
-      required: [mode, mode_entity, mode_entity_present, modes, auto_house_mode, orchestrator_mode, ownership, board, review]
+      required: [mode, mode_entity, mode_entity_present, modes, auto_house_mode, orchestrator_mode, ownership, board, review, orchestrator_wakes]
       properties:
         mode: {type: [string, "null"], enum: [home, away, night, guests, work, null]}
         mode_entity: {type: string, const: input_select.agent_house_mode}
@@ -983,6 +990,17 @@ components:
             counts: {type: object, additionalProperties: {type: integer}, description: "owner → number of entities"}
             shared_rooms: {type: object, additionalProperties: {type: array, items: {type: string}}}
         board: {type: array, items: {$ref: "#/components/schemas/BoardEntry"}}
+        orchestrator_wakes:
+          type: array
+          description: The fixed rules that wake the orchestrator, with the last time each fired.
+          items:
+            type: object
+            required: [id, rule, active, last]
+            properties:
+              id: {type: string, enum: [house_mode, person, daily_review, escalation]}
+              rule: {type: string}
+              active: {type: boolean, description: "false: the rule is switched off (auto_house_mode off, no daily_review_at)"}
+              last: {type: [number, "null"], description: epoch seconds of the last time it fired}
         review:
           type: object
           properties:
