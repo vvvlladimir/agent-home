@@ -71,4 +71,12 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 - [ ] Importer (HA automations/scripts, Node-RED export — samples in `owner-reports/nodered/`), parity report, reversible "disable original"
 - [ ] Chat page, config export/import
+- [ ] Habit finder: deterministic scan of HA history (no LLM) for repeated manual actions that follow
+      a sensor or a time of day (e.g. desk lamp switched on by hand when radar zone 1 turns on);
+      only candidates with enough repeats go to the orchestrator, which drafts a proposal with evidence
+- [ ] Daily house review: the orchestrator once a day reads agent reports, the inbox and a history
+      summary; proposes new automations, fixes for weak ones, and settles conflicts between rooms
+      (one proposal per conflict, never two automations fighting over one entity)
+- [ ] Feedback after deploy: count how often the owner undoes what an `agent_house_` automation did
+      (switches the light back within minutes); above a threshold, propose a fix or a rollback
 - [ ] RUNBOOK, README screenshots, `v0.1.0`
