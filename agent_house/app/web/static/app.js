@@ -1,17 +1,21 @@
 // Agent House GUI. No build step. Ingress rule: every URL is relative (no leading slash).
 
-const PAGES = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'feed', label: 'Live feed' },
-  { id: 'runs', label: 'Runs & traces' },
-  { id: 'agents', label: 'Agents' },
-  { id: 'proposals', label: 'Proposals' },
-  { id: 'automations', label: 'Deployed automations' },
-  { id: 'migration', label: 'Migration' },
-  { id: 'chat', label: 'Chat' },
-  { id: 'models', label: 'Models & Benchmarks' },
-  { id: 'settings', label: 'Settings & Logs' },
+// Six tabs; a tab with several pages shows them as a sub-navigation. The hash is the page id.
+const TABS = [
+  { id: 'overview', label: 'Overview', pages: ['overview'] },
+  { id: 'activity', label: 'Activity', pages: ['feed', 'runs'] },
+  { id: 'rooms', label: 'Rooms', pages: ['agents'] },
+  { id: 'automations', label: 'Automations', pages: ['proposals', 'automations', 'migration'] },
+  { id: 'chat', label: 'Chat', pages: ['chat'] },
+  { id: 'settings', label: 'Settings', pages: ['settings', 'models', 'logs'] },
 ];
+const PAGE_LABELS = {
+  feed: 'Live feed', runs: 'Runs', proposals: 'Drafts', automations: 'Deployed', migration: 'Your automations',
+  settings: 'General', models: 'Models', logs: 'Logs',
+};
+// old hashes keep working (bookmarks, links in owner reports)
+const PAGE_ALIASES = { dashboard: 'overview', activity: 'feed', rooms: 'agents' };
+const PAGES = TABS.flatMap((tab) => tab.pages);
 
 const TIER_HELP = {
   T0: 'free: the agent may act',
@@ -19,11 +23,24 @@ const TIER_HELP = {
   T2: 'the agent may act only after your approval',
   T3: 'never: agents cannot actuate this entity',
 };
+const TIERS_TIP = 'T0 the agent acts\nT1 acts and tells you\nT2 asks you first\nT3 never acts\nAgent overrides can only make a tier stricter.';
+
+// What an action verdict means for the owner: marker class + filter group.
+const VERDICT_MARK = {
+  executed: 'done', approved: 'done', shadow: 'would', pending: 'ask', denied: 'blocked', expired: 'blocked', failed: 'blocked',
+};
+const VERDICT_TEXT = {
+  executed: 'Done', approved: 'Approved and done', shadow: 'Would have done it (shadow mode)', pending: 'Waiting for you',
+  denied: 'Blocked by policy', expired: 'Approval expired or denied', failed: 'Home Assistant returned an error',
+};
+// Feed kinds that tell the owner what the agents did; the rest (state changes, system) stay in the Live feed.
+const AGENT_KINDS = ['action', 'approval', 'report', 'proposal', 'deploy', 'council', 'run'];
 
 function app() {
   return {
-    pages: PAGES,
-    page: 'dashboard',
+    tabs: TABS,
+    pageLabels: PAGE_LABELS,
+    page: 'overview',
     lang: 'en',
     dict: {},
     status: null,
@@ -46,7 +63,6 @@ function app() {
     benchOpen: '',
     modelsError: '',
     runtimeForm: {},
-    runtimeMsg: '',
     runtimeError: '',
     _stream: null,
     _poll: null,
@@ -58,20 +74,17 @@ function app() {
     chatInput: '',
     chatBusy: false,
     chatError: '',
-    configMsg: '',
     configError: '',
     // migration
     originals: [],
     originalSel: null,
     parity: null,
-    migrationMsg: '',
     migrationError: '',
     migrationBusy: false,
     // agents
     agentsList: [],
     agentForm: null,
     agentIsNew: false,
-    agentMsg: '',
     agentError: '',
     roomEntities: [],
     preview: null,
@@ -83,27 +96,32 @@ function app() {
     runStatus: '',
     runSel: null,
     runMsg: '',
+    runsLoaded: false,
     actions: [],
     pending: [],
-    inbox: [],
     // proposals and deployed automations (M4)
     proposals: [],
     proposalStatus: 'draft',
     proposalSel: null,
     proposalYaml: '',
-    proposalMsg: '',
     proposalError: '',
     proposalBusy: false,
     draftForm: { request: '', room: '', yaml: '', mode: 'request' },
     evidenceDays: 7,
     // history findings: habits, undone automations, conflicts (M5)
     findings: [],
-    findingMsg: '',
     findingBusy: false,
     deployedList: [],
     deployedSel: null,
-    deployedMsg: '',
     deployedError: '',
+    // overview
+    drafts: [],
+    asksLoaded: false,
+    todayFilter: '',
+    names: {},        // entity_id → friendly name, for readable action titles
+    busy: {},         // id → true while a button's request runs
+    leaving: {},      // id → true while a resolved card animates out
+    toasts: [],
 
     async init() {
       this.applyTheme(this.stored('theme'));
@@ -112,15 +130,19 @@ function app() {
       this.route();
       await this.refresh();
       this.loadAreas();
+      this.loadAgents();
+      this.loadNames();
       setInterval(() => this.refresh(), 5000);
-      setInterval(() => { if (this.page === 'dashboard') this.loadAreas(); }, 30000);
+      setInterval(() => { this.loadAreas(); this.loadNames(); }, 60000);
       setInterval(() => { if (this.page === 'models') this.loadModels(); }, 3000);
       setInterval(() => {
         this.loadPending();
         if (this.page === 'runs') this.loadRuns();
-        if (this.page === 'agents' && !this.agentForm) this.loadAgents();
+        if (['overview', 'agents'].includes(this.page) && !this.agentForm) this.loadAgents();
       }, 5000);
+      setInterval(() => this.loadAsks(), 20000);
       this.loadPending();
+      this.loadAsks();
       this.api('api/events?limit=200').then((items) => { this.feed = items; }).catch(() => {});
       this.connectStream();
     },
@@ -160,16 +182,41 @@ function app() {
       return this.api(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     },
     route() {
-      const id = (location.hash || '#dashboard').slice(1);
-      this.page = PAGES.some((p) => p.id === id) ? id : 'dashboard';
+      const raw = (location.hash || '#overview').slice(1);
+      const id = PAGE_ALIASES[raw] || raw;
+      this.page = PAGES.includes(id) ? id : 'overview';
+      if (this.page === 'overview') { this.loadAsks(); this.loadAgents(); }
       if (this.page === 'agents') { this.loadEntities(); this.loadAgents(); }
       if (this.page === 'runs') { this.loadRuns(); this.loadActions(); this.loadAgents(); }
-      if (this.page === 'settings') { this.loadSettings(); this.loadLogs(); }
+      if (this.page === 'settings') this.loadSettings();
+      if (this.page === 'logs') this.loadLogs();
       if (this.page === 'models') this.loadModels();
       if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); this.loadFindings(); }
       if (this.page === 'automations') this.loadDeployed();
       if (this.page === 'migration') this.loadOriginals();
       if (this.page === 'chat') this.loadAgents();
+      window.scrollTo(0, 0);
+    },
+    get tab() { return TABS.find((tab) => tab.pages.includes(this.page)) || TABS[0]; },
+    toast(text, kind) {
+      const id = Date.now() + Math.random();
+      this.toasts.push({ id, text, kind: kind || '' });
+      setTimeout(() => { this.toasts = this.toasts.filter((x) => x.id !== id); }, kind === 'bad' ? 6000 : 3500);
+    },
+    // Runs fn with a spinner on the button keyed by id; on success the card keyed by id slides out first.
+    async withBusy(id, fn, { leave = false } = {}) {
+      this.busy = { ...this.busy, [id]: true };
+      try {
+        const out = await fn();
+        if (leave) { this.leaving = { ...this.leaving, [id]: true }; await new Promise((r) => setTimeout(r, 300)); }
+        return out;
+      } catch (e) {
+        this.toast(e.message, 'bad');
+        return undefined;
+      } finally {
+        const { [id]: _b, ...busy } = this.busy; this.busy = busy;
+        const { [id]: _l, ...leaving } = this.leaving; this.leaving = leaving;
+      }
     },
     post(path, body) {
       return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -209,11 +256,11 @@ function app() {
         else if (k === 'auto_house_mode') body[k] = v === true || v === 'true';
         else body[k] = v === '' ? null : (TEXT.includes(k) ? v.trim() : Number(v));
       }
-      this.runtimeMsg = ''; this.runtimeError = '';
+      this.runtimeError = '';
       try {
         this.settings = await this.put('api/settings', body);
         this.runtimeForm = this.formFrom(this.settings.runtime);
-        this.runtimeMsg = this.t('Saved.');
+        this.toast(this.t('Saved.'));
       } catch (e) { this.runtimeError = e.message; }
     },
 
@@ -255,12 +302,24 @@ function app() {
     async setMode(mode) {
       if (!this.status || this.status.mode === mode) return;
       if (mode === 'live' && !confirm(this.t('Switch the global mode to Live? Agents whose own mode is live will be allowed to actuate.'))) return;
-      try { this.status = await this.put('api/mode', { mode }); } catch (e) { this.apiError = e.message; }
+      try {
+        this.status = await this.put('api/mode', { mode });
+        this.toast(mode === 'live' ? this.t('Live mode on') : this.t('Shadow mode on'));
+      } catch (e) { this.toast(e.message, 'bad'); }
     },
-    async toggleKill() {
-      const engaged = !this.status.kill_switch.engaged;
-      if (!engaged && !confirm(this.t('Release the kill switch?'))) return;
-      try { this.status = await this.put('api/kill-switch', { engaged }); } catch (e) { this.apiError = e.message; }
+    // Stopping is instant; resuming asks first.
+    async stopAll() {
+      try {
+        this.status = await this.put('api/kill-switch', { engaged: true, reason: 'stopped from the panel' });
+        this.toast(this.t('All agents stopped'));
+      } catch (e) { this.toast(e.message, 'bad'); }
+    },
+    async resumeAll() {
+      if (!confirm(this.t('Resume the agents? They act again within their tiers and modes.'))) return;
+      try {
+        this.status = await this.put('api/kill-switch', { engaged: false });
+        this.toast(this.t('Agents resumed'));
+      } catch (e) { this.toast(e.message, 'bad'); }
     },
 
     connectStream() {
@@ -325,7 +384,7 @@ function app() {
       config.entities = config.entities || [];
       config.entities_mode = config.entities_mode || 'only';
       this.agentForm = config;
-      this.agentMsg = ''; this.agentError = ''; this.preview = null;
+      this.agentError = ''; this.preview = null;
       this.loadRoomEntities();
     },
     closeForm() { this.agentForm = null; this.loadAgents(); },
@@ -388,7 +447,7 @@ function app() {
       } catch (e) { this.previewError = e.message; }
     },
     async saveAgent() {
-      this.agentMsg = ''; this.agentError = '';
+      this.agentError = '';
       const body = this.agentPayload();
       try {
         const path = 'api/agents' + (this.agentIsNew ? '' : '/' + encodeURIComponent(body.id));
@@ -397,7 +456,7 @@ function app() {
         });
         this.agentIsNew = false;
         this.openForm(saved);
-        this.agentMsg = this.t('Saved.');
+        this.toast(this.t('Saved.'));
       } catch (e) { this.agentError = e.message; }
     },
     async deleteAgent(id) {
@@ -419,7 +478,7 @@ function app() {
     async wakeAgent(id) {
       try {
         const { run_id } = await this.post('api/agents/' + encodeURIComponent(id) + '/wake', {});
-        this.agentMsg = this.t('Woken: run') + ' ' + run_id;
+        this.toast(this.t('Woken: run') + ' ' + run_id);
         location.hash = '#runs';
         this.openRun(run_id);
       } catch (e) { this.agentError = e.message; }
@@ -430,7 +489,7 @@ function app() {
       const q = new URLSearchParams({ limit: '100' });
       if (this.runAgent) q.set('agent', this.runAgent);
       if (this.runStatus) q.set('status', this.runStatus);
-      try { this.runs = await this.api('api/runs?' + q); } catch (e) { this.runMsg = e.message; }
+      try { this.runs = await this.api('api/runs?' + q); this.runsLoaded = true; } catch (e) { this.runMsg = e.message; }
       if (this.runSel && ['queued', 'running'].includes(this.runSel.status)) this.openRun(this.runSel.id);
     },
     async openRun(id) {
@@ -439,7 +498,7 @@ function app() {
     async replayRun(id) {
       try {
         const { run_id } = await this.post('api/runs/' + encodeURIComponent(id) + '/replay', {});
-        this.runMsg = this.t('Replaying in shadow mode as') + ' ' + run_id;
+        this.toast(this.t('Replaying in shadow mode as') + ' ' + run_id);
         await this.openRun(run_id);
         this.loadRuns();
       } catch (e) { this.runMsg = e.message; }
@@ -451,14 +510,14 @@ function app() {
         const text = await response.text();
         try {
           await navigator.clipboard.writeText(text);
-          this.runMsg = this.t('Test case copied. Save it under tests/eval/cases/.');
+          this.toast(this.t('Test case copied. Save it under tests/eval/cases/.'));
         } catch (e) {
           // clipboard needs a secure context; fall back to a download
           const a = document.createElement('a');
           a.href = URL.createObjectURL(new Blob([text], { type: 'text/yaml' }));
           a.download = 'run-' + id + '.yaml';
           a.click();
-          this.runMsg = this.t('Test case downloaded.');
+          this.toast(this.t('Test case downloaded.'));
         }
       } catch (e) { this.runMsg = e.message; }
     },
@@ -469,37 +528,36 @@ function app() {
     },
     async loadFindings() {
       try { this.findings = (await this.api('api/findings')).filter((f) => f.status !== 'dismissed'); }
-      catch (e) { this.findingMsg = e.message; }
+      catch (e) { this.toast(e.message, 'bad'); }
     },
     async scanHistory() {
-      this.findingBusy = true; this.findingMsg = '';
+      this.findingBusy = true;
       try {
         const r = await this.post('api/council/scan');
-        this.findingMsg = r.changes + ' ' + this.t('changes scanned') + ', ' + r.manual + ' ' + this.t('by hand') + ', '
-          + r.findings.length + ' ' + this.t('findings');
+        this.toast(r.changes + ' ' + this.t('changes scanned') + ', ' + r.manual + ' ' + this.t('by hand') + ', '
+          + r.findings.length + ' ' + this.t('findings'));
         await this.loadFindings();
-      } catch (e) { this.findingMsg = e.message; }
+      } catch (e) { this.toast(e.message, 'bad'); }
       this.findingBusy = false;
     },
     async findingAction(f, action) {
-      this.findingMsg = '';
-      try {
-        await this.post('api/findings/' + encodeURIComponent(f.id) + '/' + action);
-        if (action === 'draft') this.findingMsg = this.t('Drafting; the proposal appears below.');
-        await this.loadFindings();
-      } catch (e) { this.findingMsg = e.message; }
+      const done = await this.withBusy(f.id, () => this.post('api/findings/' + encodeURIComponent(f.id) + '/' + action), { leave: true });
+      if (done === undefined) return;
+      this.toast(action === 'draft' ? this.t('Drafting a fix; it appears under Drafts in a moment.') : this.t('Dismissed'));
+      this.loadFindings();
     },
     openProposal(p) {
       this.proposalSel = p;
       this.proposalYaml = p.yaml;
-      this.proposalMsg = ''; this.proposalError = '';
+      this.proposalError = '';
     },
     async proposalAction(fn, done) {
-      this.proposalBusy = true; this.proposalMsg = ''; this.proposalError = '';
+      this.proposalBusy = true; this.proposalError = '';
       try {
         const result = await fn();
         if (result && result.id) this.openProposal(result);
-        this.proposalMsg = done;
+        this.toast(done);
+        this.loadAsks();
         this.loadProposals();
         this.refresh();
       } catch (e) { this.proposalError = e.message; }
@@ -521,7 +579,7 @@ function app() {
     approveProposal() {
       if (!confirm(this.t('Deploy this automation to Home Assistant? It runs on its own from then on.'))) return;
       return this.proposalAction(() => this.post('api/proposals/' + this.proposalSel.id + '/approve'),
-        this.t('Deployed. See Deployed automations.'));
+        this.t('Deployed. See Automations → Deployed.'));
     },
     rejectProposal() {
       const note = prompt(this.t('Why? (optional)')) ?? null;
@@ -551,8 +609,8 @@ function app() {
       } catch (e) { this.deployedError = e.message; }
     },
     async deployedAction(fn, done) {
-      this.deployedMsg = ''; this.deployedError = '';
-      try { await fn(); this.deployedMsg = done; } catch (e) { this.deployedError = e.message; }
+      this.deployedError = '';
+      try { await fn(); this.toast(done); } catch (e) { this.deployedError = e.message; }
       this.loadDeployed();
       this.refresh();
     },
@@ -598,11 +656,11 @@ function app() {
       const file = event.target.files[0];
       event.target.value = '';
       if (!file) return;
-      this.configMsg = ''; this.configError = '';
+      this.configError = '';
       try {
         const out = await this.api('api/config/import', { method: 'POST', headers: { 'Content-Type': 'text/yaml' }, body: await file.text() });
-        this.configMsg = this.t('Imported agents:') + ' ' + (out.agents.join(', ') || '—')
-          + (out.set_to_shadow.length ? ' · ' + this.t('set to shadow:') + ' ' + out.set_to_shadow.join(', ') : '');
+        this.toast(this.t('Imported agents:') + ' ' + (out.agents.join(', ') || '—')
+          + (out.set_to_shadow.length ? ' · ' + this.t('set to shadow:') + ' ' + out.set_to_shadow.join(', ') : ''));
         this.loadSettings();
       } catch (e) { this.configError = e.message; }
     },
@@ -612,8 +670,8 @@ function app() {
       try { this.originals = await this.api('api/migration/originals'); } catch (e) { this.migrationError = e.message; }
     },
     async migrationAction(fn, done) {
-      this.migrationMsg = ''; this.migrationError = ''; this.migrationBusy = true;
-      try { const out = await fn(); this.migrationMsg = done ? done(out) : ''; await this.loadOriginals(); }
+      this.migrationError = ''; this.migrationBusy = true;
+      try { const out = await fn(); if (done) this.toast(done(out)); await this.loadOriginals(); }
       catch (e) { this.migrationError = e.message; }
       this.migrationBusy = false;
     },
@@ -624,7 +682,7 @@ function app() {
     },
     proposeReplacement(o) {
       return this.migrationAction(() => this.post('api/migration/originals/' + encodeURIComponent(o.id) + '/propose'),
-        () => this.t('Drafting a replacement: it appears here and on the Proposals page in a moment.'));
+        () => this.t('Drafting a replacement: it appears here and under Drafts in a moment.'));
     },
     setOriginalEnabled(o, enabled) {
       if (!enabled && !confirm(this.t('Switch your own automation off in Home Assistant? You can switch it on again here.'))) {
@@ -645,14 +703,39 @@ function app() {
     async loadActions() { try { this.actions = await this.api('api/actions?limit=100'); } catch (e) { /* banner */ } },
     async loadPending() {
       try {
-        [this.pending, this.inbox] = await Promise.all([this.api('api/actions?verdict=pending'), this.api('api/inbox')]);
+        this.pending = await this.api('api/actions?verdict=pending');
       } catch (e) { /* banner */ }
     },
+    // Drafts and history findings: the other two kinds of "decisions waiting" on the overview.
+    async loadAsks() {
+      try {
+        const [drafts, findings] = await Promise.all([this.api('api/proposals?status=draft'), this.api('api/findings')]);
+        this.drafts = drafts;
+        this.findings = findings.filter((f) => f.status !== 'dismissed');
+        this.asksLoaded = true;
+      } catch (e) { /* banner */ }
+    },
+    async loadNames() {
+      try {
+        const names = {};
+        for (const e of await this.api('api/entities')) if (e.name) names[e.entity_id] = e.name;
+        this.names = names;
+      } catch (e) { /* titles fall back to entity ids */ }
+    },
     async decide(id, approve) {
-      try { await this.post('api/approvals/' + encodeURIComponent(id), { approve }); } catch (e) { this.apiError = e.message; }
+      const done = await this.withBusy(id, () => this.post('api/approvals/' + encodeURIComponent(id), { approve }), { leave: true });
+      if (done !== undefined) this.toast(approve ? this.t('Approved') : this.t('Denied'));
       this.loadPending();
       if (this.page === 'runs') this.loadActions();
     },
+    async rejectDraft(p) {
+      const done = await this.withBusy(p.id, () => this.post('api/proposals/' + p.id + '/reject', { note: 'dismissed on the overview' }), { leave: true });
+      if (done !== undefined) this.toast(this.t('Dismissed'));
+      this.loadAsks();
+    },
+    reviewDraft(p) { location.hash = '#proposals'; this.openProposal(p); },
+    get newFindings() { return this.findings.filter((f) => ['new', 'failed'].includes(f.status)); },
+    get askCount() { return this.pending.length + this.drafts.length + this.newFindings.length; },
     stepText(step) {
       const d = step.data || {};
       if (step.type === 'tool') return d.name + '(' + JSON.stringify(d.arguments || {}) + ') → ' + JSON.stringify(d.result);
@@ -681,20 +764,94 @@ function app() {
     },
     areaName(id) { const a = this.areas.find((x) => x.area_id === id); return a ? a.name : (id || '—'); },
     tierHelp(tier) { return this.t(TIER_HELP[tier] || ''); },
-    haPill() {
-      const ha = this.status && this.status.ha;
-      if (!ha) return { cls: '', text: 'HA …' };
-      if (ha.connected) return { cls: 'pill-ok', text: 'HA ' + (ha.version || this.t('connected')) };
-      return { cls: 'pill-bad', text: 'HA ' + ha.state };
+    tiersTip() { return this.t(TIERS_TIP); },
+
+    // ── readable titles: "Office radiator: set temperature 21.5" instead of climate.set_temperature ──
+    entityName(id) { return this.names[id] || (id || '').split('.').pop().replace(/_/g, ' '); },
+    callTitle(domain, service, entityIds, data) {
+      const who = (entityIds || []).map((id) => this.entityName(id)).join(', ') || domain;
+      const d = data || {};
+      const value = [['temperature', ''], ['brightness_pct', ' %'], ['position', ' %'], ['percentage', ' %'],
+        ['hvac_mode', ''], ['preset_mode', ''], ['option', ''], ['value', '']]
+        .filter(([k]) => d[k] != null).map(([k, unit]) => d[k] + unit)[0];
+      return who + ': ' + service.replace(/_/g, ' ') + (value != null ? ' ' + value : '');
+    },
+    agentName(agentId) {
+      const agent = this.agentsList.find((a) => a.id === agentId);
+      if (!agent) return agentId === 'orchestrator' ? this.t('Orchestrator') : (agentId || '');
+      return this.areaName(agent.room) !== agent.room ? this.areaName(agent.room) : agent.name;
+    },
+    actionTip(a) {
+      return a.domain + '.' + a.service + ' ' + a.entity_ids.join(', ')
+        + (Object.keys(a.data || {}).length ? '\n' + JSON.stringify(a.data) : '') + '\n' + a.tier + ' · ' + a.reason;
+    },
+    // Overview "Today": what the agents did, with a marker per outcome.
+    todayItem(e) {
+      const d = e.data || {};
+      const m = /^(\w+): (\w+)\.(\w+) (\S+)/.exec(e.summary);
+      if (m && ['action', 'approval'].includes(e.kind)) {
+        return { mark: VERDICT_MARK[m[1]] || '', tip: this.t(VERDICT_TEXT[m[1]] || m[1]) + '\n' + e.summary, text: this.callTitle(m[2], m[3], [m[4]], {}) };
+      }
+      const text = e.agent_id && e.summary.startsWith(e.agent_id + ': ') ? e.summary.slice(e.agent_id.length + 2) : e.summary;
+      if (e.kind === 'report') return { mark: d.severity === 'info' ? 'note' : 'warn', tip: this.t('Report'), text };
+      if (e.kind === 'run') return { mark: 'blocked', tip: this.t('Run') + ' ' + (d.status || ''), text };
+      return { mark: 'note', tip: e.kind, text };
+    },
+    get today() {
+      const since = new Date().setHours(0, 0, 0, 0) / 1000;
+      // successful runs are bookkeeping; a run shows up here only when it failed
+      return this.feed.filter((e) => e.ts >= since && AGENT_KINDS.includes(e.kind) && !(e.kind === 'run' && e.level !== 'warning'))
+        .map((e) => ({ ...e, view: this.todayItem(e) }));
+    },
+    todayCount(mark) { return this.today.filter((e) => (mark === 'note' ? ['note', 'warn'] : [mark]).includes(e.view.mark)).length; },
+    filteredToday() {
+      const f = this.todayFilter;
+      return this.today.filter((e) => !f || e.view.mark === f || (f === 'note' && e.view.mark === 'warn')).slice(0, 40);
+    },
+    roomLine(area) {
+      const agent = this.agentsList.find((a) => a.id === area.agent_id);
+      if (!agent) return { text: this.t('no agent yet'), live: false, agent: null };
+      const run = agent.last_run;
+      const text = !agent.enabled ? this.t('disabled') : run ? (run.summary || run.error || run.status) + ' · ' + this.ago(run.started) : this.t('no run yet');
+      return { text, live: agent.effective_mode === 'live', agent };
+    },
+
+    // ── header status ──
+    get connection() {
+      const s = this.status;
+      if (!s) return { cls: 'off', text: '…', tip: '' };
+      const ha = s.ha; const llm = s.llm || {}; const j = s.jetson || {};
+      const lines = [
+        'Home Assistant ' + (ha.version || '') + ' · ' + ha.state + ' · ' + (ha.entities ?? '—') + ' ' + this.t('entities'),
+        this.t('Local model') + ': ' + (llm.state || '—') + (llm.active_profile ? ' · ' + llm.active_profile : '')
+          + (llm.decode_tps ? ' · ' + this.num(llm.decode_tps) + ' tok/s' : ''),
+      ];
+      if (j.metrics) lines.push('Jetson ' + this.deg(j.metrics.temp_tj_c ?? j.metrics.temp_cpu_c) + ' · ' + this.mb(j.metrics.ram_used_mb) + ' / ' + this.mb(j.metrics.ram_total_mb));
+      if (s.orchestrator) lines.push(this.t('Orchestrator') + ': ' + s.orchestrator.effective);
+      const err = ha.last_error || llm.last_error;
+      if (err) lines.push(err);
+      const tip = lines.join('\n');
+      if (!ha.connected) return { cls: 'bad', text: 'Home Assistant ' + ha.state, tip };
+      if (['unreachable', 'degraded'].includes(llm.state)) return { cls: 'bad', text: this.t('Model') + ' ' + llm.state, tip };
+      if (llm.state === 'warming') return { cls: 'warn', text: this.t('Model warming up'), tip };
+      return { cls: '', text: this.t('Connected'), tip };
+    },
+    get modeTip() {
+      const live = this.agentsList.filter((a) => a.effective_mode === 'live').length;
+      return this.status?.mode === 'live'
+        ? this.t('Live: agents whose own mode is live may act within their tiers.') + '\n' + live + ' ' + this.t('of') + ' ' + this.agentsList.length + ' ' + this.t('agents live')
+        : this.t('Shadow: agents only observe and log what they would do. Nothing is switched.');
     },
     llmDot() {
       const state = this.status && this.status.llm && this.status.llm.state;
-      if (state === 'ok') return 'ok';
+      if (state === 'ok') return '';
       if (state === 'warming' || state === 'busy') return 'warn';
       if (state === 'unconfigured' || !state) return 'off';
       return 'bad';
     },
     clock(ts) { return ts ? new Date(ts * 1000).toLocaleTimeString() : ''; },
+    hm(ts) { return ts ? new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; },
+    findingKind(kind) { return this.t({ habit: 'Habit', undo: 'Undone automation', conflict: 'Conflict' }[kind] || kind); },
     ago(ts) {
       if (!ts) return '—';
       const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
@@ -711,3 +868,33 @@ function app() {
 }
 
 window.app = app;
+
+// ── tooltips: any element with data-tip. Hover, keyboard focus, or a tap on an .info button.
+// Positioned with fixed coordinates so cards and tables never clip it.
+(() => {
+  let tip = null;
+  let owner = null;
+  const show = (el) => {
+    tip = tip || document.getElementById('tip');
+    if (!tip || !el.dataset.tip) return;
+    owner = el;
+    tip.textContent = el.dataset.tip;
+    tip.hidden = false;
+    const r = el.getBoundingClientRect();
+    const x = Math.max(8, Math.min(r.left + r.width / 2 - tip.offsetWidth / 2, innerWidth - tip.offsetWidth - 8));
+    const above = r.top - tip.offsetHeight - 8;
+    tip.style.left = x + 'px';
+    tip.style.top = (above < 8 ? r.bottom + 8 : above) + 'px';
+    requestAnimationFrame(() => tip.classList.add('on'));
+  };
+  const hide = () => { owner = null; if (tip) { tip.classList.remove('on'); tip.hidden = true; } };
+  document.addEventListener('pointerover', (e) => { const el = e.target.closest('[data-tip]'); if (el && el !== owner) show(el); });
+  document.addEventListener('pointerout', (e) => { if (owner && !owner.contains(e.relatedTarget)) hide(); });
+  document.addEventListener('focusin', (e) => { const el = e.target.closest('[data-tip]'); if (el) show(el); });
+  document.addEventListener('focusout', hide);
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('.info[data-tip]');
+    if (el) { e.preventDefault(); if (owner === el) hide(); else show(el); }
+  });
+  addEventListener('scroll', hide, true);
+})();

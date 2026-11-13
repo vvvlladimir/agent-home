@@ -207,6 +207,12 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    sensor or time and the count; **Draft** one: a proposal appears with `Evidence:` in its rationale.
    Note in `owner-reports/m5/README.md` which habits were real and which were noise (the thresholds
    `habit_days` / `habit_min_repeats` are in Settings).
+9. **New GUI** (`[UNVERIFIED-ON-HW]`: tested only in Chromium against `make sim`). Open the panel in
+   the HA sidebar on a computer and in the Companion app on the phone. Check: the six tabs scroll on
+   the phone; hovering (computer) or tapping the ⓘ buttons (phone) shows a tooltip that is not cut
+   off by the HA frame; **Stop all** stops at once and **Resume…** asks; dark mode follows HA's
+   theme or the ◐ button. Habit finder moved to **Automations → Drafts → Found in the history →
+   Scan**. Screenshot the Overview on both and put them in `owner-reports/m5/`.
 
 ## Unverified facts to watch for (from RESEARCH.md)
 

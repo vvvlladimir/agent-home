@@ -76,6 +76,7 @@ steps are written down in `OWNER_CHECKLIST.md`.
       a sensor or a time of day (e.g. desk lamp switched on by hand when radar zone 1 turns on);
       only candidates with enough repeats go to the orchestrator, which drafts a proposal with evidence
       → `core/insights.py`, `Review.draft`, findings on the Proposals page, D20
+- [x] GUI redesign: six tabs, overview with decisions / rooms / today, tooltips instead of help text → `app/web/static/*`, D21
 - [ ] Daily house review: the orchestrator once a day reads agent reports, the inbox and a history
       summary; proposes new automations, fixes for weak ones, and settles conflicts between rooms
       (one proposal per conflict, never two automations fighting over one entity)

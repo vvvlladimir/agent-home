@@ -14,7 +14,7 @@ markers = ["realha: integration test against a real headless Home Assistant Core
 [tool.ruff]
 line-length = 110
 target-version = "py312"
-extend-exclude = ["agent_house/app/web/static/vendor"]
+extend-exclude = ["agent_house/app/web/static/vendor", ".claude/skills"]  # vendored code
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC"]
