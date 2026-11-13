@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from .actuator import new_id
-from .agents import is_noise
+from .agents import is_noise, is_room_sensor
 from .lifecycle import LifecycleError
 from .llm import LLMError, Priority
 from .policy import READ_ONLY_DOMAINS, resolve_tier
@@ -54,8 +54,13 @@ FALLBACK_MODELS = frozenset({"claude-opus-5-5", "claude-sonnet-5-5", "claude-fab
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOKENS = 2048
 OPENAI_MAX_TOKENS = 4096  # includes reasoning tokens on the GPT-6 models
-MAX_TURNS = 4
-MAX_ENTITY_LINES = 80
+MAX_TURNS = 6
+MAX_ENTITY_LINES = 60
+FIND_LIMIT = 25
+SEARCH_FIRST = (
+    "Search with find_entities first (English words, e.g. 'occupancy', 'zone', 'desk'); "
+    "decline only if nothing fits."
+)
 MAX_QUEUED_DRAFTS = 3
 MAX_AGENT_DRAFTS_PER_DAY = 3  # per room agent; the owner's own requests are not capped
 
@@ -63,6 +68,9 @@ SYSTEM = """You are the orchestrator of Agent House, an assistant that writes Ho
 automations for the owner of a smart home. The owner reviews every automation before it runs.
 
 How to answer:
+- The request lists some entities, not all. Use find_entities (English words such as occupancy,
+  zone, desk, lamp, temperature, or an area) to find the sensors and devices you need. Never decline
+  because an entity is missing from the list before you have searched for it.
 - Call submit_automation with one automation in YAML. You get the result of the safety checks;
   if a check failed, fix the YAML and call submit_automation again.
 - If the request cannot be done safely or with the listed entities, call decline with the reason.
@@ -80,6 +88,19 @@ YAML rules:
 - Keep it as small as the request allows."""
 
 TOOLS = [
+    {
+        "name": "find_entities",
+        "description": "Search the home's entities by words in their id, name, area or device class. "
+        "Returns up to 25 matches with area, tier and state.",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "space-separated words, all must match, e.g. 'zone occupancy'",
+            },
+            "area": {"type": "string", "description": "area id to search in, or empty for the whole home"},
+        },
+        "required": ["query", "area"],
+    },
     {
         "name": "submit_automation",
         "description": "Submit one Home Assistant automation for the owner's review.",
@@ -607,36 +628,74 @@ class Orchestrator:
         }
 
     # --- drafting ---------------------------------------------------------------------------
-    def entity_lines(self, request: str, room: str | None) -> list[str]:
-        """The entities the model may use: the room's (or the house's), most relevant first."""
+    def _candidates(self, room: str | None):
+        """(entity_id, area, name, tier, state, device_class) the orchestrator may use."""
         policy = self.safety.policy
-        words = {w for w in request.lower().replace(".", " ").replace("_", " ").split() if len(w) > 2}
-        rows = []
+        services = policy.get("allowed_services") or {}
         for entity_id, state in self.ha.states.items():
             area = self.ha.registry.area_of(entity_id)
             if area is None or (room and area != room) or is_noise(self.ha, entity_id):
                 continue
-            if self.ha.registry.is_hidden(entity_id) or self.ha.registry.entity_meta.get(entity_id, {}).get(
-                "entity_category"
-            ):
+            meta = self.ha.registry.entity_meta.get(entity_id, {})
+            if self.ha.registry.is_hidden(entity_id) or meta.get("entity_category"):
                 continue
             domain = entity_id.split(".", 1)[0]
-            tier = resolve_tier(entity_id, policy)
-            if domain not in READ_ONLY_DOMAINS and domain not in (policy.get("allowed_services") or {}):
+            if domain not in READ_ONLY_DOMAINS and domain not in services:
                 continue
-            name = str((state.get("attributes") or {}).get("friendly_name") or "")
-            haystack = f"{entity_id} {name} {area}".lower().replace("_", " ")
+            attrs = state.get("attributes") or {}
+            name = str(attrs.get("friendly_name") or meta.get("name") or meta.get("original_name") or "")
+            device_class = attrs.get("device_class") or meta.get("original_device_class") or ""
+            yield entity_id, area, name, resolve_tier(entity_id, policy), state.get("state"), device_class
+
+    @staticmethod
+    def _line(entity_id, area, name, tier, state, device_class) -> str:
+        kind = f", {device_class}" if device_class else ""
+        return f"- {entity_id} ({name[:40]}, {area}{kind}) [{tier}] = {state}"
+
+    def entity_lines(self, request: str, room: str | None) -> list[str]:
+        """A first look for the model: entities matching the request's words, then room sensors
+        (motion, occupancy, …), then devices it may act on. Read-only sensors are T3 by policy but
+        are exactly what triggers need, so they are not ranked down. The rest: find_entities."""
+        words = {w for w in request.lower().replace(".", " ").replace("_", " ").split() if len(w) > 2}
+        rows = []
+        for row in self._candidates(room):
+            entity_id, area, name, tier, state, device_class = row
+            haystack = f"{entity_id} {name} {area} {device_class}".lower().replace("_", " ")
             score = sum(w in haystack for w in words)
-            rows.append(
-                (
-                    -score,
-                    tier == "T3",
-                    entity_id,
-                    f"- {entity_id} ({name[:40]}, {area}) [{tier}] = {state.get('state')}",
-                )
-            )
+            domain = entity_id.split(".", 1)[0]
+            if domain in READ_ONLY_DOMAINS:
+                group = 1 if is_room_sensor(self.ha, entity_id) else 3
+            else:
+                group = 0 if tier != "T3" else 4
+            unavailable = str(state) in ("unavailable", "unknown")
+            rows.append((-score, unavailable, group, entity_id, self._line(*row)))
         rows.sort()
-        return [line for *_, line in rows[:MAX_ENTITY_LINES]]
+        # matches first; then a fixed share for room sensors (triggers need them), then devices
+        picked = [r for r in rows if r[0] < 0][:MAX_ENTITY_LINES]
+        rest = [r for r in rows if r[0] == 0]
+        sensors = [r for r in rest if r[2] == 1][: MAX_ENTITY_LINES // 2]
+        picked += sensors
+        picked += [r for r in rest if r not in sensors][: max(0, MAX_ENTITY_LINES - len(picked))]
+        picked = picked[:MAX_ENTITY_LINES]
+        lines = [line for *_, line in sorted(picked, key=lambda r: (r[0], r[1], r[2], r[3]))]
+        if len(rows) > MAX_ENTITY_LINES:
+            lines.append(f"({len(rows) - MAX_ENTITY_LINES} more: use find_entities)")
+        return lines
+
+    def find_entities(self, query: str, area: str | None) -> str:
+        words = [w for w in str(query or "").lower().replace("_", " ").replace(".", " ").split() if w]
+        matches = []
+        for row in self._candidates(area or None):
+            entity_id, row_area, name, _tier, _state, device_class = row
+            haystack = f"{entity_id} {name} {row_area} {device_class}".lower().replace("_", " ")
+            if all(w in haystack for w in words):
+                matches.append(self._line(*row))
+        matches.sort()
+        if not matches:
+            areas = ", ".join(sorted(self.ha.registry.areas)) or "none"
+            return f"No entity matches {query!r}. Try fewer or other English words. Areas: {areas}"
+        more = f"\n({len(matches) - FIND_LIMIT} more: add a word)" if len(matches) > FIND_LIMIT else ""
+        return "\n".join(matches[:FIND_LIMIT]) + more
 
     def _system(self) -> str:
         services = self.safety.policy.get("allowed_services") or {}
@@ -662,7 +721,8 @@ class Orchestrator:
         if ha_id:
             deployed = self.lifecycle.get_deployed(ha_id)
             current = "\n\nChange this deployed automation:\n" + deployed["versions"][0]["yaml"]
-        user = f"Request: {request}{current}\n\nEntities (id, name, area, tier, state):\n" + (
+        areas = ", ".join(sorted(self.ha.registry.areas)) or "none"
+        user = f"Request: {request}{current}\n\nAreas: {areas}\nEntities (id, name, area, tier, state):\n" + (
             "\n".join(lines) or "(none)"
         )
         transcript: list[dict] = [{"role": "user", "text": user}]
@@ -670,6 +730,7 @@ class Orchestrator:
         trace.step("context", {"system": self._system(), "user": user, "entities": len(lines)})
         redactor = Redactor.for_home(self.ha)
         proposal = None
+        searched, pushed_back = 0, False
         try:
             for _ in range(MAX_TURNS):
                 turn = await self.turn(self._system(), transcript, TOOLS, priority, redactor)
@@ -689,6 +750,32 @@ class Orchestrator:
                     continue
                 results, done = [], False
                 for call in turn.calls:
+                    if not call.get("error") and call["name"] == "find_entities":
+                        searched += 1
+                        args = call["input"]
+                        found = self.find_entities(
+                            str(args.get("query") or ""), str(args.get("area") or "") or None
+                        )
+                        trace.step(
+                            "tool", {"name": "find_entities", "arguments": args, "result": found[:2000]}
+                        )
+                        results.append({"id": call["id"], "content": found})
+                        continue
+                    if (
+                        not call.get("error")
+                        and call["name"] == "decline"
+                        and not searched
+                        and not pushed_back
+                    ):
+                        pushed_back = True  # small models give up on the first list; make them look once
+                        results.append(
+                            {
+                                "id": call["id"],
+                                "content": SEARCH_FIRST,
+                                "is_error": True,
+                            }
+                        )
+                        continue
                     if call.get("error") or call["name"] not in ("submit_automation", "decline"):
                         results.append(
                             {

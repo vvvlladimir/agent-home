@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-dev.9 — the orchestrator finds your sensors
+
+- Fixed: drafts were declined with "there is no sensor for that" although it exists. The model saw
+  only 80 entities, and every sensor was ranked behind all devices, so radar zones never made the
+  list. Now half of the first look is reserved for room sensors (motion, occupancy, …), and the
+  model has a `find_entities` search; it must search before it may decline.
+
 ## 0.1.0-dev.8 — OpenAI as a second cloud
 
 - New options `openai_api_key` and `openai_model` (default `gpt-6.1-sol`, priced like Claude

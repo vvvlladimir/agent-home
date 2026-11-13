@@ -175,7 +175,9 @@ def test_the_local_model_drafts_and_fixes_its_draft(base, llm_sim, ha_state):
     proposal = response.json()
     assert proposal["status"] == "draft" and proposal["title"] == "Lamp on motion"
     first_prompt = llm_sim.requests[0]["body"] if "body" in llm_sim.requests[0] else llm_sim.requests[0]
-    assert "light.living_room_lamp" in str(first_prompt) and "kitchen" not in str(first_prompt["messages"][1])
+    assert "light.living_room_lamp" in str(first_prompt) and "light.kitchen" not in str(
+        first_prompt["messages"][1]
+    )
     assert "lock.front_door" not in str(first_prompt["messages"][1]), "only the room's entities"
     run = httpx.get(f"{base}/api/runs/{proposal['run_id']}").json()
     assert run["agent_id"] == "orchestrator" and run["provider"] == "local" and run["status"] == "ok"
@@ -232,14 +234,13 @@ def test_auto_falls_back_to_the_cloud_when_the_local_model_fails(settings, cloud
                 anthropic_base_url=cloud.url)  # fmt: skip
     try:
         llm_sim.script[:] = [{"status": 500}] * 6
-        cloud.sim.script[:] = [
-            {"tool_use": [{"name": "decline", "input": {"reason": "no lamp in that room"}}]}
-        ]
+        decline = {"tool_use": [{"name": "decline", "input": {"reason": "no lamp in that room"}}]}
+        cloud.sim.script[:] = [decline, decline]  # the first decline is sent back: "search first"
         response = httpx.post(
             f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60
         )
         assert response.status_code == 422 and "no lamp" in response.json()["detail"]
-        assert len(cloud.sim.requests) == 1
+        assert len(cloud.sim.requests) == 2
     finally:
         app.close()
 
@@ -311,12 +312,29 @@ def test_auto_skips_clouds_without_a_key_and_uses_openai(settings, openai_cloud,
                 openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
     try:
         llm_sim.script[:] = [{"status": 500}] * 6
-        openai_cloud.sim.script[:] = [
-            {"function_calls": [{"name": "decline", "arguments": {"reason": "no attic"}}]}
-        ]
+        decline = {"function_calls": [{"name": "decline", "arguments": {"reason": "no attic"}}]}
+        openai_cloud.sim.script[:] = [decline, decline]
         response = httpx.post(
             f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60
         )
         assert response.status_code == 422 and "no attic" in response.json()["detail"]
     finally:
         app.close()
+
+
+def test_the_orchestrator_searches_before_it_may_decline(base, llm_sim):
+    """Owner, 2026-11-13: "lamp at my desk" was declined twice ("no sensor for sitting at the desk")
+    because every binary_sensor was T3 and sorted behind 80 devices; the radar zones were never shown."""
+    decline = {"tool_calls": [{"name": "decline", "arguments": {"reason": "no desk sensor"}}]}
+    search = {"tool_calls": [{"name": "find_entities", "arguments": {"query": "motion", "area": ""}}]}
+    llm_sim.script[:] = [decline, search, decline]
+    response = httpx.post(
+        f"{base}/api/proposals", json={"request": "Лампа над столом, когда я за столом"}, timeout=30
+    )
+    assert response.status_code == 422
+    tools = [m["content"] for m in llm_sim.requests[2]["messages"] if m.get("role") == "tool"]
+    assert "Search with find_entities first" in tools[0], "the first decline is sent back"
+    assert "binary_sensor.living_room_motion" in tools[1], "the search finds sensors"
+    run = httpx.get(f"{base}/api/runs", params={"agent": "orchestrator"}).json()[0]
+    trace = httpx.get(f"{base}/api/runs/{run['id']}").json()["trace"]
+    assert [s["data"]["name"] for s in trace if s["type"] == "tool"] == ["find_entities"]

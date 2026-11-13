@@ -114,3 +114,20 @@ async def test_a_room_agent_cannot_start_unlimited_drafts(tmp_path):
     assert s.orch.request_draft("room", None, "lamp on at motion", "room") is False
     assert s.orch.request_draft("other", None, "lamp on at motion", "room") is True
     await s.orch.stop()
+
+
+def test_the_orchestrators_first_look_shows_room_sensors_and_search_finds_the_rest(tmp_path):
+    s = stack(tmp_path)
+    for n in range(90):
+        s.ha.add(f"light.filler_{n:02d}", "off", area="room")
+    s.ha.add("binary_sensor.esphome_radar_livingroom_zone_1_occupancy", "on", area="room")
+    s.ha.states["binary_sensor.esphome_radar_livingroom_zone_1_occupancy"]["attributes"] = {
+        "device_class": "occupancy"
+    }
+    lines = s.orch.entity_lines("Когда я сижу за столом, лампа горит", None)
+    assert any("zone_1_occupancy" in line for line in lines), "room sensors are not buried behind devices"
+    assert sum(line.startswith("- light.") for line in lines) >= 25, "devices still get their share"
+    assert lines[-1].startswith("(") and "find_entities" in lines[-1]
+    found = s.orch.find_entities("zone occupancy", "room")
+    assert "binary_sensor.esphome_radar_livingroom_zone_1_occupancy" in found and "occupancy" in found
+    assert "No entity matches" in s.orch.find_entities("unicorn", None)
