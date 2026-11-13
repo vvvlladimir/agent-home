@@ -57,7 +57,7 @@ const lang = computed({ get: () => state.lang, set: (l) => setLang(l) });
 const FIELDS: { key: string; label: string; type?: string; min?: number; max?: number; step?: number; placeholder?: string }[] = [
   { key: 'llm_timeout_s', label: 'Timeout per request (s)', min: 5, max: 900 },
   { key: 'llm_max_retries', label: 'Retries', min: 0, max: 5 },
-  { key: 'llm_stale_after_s', label: 'Drop queued wakes after (s)', min: 1, max: 3600 },
+  { key: 'llm_stale_after_s', label: 'Drop stale wakes (s)', min: 1, max: 3600 },
   { key: 'llm_max_queue', label: 'Queue length', min: 1, max: 100 },
   { key: 'llm_presence_penalty', label: 'Presence penalty', min: 0, max: 2, step: 0.1, placeholder: 'profile' },
   { key: 'daily_review_at', label: 'Daily review at', type: 'text', placeholder: '04:30' },
@@ -105,6 +105,20 @@ onActivated(load);
       </div>
 
       <div class="stack">
+        <article class="card stack">
+          <h2>{{ t('Orchestrator') }} <Info :tip="t('The orchestrator owns the house mode helper. In shadow it only logs what it would switch.')" /></h2>
+          <form class="stack" @submit.prevent="save">
+            <div class="row">
+              <Seg v-model="form.orchestrator_mode" :options="MODES" :label="t('Orchestrator mode')" />
+              <label class="field check"><input type="checkbox" :checked="form.auto_house_mode === 'true'"
+                @change="form.auto_house_mode = ($event.target as HTMLInputElement).checked ? 'true' : 'false'" /> <span>{{ t('Switches the house mode itself') }}</span></label>
+            </div>
+            <div class="fields">
+              <label class="field"><span>{{ t('Night window') }}</span><input v-model="form.night_window" type="text" class="mono" placeholder="23:00-06:00" /></label>
+            </div>
+            <div class="row"><button class="btn primary" type="submit">{{ t('Save') }}</button><p v-if="error" class="error">{{ error }}</p></div>
+          </form>
+        </article>
         <article class="card stack">
           <h2>{{ t('Local model requests') }} <Info :tip="t('Stored in /data/settings.yaml. Empty = default.')" /></h2>
           <form class="stack" @submit.prevent="save">

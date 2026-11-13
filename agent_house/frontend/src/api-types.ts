@@ -1107,6 +1107,8 @@ export interface components {
             /** @description agent_house_<slug>; set at creation, used at deploy */
             ha_id?: string | null;
             replaces_original?: string | null;
+            /** @description Other deployed automations of ours this proposal replaces (never the owner's, never its own ha_id). Approving disables each of them first (reversible from the Deployed page); set only on drafts of the owner or the orchestrator (a settled conflict between two of ours). */
+            supersedes?: string[];
             /** @description unified diff against the currently deployed version (or against nothing) */
             diff?: string | null;
             checks?: {
@@ -1180,6 +1182,16 @@ export interface components {
                 };
             };
             board: components["schemas"]["BoardEntry"][];
+            /** @description The fixed rules that wake the orchestrator, with the last time each fired. */
+            orchestrator_wakes: {
+                /** @enum {string} */
+                id: "house_mode" | "person" | "daily_review" | "escalation";
+                rule: string;
+                /** @description false: the rule is switched off (auto_house_mode off, no daily_review_at) */
+                active: boolean;
+                /** @description epoch seconds of the last time it fired */
+                last: number | null;
+            }[];
             review: {
                 at?: string | null;
                 running?: boolean;

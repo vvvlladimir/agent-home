@@ -4,7 +4,7 @@ import { computed, ref } from 'vue';
 export const TABS = [
   { id: 'overview', label: 'Overview', pages: ['overview'] },
   { id: 'activity', label: 'Activity', pages: ['feed', 'runs'] },
-  { id: 'rooms', label: 'Rooms', pages: ['agents'] },
+  { id: 'rooms', label: 'Rooms', pages: ['agents', 'council'] },
   { id: 'automations', label: 'Automations', pages: ['proposals', 'automations', 'migration'] },
   { id: 'chat', label: 'Chat', pages: ['chat'] },
   { id: 'settings', label: 'Settings', pages: ['settings', 'models', 'logs'] },
@@ -13,7 +13,7 @@ export const TABS = [
 export type Page = (typeof TABS)[number]['pages'][number];
 
 export const PAGE_LABELS: Partial<Record<Page, string>> = {
-  feed: 'Live feed', runs: 'Runs', proposals: 'Drafts', automations: 'Deployed', migration: 'Your automations',
+  feed: 'Live feed', runs: 'Runs', agents: 'Room agents', council: 'Council', proposals: 'Drafts', automations: 'Deployed', migration: 'Your automations',
   settings: 'General', models: 'Models', logs: 'Logs',
 };
 const ALIASES: Record<string, Page> = { dashboard: 'overview', activity: 'feed', rooms: 'agents' };

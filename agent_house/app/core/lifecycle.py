@@ -16,6 +16,13 @@ Ownership (M5 council): a draft a room agent asked for may act only on entities 
 (`owner_of`); drafts of the owner and the orchestrator may act on any entity. Other automations of
 ours that act on the same entities are named in the policy notes, so the owner sees a possible fight.
 
+Supersedes (M5 council): a proposal of the owner or the orchestrator may name other automations
+of ours (`agent_house_` ids, deployed, never its own id) that it replaces. Approving it disables
+each of them through `set_enabled(False)` before the new config is written, so two of ours never
+fight over one entity; if the write then fails, the ones disabled here are enabled again. The
+owner turns any of them back on from the Deployed page. Room agents cannot supersede, and nothing
+of the owner's (automations, scripts) can ever be named: `guard_ours` refuses it.
+
 Approving a proposal counts as the owner's approval for its T2 entities (a human reviewed the
 whole automation); T3 can never be deployed. The kill switch blocks approve, rollback and
 enable; removing or disabling one of our automations stays possible (it only makes things safer).
@@ -113,11 +120,11 @@ class Lifecycle:
 
     # --- checks -----------------------------------------------------------------------------
     def parse(
-        self, text: str, origin: str | None = None, ha_id: str | None = None
+        self, text: str, origin: str | None = None, ha_id: str | None = None, supersedes=()
     ) -> tuple[dict | None, list[dict]]:
         """(normalized config or None, [yaml, schema, policy] checks). `origin`: the room agent that
         asked for it (ownership); `ha_id`: the automation it would become (excluded from the
-        "also acted on by" note)."""
+        "also acted on by" note); `supersedes`: ours it disables on approval (named in the notes)."""
         try:
             loaded = yaml.safe_load(text)
         except yaml.YAMLError as err:
@@ -133,7 +140,7 @@ class Lifecycle:
         problems = self._schema(config)
         checks.append({"name": "schema", "ok": not problems, "detail": "; ".join(problems) or None})
         problems, notes = (
-            self._policy(config, origin, ha_id) if not problems else (["schema errors first"], [])
+            self._policy(config, origin, ha_id, supersedes) if not problems else (["schema errors first"], [])
         )
         checks.append(
             {"name": "policy", "ok": not problems, "detail": "; ".join(problems or notes)[:600] or None}
@@ -160,7 +167,7 @@ class Lifecycle:
             problems.append(f"mode must be one of {', '.join(sorted(MODES))}")
         return problems
 
-    def _policy(self, config: dict, origin: str | None = None, ha_id: str | None = None):
+    def _policy(self, config: dict, origin: str | None = None, ha_id: str | None = None, supersedes=()):
         """(problems that block the proposal, notes for the owner)."""
         problems: list[str] = []
         tiers: dict[str, str] = {}
@@ -174,7 +181,13 @@ class Lifecycle:
                 if owner != origin:
                     problems.append(f"{entity_id} is owned by {owner or 'nobody'}, not by {origin}")
         notes = []
-        others = self.acting_on(set(tiers), exclude=ha_id)
+        if supersedes:
+            notes.append(f"supersedes (disabled on approval): {', '.join(supersedes)}")
+        others = {
+            entity_id: kept
+            for entity_id, ids in self.acting_on(set(tiers), exclude=ha_id).items()
+            if (kept := [i for i in ids if i not in supersedes])
+        }
         if others:
             notes.append(
                 "also acted on by " + ", ".join(f"{e} ({', '.join(ids)})" for e, ids in others.items())
@@ -302,9 +315,9 @@ class Lifecycle:
         return out
 
     async def check(
-        self, text: str, origin: str | None = None, ha_id: str | None = None
+        self, text: str, origin: str | None = None, ha_id: str | None = None, supersedes=()
     ) -> tuple[dict | None, list[dict]]:
-        config, checks = self.parse(text, origin, ha_id)
+        config, checks = self.parse(text, origin, ha_id, supersedes)
         if config is not None and all(c["ok"] for c in checks):
             checks.append(await self._ha_check(config))
         else:
@@ -315,6 +328,7 @@ class Lifecycle:
     def _row(self, row: dict) -> dict:
         out = {**row, "checks": json.loads(row["checks"] or "[]")}
         out["evidence"] = json.loads(row["evidence"]) if row.get("evidence") else None
+        out["supersedes"] = json.loads(row.get("supersedes") or "[]")
         out["diff"] = self._diff(row["ha_id"], row["yaml"]) if row["status"] in OPEN else None
         out.pop("updated", None)
         return out
@@ -379,16 +393,19 @@ class Lifecycle:
         run_id: str | None = None,
         ha_id: str | None = None,
         replaces_original: str | None = None,
+        supersedes: list[str] | None = None,
     ) -> dict:
         """A new draft. `ha_id` = one of our deployed automations to change; else a new id.
-        `replaces_original` = the id of an imported original this draft is meant to replace."""
-        config, checks = await self.check(text, origin_agent, ha_id)
-        title = (title or (config or {}).get("alias") or "Untitled automation").strip()[:120]
+        `replaces_original` = the id of an imported original this draft is meant to replace.
+        `supersedes` = other deployed automations of ours it replaces (disabled on approval)."""
         if ha_id is not None:
             guard_ours(ha_id)
             if not self._deployed(ha_id):
                 raise LifecycleError("not_found", f"{ha_id} is not one of our deployed automations")
-        else:
+        supersedes = self._superseded(supersedes, origin_agent, ha_id)
+        config, checks = await self.check(text, origin_agent, ha_id, supersedes)
+        title = (title or (config or {}).get("alias") or "Untitled automation").strip()[:120]
+        if ha_id is None:
             ha_id = self._new_ha_id(title)
         now = time.time()
         proposal = {
@@ -405,12 +422,13 @@ class Lifecycle:
             "ha_id": ha_id,
             "replaces_original": replaces_original,
             "checks": json.dumps(checks),
+            "supersedes": json.dumps(supersedes),
         }
         self.store.execute(
             "INSERT INTO proposals (id, created, updated, status, title, yaml, rationale, expected_triggers, "
-            "origin_agent, run_id, ha_id, replaces_original, checks) VALUES (:id, :created, :updated, "
-            ":status, :title, :yaml, :rationale, :expected_triggers, :origin_agent, :run_id, :ha_id, "
-            ":replaces_original, :checks)",
+            "origin_agent, run_id, ha_id, replaces_original, checks, supersedes) VALUES (:id, :created, "
+            ":updated, :status, :title, :yaml, :rationale, :expected_triggers, :origin_agent, :run_id, "
+            ":ha_id, :replaces_original, :checks, :supersedes)",
             proposal,
         )
         self.feed.add(
@@ -423,6 +441,23 @@ class Lifecycle:
         )
         return self.get(proposal["id"])
 
+    def _superseded(self, ids, origin: str | None, ha_id: str | None) -> list[str]:
+        """Validate `supersedes`: deployed automations of ours only, never the proposal's own id,
+        and only on drafts of the owner or the orchestrator (a room agent cannot switch off another
+        automation). Raises NotOurs for anything that is not an `agent_house_` id."""
+        out: list[str] = []
+        for sid in ids or []:
+            guard_ours(sid)
+            if sid == ha_id:
+                raise LifecycleError("conflict", f"a proposal cannot supersede its own automation {sid}")
+            if not self._deployed(sid):
+                raise LifecycleError("not_found", f"{sid} is not one of our deployed automations")
+            if sid not in out:
+                out.append(sid)
+        if out and origin not in (None, "orchestrator"):
+            raise LifecycleError("conflict", f"{origin} cannot supersede automations; the orchestrator can")
+        return out
+
     def _open(self, proposal_id: str) -> dict:
         proposal = self.get(proposal_id)
         if proposal["status"] not in OPEN:
@@ -431,7 +466,9 @@ class Lifecycle:
 
     async def edit(self, proposal_id: str, text: str) -> dict:
         proposal = self._open(proposal_id)
-        config, checks = await self.check(text, proposal["origin_agent"], proposal["ha_id"])
+        config, checks = await self.check(
+            text, proposal["origin_agent"], proposal["ha_id"], proposal["supersedes"]
+        )
         self.store.execute(
             "UPDATE proposals SET yaml=?, checks=?, status=?, evidence=NULL, updated=? WHERE id=?",
             (
@@ -518,20 +555,36 @@ class Lifecycle:
         )
         if claimed.rowcount != 1:
             raise LifecycleError("conflict", "the proposal is already being approved")
+        disabled: list[str] = []
         try:
             # Policy, entities or HA may have changed since the draft: check again, as of now.
-            config, checks = await self.check(proposal["yaml"], proposal["origin_agent"], proposal["ha_id"])
+            config, checks = await self.check(
+                proposal["yaml"], proposal["origin_agent"], proposal["ha_id"], proposal["supersedes"]
+            )
             if config is None or not all(c["ok"] for c in checks):
                 self.store.execute(
                     "UPDATE proposals SET status='blocked', checks=? WHERE id=?",
                     (json.dumps(checks), proposal_id),
                 )
                 raise LifecycleError("blocked", "a check failed on approval; nothing was deployed")
+            # The ones it supersedes go off first: if that fails, nothing is deployed.
+            for sid in proposal["supersedes"]:
+                guard_ours(sid)
+                current = self._deployed(sid)
+                if current is None or not self.get_deployed(sid)["enabled"]:
+                    continue  # removed or already off: nothing acts any more
+                await self.set_enabled(sid, False, why=f"superseded by proposal {proposal_id}")
+                disabled.append(sid)
             await self._write(proposal["ha_id"], config, f"proposal {proposal_id}")
         except BaseException:
             self.store.execute(
                 "UPDATE proposals SET status='draft' WHERE id=? AND status='approved'", (proposal_id,)
             )
+            for sid in disabled:  # undo our own step; refused under the kill switch (stays off: safer)
+                try:
+                    await self.set_enabled(sid, True, why=f"approval of {proposal_id} failed")
+                except LifecycleError as err:
+                    log.warning("could not enable %s again: %s", sid, err)
             raise
         previous = self._deployed(proposal["ha_id"])
         version = self._record(
@@ -639,8 +692,8 @@ class Lifecycle:
         self.store.execute("UPDATE deployed SET removed=1 WHERE ha_id=?", (ha_id,))
         self.feed.add("deploy", f"Removed {ha_id} from Home Assistant (versions kept)", level="warning")
 
-    async def set_enabled(self, ha_id: str, enabled: bool) -> dict:
-        self.get_deployed(ha_id)
+    async def set_enabled(self, ha_id: str, enabled: bool, why: str | None = None) -> dict:
+        self.get_deployed(ha_id)  # ours and deployed; the HA client refuses any other id as well
         if enabled:
             self._no_kill("enabling automations")
         try:
@@ -648,7 +701,9 @@ class Lifecycle:
         except HAError as err:
             raise LifecycleError("ha_error", f"Home Assistant: {err}"[:400]) from err
         self.store.execute("UPDATE deployed SET enabled=? WHERE ha_id=?", (int(enabled), ha_id))
-        self.feed.add("deploy", f"{'Enabled' if enabled else 'Disabled'} {ha_id}", level="info")
+        reason = f" ({why})" if why else ""
+        self.feed.add("deploy", f"{'Enabled' if enabled else 'Disabled'} {ha_id}{reason}", level="info",
+                      data={"ha_id": ha_id, "enabled": enabled})  # fmt: skip
         return self.get_deployed(ha_id)
 
 

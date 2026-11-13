@@ -59,7 +59,7 @@ onActivated(() => {
     <template v-else>
       <div class="sec">
         <div class="sec-h">
-          <h2>{{ t('Room agents') }}</h2>
+          <span class="muted small">{{ state.agents.length }} {{ t('agents') }}</span>
           <div class="row">
             <Info :tip="t('A room agent watches one room. It starts in shadow mode: it only logs what it would do until you set it live.')" />
             <button class="btn primary" @click="editing = ''"><Icon name="plus" /><span>{{ t('New room agent') }}</span></button>

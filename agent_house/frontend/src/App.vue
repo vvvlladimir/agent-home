@@ -17,6 +17,7 @@ const PAGES: Record<Page, Component> = {
   feed: lazy(() => import('./pages/FeedPage.vue')),
   runs: lazy(() => import('./pages/RunsPage.vue')),
   agents: lazy(() => import('./pages/RoomsPage.vue')),
+  council: lazy(() => import('./pages/CouncilPage.vue')),
   proposals: lazy(() => import('./pages/DraftsPage.vue')),
   automations: lazy(() => import('./pages/DeployedPage.vue')),
   migration: lazy(() => import('./pages/MigrationPage.vue')),

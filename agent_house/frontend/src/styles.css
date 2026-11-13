@@ -50,6 +50,7 @@ button { cursor: pointer; }
 .faint { color: var(--faint); }
 .small { font-size: 13px; }
 .mono { font-family: var(--mono); font-size: .86em; overflow-wrap: anywhere; }
+.warn-text { color: var(--warn); }
 .error { color: var(--bad); overflow-wrap: anywhere; font-size: 14px; }
 .nowrap { white-space: nowrap; }
 .grow { flex: 1; min-width: 0; }

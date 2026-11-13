@@ -303,3 +303,63 @@ async def test_evidence_simulates_state_numeric_and_time_triggers(lc):
     assert labels.count("time 07:30") in (2, 3)
     assert result["supported"] is False and "sun" in result["unsupported"][0]
     assert result["would_fire"] == len(result["samples"])
+
+
+# --- supersedes (M5 council): never two of ours fighting over one entity --------------------------
+OFF = GOOD.replace("Lamp on motion", "Lamp off").replace("light.turn_on", "light.turn_off")
+
+
+async def two_of_ours(lc) -> tuple[str, str]:
+    first = await lc.approve((await lc.create(GOOD))["id"])
+    second = await lc.approve((await lc.create(OFF))["id"])
+    return first["ha_id"], second["ha_id"]
+
+
+async def test_approving_disables_only_the_automations_of_ours_it_supersedes(lc):
+    mine, other = await two_of_ours(lc)
+    merged = await lc.create(GOOD.replace("Lamp on motion", "Lamp merged"), ha_id=mine, supersedes=[other],
+                             origin_agent="orchestrator")  # fmt: skip
+    assert merged["status"] == "draft" and merged["supersedes"] == [other]
+    policy = {c["name"]: c["detail"] for c in merged["checks"]}["policy"]
+    assert f"supersedes (disabled on approval): {other}" in policy and "also acted on by" not in policy
+    lc.ha_stub.writes.clear()
+    await lc.approve(merged["id"])
+    assert [(w[0], w[1]) for w in lc.ha_stub.writes] == [("disable", other), ("write", mine)]
+    assert lc.get_deployed(other)["enabled"] is False and lc.get_deployed(mine)["enabled"] is True
+    assert lc.ha_stub.automations["1700000000001"] == {"id": "1700000000001", "alias": "Owner's own"}
+    assert (await lc.set_enabled(other, True))["enabled"] is True, "reversible from the Deployed page"
+
+
+async def test_supersedes_names_only_deployed_automations_of_ours(lc):
+    mine, other = await two_of_ours(lc)
+    for bad in ("1700000000001", "automation.owner_own", "script.night", None):
+        with pytest.raises(NotOurs):
+            await lc.create(GOOD, supersedes=[bad])
+    with pytest.raises(LifecycleError, match="its own"):
+        await lc.create(GOOD, ha_id=mine, supersedes=[mine])
+    with pytest.raises(LifecycleError, match="not one of our"):
+        await lc.create(GOOD, supersedes=["agent_house_never_deployed"])
+    with pytest.raises(LifecycleError, match="cannot supersede"):
+        await lc.create(GOOD, origin_agent="room", supersedes=[other])
+    assert [p for p in lc.list() if p["supersedes"]] == []
+
+
+async def test_the_kill_switch_blocks_a_superseding_approval(lc):
+    mine, other = await two_of_ours(lc)
+    merged = await lc.create(GOOD, ha_id=mine, supersedes=[other])
+    lc.ha_stub.writes.clear()
+    lc.safety.set_kill(True, "test")
+    with pytest.raises(LifecycleError) as err:
+        await lc.approve(merged["id"])
+    assert err.value.code == "kill_switch" and lc.ha_stub.writes == []
+    assert lc.get_deployed(other)["enabled"] is True and lc.get(merged["id"])["status"] == "draft"
+
+
+async def test_a_failed_deploy_enables_the_superseded_again(lc):
+    mine, other = await two_of_ours(lc)
+    merged = await lc.create(GOOD, ha_id=mine, supersedes=[other])
+    lc.ha_stub.fail = "boom"
+    with pytest.raises(LifecycleError, match="refused"):
+        await lc.approve(merged["id"])
+    assert [w[0] for w in lc.ha_stub.writes[-2:]] == ["disable", "enable"]
+    assert lc.get_deployed(other)["enabled"] is True and lc.get(merged["id"])["status"] == "draft"

@@ -255,7 +255,10 @@ class ToolBox:
             self.rt.inbox_add(self.agent.id, self.run["id"], SEVERITY[severity], summary.strip()[:500])
             council = getattr(self.rt, "council", None)
             if severity == "escalate" and council is not None:
-                council.escalate(self.agent.id, summary.strip(), self.run["id"])
+                routed = council.escalate(
+                    self.agent.id, summary.strip(), self.run["id"], source=self.run["wake_source"]
+                )
+                return {"ok": True, **routed}
         return {"ok": True}
 
     async def _ask_agent(self, args: dict) -> dict:

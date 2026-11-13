@@ -7,6 +7,7 @@ export const dateTime = (ts?: number | null) => (ts ? new Date(ts * 1000).toLoca
 export function ago(ts?: number | null): string {
   if (!ts) return '—';
   const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  if (s < 10) return 'just now';
   if (s < 60) return `${s} s`;
   if (s < 3600) return `${Math.round(s / 60)} min`;
   return `${Math.round(s / 3600)} h`;

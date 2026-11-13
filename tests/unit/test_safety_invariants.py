@@ -131,3 +131,26 @@ def test_the_orchestrators_first_look_shows_room_sensors_and_search_finds_the_re
     found = s.orch.find_entities("zone occupancy", "room")
     assert "binary_sensor.esphome_radar_livingroom_zone_1_occupancy" in found and "occupancy" in found
     assert "No entity matches" in s.orch.find_entities("unicorn", None)
+
+
+async def test_superseding_switches_off_only_ours_never_the_owners_and_never_under_the_kill_switch(tmp_path):
+    from app.ha.client import NotOurs
+
+    s = stack(tmp_path)
+    ours = [(await s.lifecycle.approve((await s.lifecycle.create(GOOD.replace("alias: a", f"alias: {n}")))["id"]))
+            ["ha_id"] for n in ("a", "b")]  # fmt: skip
+    for owners in ("1700000000001", "automation.owner", "script.owner"):
+        with pytest.raises(NotOurs):
+            await s.lifecycle.create(GOOD, supersedes=[owners])
+    proposal = await s.lifecycle.create(
+        GOOD, ha_id=ours[0], supersedes=[ours[1]], origin_agent="orchestrator"
+    )
+    s.ha.writes.clear()
+    s.safety.set_kill(True, "test")
+    with pytest.raises(LifecycleError, match="kill switch"):
+        await s.lifecycle.approve(proposal["id"])
+    assert s.ha.writes == []
+    s.safety.set_kill(False)
+    await s.lifecycle.approve(proposal["id"])
+    assert {w[1] for w in s.ha.writes if w[0] == "disable"} == {ours[1]}
+    assert s.ha.automations["1700000000001"]["alias"] == "Owner's own"

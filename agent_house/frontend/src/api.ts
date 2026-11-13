@@ -36,6 +36,8 @@ export type Original = S['Original'];
 export type Parity = S['Parity'];
 export type ModelProfile = S['ModelProfile'];
 export type Settings = S['Settings'];
+export type Council = S['Council'];
+export type BoardEntry = S['BoardEntry'];
 export type Tier = S['Tier'];
 export type Mode = S['Mode'];
 

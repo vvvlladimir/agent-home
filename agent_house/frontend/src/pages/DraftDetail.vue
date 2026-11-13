@@ -83,6 +83,11 @@ const ev = () => p.value!.evidence as { would_fire: number; days: number; unsupp
         <p v-if="p.note" class="muted small">{{ t('Note:') }} {{ p.note }}</p>
       </div>
       <div class="stack">
+        <article v-if="p.supersedes?.length" class="card stack" style="border-color: var(--warn)">
+          <h2 class="warn-text">{{ t('Approving switches off') }}
+            <Info :tip="t('These automations of ours are replaced by this one. You can switch them on again under Deployed.')" /></h2>
+          <ul class="checks"><li v-for="id in p.supersedes" :key="id" class="mono">{{ id }}</li></ul>
+        </article>
         <article class="card stack">
           <h2>{{ t('Checks') }}</h2>
           <ul class="checks">
