@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.0-dev.6 — agents see the right entities
+
+- The prompt lists what matters first: entities in the agent's wake rules, then the ones it has
+  read or used before, then working devices; unavailable devices and indicator LEDs go last. A
+  quarter of the list is kept for room sensors (motion, temperature, doors, windows).
+- Agents may re-read states as often as they need; repeating an action is refused once, then the
+  run stops.
+- No more agent ping-pong: one `schedule_wake` per run, and no `schedule_wake` / `ask_agent` on a
+  wake caused by another agent or a schedule.
+- The default prompt explains "check your room": read, answer in one sentence if all is fine.
+
 ## 0.1.0-dev.5 — pinned entities
 
 - Agents editor → *Ticked entities*: "only these" (as before) or "first in the prompt + search the

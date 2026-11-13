@@ -166,5 +166,5 @@ async def test_a_misbehaving_model_cannot_get_past_the_policy(room, room_stack, 
     assert run["status"] == "ok"
     assert stack.ha.calls == [], "nothing of this may reach Home Assistant"
     verdicts = [p["verdict"] for p in steps(run, "policy")]
-    assert verdicts == ["denied"] * 9 + ["pending"] * 3
-    assert len(stack.actuator.list()) == 12, "every attempt is in the action log"
+    assert verdicts == ["denied"] * 9 + ["pending"] * 2, "the repeated identical call is refused before policy"
+    assert len(stack.actuator.list()) == 11, "every attempt is in the action log"

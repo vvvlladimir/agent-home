@@ -180,12 +180,23 @@ async def test_step_limit_escalates(tmp_path):
     assert len(stack.llm.requests) == 3
 
 
-async def test_the_same_call_three_times_escalates(tmp_path):
+async def test_a_repeated_action_is_refused_then_escalates(tmp_path):
     stack = stack_with(tmp_path, *[turn_on(CEILING)] * 5)
     go_live(stack)
     result = await run(stack)
     assert result["status"] == "escalated" and "repeated the same" in result["error"]
-    assert len(stack.ha.calls) == 2
+    assert len(stack.ha.calls) == 1, "the second identical call is refused, not sent"
+    second = steps(result, "tool")[1]["result"]
+    assert second["ok"] is False and "already made this exact call" in second["error"]
+
+
+async def test_reading_again_is_allowed_with_a_nudge(tmp_path):
+    read = call("get_state", entity_id=CEILING)
+    stack = stack_with(tmp_path, read, read, read, {"text": "All fine."})
+    result = await run(stack)
+    assert result["status"] == "ok"
+    tools = [t["result"] for t in steps(result, "tool")]
+    assert all(t["ok"] for t in tools) and "note" not in tools[0] and "already read" in tools[2]["note"]
 
 
 async def test_time_limit_counts_model_and_tool_time(tmp_path):
@@ -424,3 +435,33 @@ async def test_entities_outside_the_prompt_are_findable_and_usable(tmp_path):
     tools = [t["result"] for t in steps(await run(stack), "tool")]
     assert [e["entity_id"] for e in tools[0]["entities"]] == ["sensor.room_illuminance"]
     assert tools[1]["ok"] is True
+
+
+async def test_used_entities_are_remembered_but_not_by_replays(tmp_path):
+    stack = stack_with(tmp_path, call("get_state", entity_id="sensor.room_illuminance"), {"text": "ok"})
+    await run(stack)
+    assert stack.rt.usage("room") == {"sensor.room_illuminance": 1}
+
+
+async def test_a_scheduled_wake_cannot_schedule_or_ask_again(tmp_path):
+    stack = stack_with(
+        tmp_path,
+        call("schedule_wake", in_minutes=15, reason="check again"),
+        call("ask_agent", agent_id="other", question="anything?"),
+        {"text": "Nothing to do."},
+    )
+    result = await run(stack, source="schedule")
+    tools = [t["result"] for t in steps(result, "tool")]
+    assert result["status"] == "ok" and not tools[0]["ok"] and not tools[1]["ok"]
+    assert "Finish with one short sentence" in tools[0]["error"]
+
+
+async def test_one_schedule_wake_per_run(tmp_path):
+    stack = stack_with(
+        tmp_path,
+        call("schedule_wake", in_minutes=15, reason="door still open"),
+        call("schedule_wake", in_minutes=30, reason="and again"),
+        {"text": "Scheduled."},
+    )
+    tools = [t["result"] for t in steps(await run(stack), "tool")]
+    assert tools[0]["ok"] is True and tools[1]["ok"] is False

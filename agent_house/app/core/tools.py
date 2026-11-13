@@ -52,6 +52,8 @@ TOOLS: list[dict] = [
     _tool("recall", "Read your saved notes.", {"key": {"type": "string", "description": "optional"}}, []),
 ]
 TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
+READ_TOOLS = frozenset({"get_state", "list_entities", "get_history", "recall"})
+USAGE_TOOLS = frozenset({"get_state", "get_history", "call_service"})  # what ranks an agent's prompt
 
 ATTRIBUTES = (
     "brightness",
@@ -94,17 +96,23 @@ class ToolBox:
         self.dry = bool(run.get("replay_of"))  # replays leave no trace outside their own run
         self.actions: list[dict] = []  # policy decisions of the call being executed
         self.asked = False
+        self.scheduled = False
 
     async def execute(self, name: str, args: dict) -> dict:
         handler = getattr(self, f"_{name}", None) if name in TOOL_NAMES else None
         if handler is None:
             return {"ok": False, "error": f"unknown tool {name!r}"}
         self.actions = []
+        args = args if isinstance(args, dict) else {}
         try:
-            return await handler(args if isinstance(args, dict) else {})
+            out = await handler(args)
         except Exception as err:  # noqa: BLE001 - a tool bug is a tool error, not a dead run
             self.rt.log.exception("tool %s failed", name)
             return {"ok": False, "error": f"{name} failed: {type(err).__name__}"}
+        entity_id = args.get("entity_id")
+        if name in USAGE_TOOLS and not self.dry and isinstance(entity_id, str) and entity_id in self.scope:
+            self.rt.record_use(self.agent.id, entity_id)
+        return out
 
     def _entity(self, args: dict) -> tuple[str | None, dict | None]:
         entity_id = args.get("entity_id")
@@ -228,8 +236,9 @@ class ToolBox:
             return {"ok": False, "error": f"unknown agent {target!r}; agents: {', '.join(known) or 'none'}"}
         if not isinstance(question, str) or not question.strip():
             return {"ok": False, "error": "question must be a sentence"}
-        if self.run["wake_source"] == "poke" or self.asked:
-            return {"ok": False, "error": "one question per wake, and none while answering another agent"}
+        if self.run["wake_source"] in ("poke", "schedule") or self.asked:
+            return {"ok": False, "error": "one question per wake, and none on a wake by another agent or a "
+                    "schedule. Finish with one short sentence."}  # fmt: skip
         self.asked = True
         if not self.dry:
             reason = f'Agent "{self.agent.id}" asks: {question.strip()[:300]}'
@@ -249,6 +258,10 @@ class ToolBox:
             return {"ok": False, "error": "in_minutes must be a number from 1 to 1440"}
         if not isinstance(reason, str) or not reason.strip():
             return {"ok": False, "error": "reason must be a sentence"}
+        if self.run["wake_source"] in ("poke", "schedule") or self.scheduled:
+            return {"ok": False, "error": "one schedule_wake per wake, and none on a wake by another agent "
+                    "or a schedule. Finish with one short sentence."}  # fmt: skip
+        self.scheduled = True
         if not self.dry and not self.rt.gate.schedule(self.agent.id, minutes * 60, reason.strip()):
             return {"ok": False, "error": "you already have the maximum number of scheduled wakes"}
         return {"ok": True, "status": "scheduled"}

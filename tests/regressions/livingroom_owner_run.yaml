@@ -1,0 +1,33 @@
+# Copied from run r_1a1d4212c23abec23 (living_room, escalated: list_entities repeated three times).
+# The owner's real Livingroom prompt before the 0.1.0-dev.6 ranking: half unavailable, no room sensors.
+version: 1
+room:
+  name: Living Room
+  entities:
+    - {entity_id: light.bulb_main_1_livingroom, state: unavailable, tier: T0}
+    - {entity_id: light.bulb_office_livingroom, state: "off", tier: T0}
+    - {entity_id: light.bulbs_main_livingroom, state: "off", tier: T0}
+    - {entity_id: light.esphome_air_quality_monitor_rgb_light, state: "on", tier: T0}
+    - {entity_id: light.esphome_illuminance_outdoor_rgb_light, state: "off", tier: T0}
+    - {entity_id: light.esphome_radar_livingroom_rgb_light, state: "on", tier: T0}
+    - {entity_id: light.garland, state: unavailable, tier: T0}
+    - {entity_id: media_player.kiosk_tablet, state: unavailable, tier: T0}
+    - {entity_id: media_player.living_room_speakers_living_room, state: unavailable, tier: T0}
+    - {entity_id: media_player.living_room_xbox_livingroom, state: "off", tier: T0}
+    - {entity_id: media_player.satellite_living_room, state: unavailable, tier: T0}
+    - {entity_id: media_player.satellite_media_player, state: unavailable, tier: T0}
+    - {entity_id: humidifier.humidifier, state: unavailable, tier: T1}
+    - {entity_id: switch.humidifier_levoit_200s_display, state: unavailable, tier: T2}
+    - {entity_id: switch.kiosk_tablet_screen, state: unavailable, tier: T2}
+    - {entity_id: switch.kiosk_tablet_screensaver, state: unavailable, tier: T2}
+    - {entity_id: switch.socket_3d_printer, state: "off", tier: T2}
+    - {entity_id: switch.socket_ipad_charger, state: "on", tier: T2}
+    - {entity_id: switch.socket_jetson_nano, state: "on", tier: T2}
+    - {entity_id: switch.socket_kiosk_tablet_charger, state: unavailable, tier: T2}
+scenarios:
+  - id: run_r_1a1d4212c23abec23
+    category: no_action
+    wake: "Manual wake by the owner: check your room."
+    expect:
+      no_actuation: true
+      max_steps: 3

@@ -174,19 +174,39 @@ def is_noise(ha, entity_id: str) -> bool:
     return domain in READ_ONLY_DOMAINS and _device_class(ha, entity_id) in NOISE_DEVICE_CLASSES
 
 
-def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]]:
+ROOM_SENSOR_SUFFIX = re.compile(
+    r"_(motion|occupancy|presence|door|window|contact|temperature|humidity|illuminance|smoke|leak)$"
+)
+# Indicator LEDs of sensor boxes (ESPHome `*_rgb_light`, status LEDs): lights nobody asks for.
+INDICATOR = re.compile(r"_(rgb_light|status_led|status_light|led|indicator|backlight)$")
+UNAVAILABLE = frozenset({"unavailable", "unknown"})
+
+
+def is_room_sensor(ha, entity_id: str) -> bool:
+    return entity_id.split(".", 1)[0] in READ_ONLY_DOMAINS and (
+        _device_class(ha, entity_id) in ROOM_SENSOR_CLASSES or bool(ROOM_SENSOR_SUFFIX.search(entity_id))
+    )
+
+
+def resolve_scope(
+    agent: AgentConfig, ha, tier_of, usage: dict[str, int] | None = None
+) -> tuple[list[str], list[str]]:
     """(entities shown in the prompt, further entities the agent may find via list_entities).
 
     Both lists together are the agent's allowlist. An explicit `entities` list with
     `entities_mode: only` is taken as is (minus ids HA does not know) and is shown in full; with
-    `pinned` those entities go first and the room fills up the rest. Otherwise: every visible entity of the
-    room except config/diagnostic helpers and device noise, ranked low tiers first, then T3,
-    then room sensors (motion, temperature, …), then other read-only entities; the first
-    `max_entities` go into the prompt. `tier_of(entity_id) -> tier`.
+    `pinned` those entities go first and the room fills up the rest. Otherwise every visible
+    entity of the room except config/diagnostic helpers and device noise, in this order:
+    entities named in the agent's wake rules; entities the agent used before (`usage`:
+    entity_id → uses, most used first); available actuators by tier (T0 first); room sensors
+    (motion, temperature, …); other sensors; last indicator LEDs and unavailable entities.
+    A quarter of the prompt is kept for room sensors so the agent can always see its room.
+    `tier_of(entity_id) -> tier`.
     """
     pinned = [e for e in agent.entities if e in ha.states]
     if agent.entities and agent.entities_mode == "only":
         return pinned, []
+    usage = usage or {}
     registry = ha.registry
     candidates = [
         e
@@ -196,20 +216,37 @@ def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]
         and not registry.entity_meta.get(e, {}).get("entity_category")
         and not is_noise(ha, e)
     ]
+    watched = {e for rule in agent.wake_rules.events for e in rule.entities}
 
-    def order(entity_id: str) -> tuple[int, str]:
-        # low tiers first (the everyday lights and fans), T3 last among actuators, sensors after
+    def order(entity_id: str) -> tuple[int, int, str]:
+        if entity_id in watched:
+            return 0, 0, entity_id
+        if usage.get(entity_id):
+            return 1, -usage[entity_id], entity_id
+        state = str((ha.states.get(entity_id) or {}).get("state"))
+        if state in UNAVAILABLE or INDICATOR.search(entity_id):
+            return 20, 0, entity_id
         if entity_id.split(".", 1)[0] in READ_ONLY_DOMAINS:
-            rank = len(TIERS) + (0 if _device_class(ha, entity_id) in ROOM_SENSOR_CLASSES else 1)
-        else:
-            rank = TIERS.index(tier_of(entity_id))
-        return rank, entity_id
+            return (10 if is_room_sensor(ha, entity_id) else 11), 0, entity_id
+        return 2 + TIERS.index(tier_of(entity_id)), 0, entity_id
 
     candidates.sort(key=order)
     # pinned: the ticked entities always come first, the room fills up the prompt and the search
     candidates = (pinned + [e for e in candidates if e not in pinned])[: max(SCOPE_HARD_CAP, len(pinned))]
-    shown = max(agent.max_entities, len(pinned))
-    return candidates[:shown], candidates[shown:]
+    size = max(agent.max_entities, len(pinned))
+    shown = candidates[:size]
+    # keep a quarter of the prompt for room sensors: without them "check your room" is blind
+    sensors = [e for e in candidates[size:] if is_room_sensor(ha, e) and order(e)[0] < 20]
+    missing = max(0, agent.max_entities // 4 - sum(is_room_sensor(ha, e) for e in shown))
+    keep = set(pinned) | {e for e in shown if order(e)[0] <= 1}
+    for sensor in sensors[:missing]:
+        victim = next((e for e in reversed(shown) if e not in keep and not is_room_sensor(ha, e)), None)
+        if victim is None:
+            break
+        shown[shown.index(victim)] = sensor
+    shown.sort(key=lambda e: (0, pinned.index(e), ()) if e in pinned else (1, 0, order(e)))
+    rest = [e for e in candidates if e not in set(shown)]
+    return shown, rest
 
 
 class PolicyModel(_Strict):

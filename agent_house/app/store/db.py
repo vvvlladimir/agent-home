@@ -97,6 +97,16 @@ MIGRATIONS: list[str] = [
         reason TEXT NOT NULL
     );
     """,
+    # M3 follow-up: which entities each agent actually reads or acts on (ranks its prompt)
+    """
+    CREATE TABLE entity_usage (
+        agent_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        uses INTEGER NOT NULL,
+        last REAL NOT NULL,
+        PRIMARY KEY (agent_id, entity_id)
+    );
+    """,
 ]
 
 
