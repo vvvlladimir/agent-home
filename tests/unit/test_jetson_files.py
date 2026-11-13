@@ -159,7 +159,16 @@ def test_setup_dry_run_prints_and_changes_nothing(tmp_path, sysroot):
     run = subprocess.run([BASH, JETSON / "setup.sh", "--dry-run"], env=jetson_env(tmp_path, sysroot), capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
     assert "would run:" in run.stdout and "would write:" in run.stdout
+    assert "libssl-dev" in (JETSON / "setup.sh").read_text(), "without it llama.cpp is built without HTTPS"
     assert not (tmp_path / "etc").exists() and not (tmp_path / "state").exists()
+
+
+@needs_bash
+def test_llamacpp_build_has_https_for_model_downloads(tmp_path):
+    run = subprocess.run([BASH, JETSON / "build_llamacpp.sh", "--dry-run", "--dir", str(tmp_path / "llama.cpp")],
+                         env=jetson_env(tmp_path), capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert "-DLLAMA_OPENSSL=ON" in run.stdout and "-DCMAKE_CUDA_ARCHITECTURES=87" in run.stdout
 
 
 @needs_bash

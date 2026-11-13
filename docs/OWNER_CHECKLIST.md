@@ -110,6 +110,10 @@ tegrastats line format (`logs/*_tegrastats.txt`), llama-server flags of your bui
 real tok/s and time to first token, peak RAM and swap, thermals over the soak, tool-call accuracy per
 profile, and whether each `:Q4_K_M` file name resolves (`jetson/models.md` → Downloads).
 
+Known issue (seen 2026-11-13): `HTTPS is not supported … failed to download model from Hugging Face`
+means llama.cpp was built without OpenSSL. Fixed in the scripts; on a Jetson set up before the fix:
+`sudo apt install libssl-dev && ./jetson/build_llamacpp.sh --clean && sudo systemctl restart llama-server`.
+
 If something breaks: `journalctl -u llama-server -n 100`, `journalctl -u agent-house-metrics -n 50`
 into `owner-reports/logs/`.
 

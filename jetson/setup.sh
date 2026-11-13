@@ -26,7 +26,9 @@ NO_SWAP=0
 SWAPFILE="/swapfile-agent-house"
 SWAP_GB=8
 MIN_DISK_GB=15
-APT_PACKAGES="git cmake build-essential libcurl4-openssl-dev curl python3 python3-yaml"
+# libssl-dev: llama.cpp downloads models (-hf) over its own HTTPS client; without it the build
+# silently has no HTTPS and every model download fails.
+APT_PACKAGES="git cmake build-essential libssl-dev libcurl4-openssl-dev curl python3 python3-yaml"
 
 usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 

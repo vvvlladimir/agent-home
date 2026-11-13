@@ -57,6 +57,12 @@ if ((!DRY)); then
     fi
   done
 fi
+# Without the OpenSSL headers cmake still succeeds, but llama-server cannot download models
+# ("HTTPS is not supported"). Fail here instead of after a 30-minute build.
+if ((!DRY)) && [[ ! -f /usr/include/openssl/ssl.h ]]; then
+  echo "OpenSSL headers missing: sudo apt install libssl-dev (or run jetson/setup.sh), then try again." >&2
+  exit 1
+fi
 
 if [[ -d "$DIR/.git" ]]; then
   run git -C "$DIR" fetch --tags origin
@@ -71,7 +77,10 @@ fi
 # A build directory configured for another architecture or CUDA version is silently reused by
 # cmake: start clean unless this exact configuration is already there.
 cache="$DIR/build/CMakeCache.txt"
-if ((CLEAN)) || { [[ -f "$cache" ]] && ! grep -q '^CMAKE_CUDA_ARCHITECTURES:[A-Z]*=87$' "$cache"; }; then
+# A cache from a build without OpenSSL keeps "not found" forever: also start clean then.
+if ((CLEAN)) || { [[ -f "$cache" ]] && {
+  ! grep -q '^CMAKE_CUDA_ARCHITECTURES:[A-Z]*=87$' "$cache" || ! grep -q '^OPENSSL_INCLUDE_DIR:PATH=/' "$cache"
+}; }; then
   run rm -rf "$DIR/build"
 fi
 
@@ -79,6 +88,7 @@ run cmake -S "$DIR" -B "$DIR/build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA=ON \
   -DCMAKE_CUDA_ARCHITECTURES=87 \
+  -DLLAMA_OPENSSL=ON \
   -DLLAMA_CURL=ON
 run cmake --build "$DIR/build" --config Release -j "$JOBS" --target llama-server
 
@@ -95,6 +105,9 @@ fi
 commit="$(git -C "$DIR" describe --tags --always 2>/dev/null || git -C "$DIR" rev-parse --short HEAD)"
 echo "$commit" >"$DIR/build/bin/agent-house-build.txt"
 echo "built $binary ($commit)"
+if ! ldd "$binary" 2>/dev/null | grep -Eq 'libssl|libcurl'; then
+  echo "warning: $binary links neither OpenSSL nor libcurl: model downloads (-hf) will fail." >&2
+fi
 "$binary" --version 2>&1 | head -n 3 || true
 if [[ "$binary" != "$LLAMA_SERVER_BIN" ]]; then
   echo "note: $AH_ETC/config.env points at $LLAMA_SERVER_BIN; set LLAMA_SERVER_BIN=$binary there" >&2
