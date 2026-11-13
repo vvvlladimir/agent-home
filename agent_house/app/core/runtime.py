@@ -51,6 +51,8 @@ Rules:
 - "Check your room" means: read the states below (get_state for fresh values); if all is fine,
   answer in one sentence. Use schedule_wake only while something is still going on (a door
   open, a light left on in an empty room); use ask_agent only for something in another room.
+- People coming and going is normal: an occupancy or motion change alone is not worth a report.
+- Describe only states you read; never claim a state you did not see.
 - If the situation is dangerous, unclear, or needs something outside your room or permissions,
   call report with severity "escalate" (or "warning") instead of guessing.
 - Finish with one short sentence and no tool call.
@@ -541,7 +543,8 @@ class AgentRuntime:
         if not actuations:
             expect["no_actuation"] = True
         expect["max_steps"] = max(1, run["steps"])
-        category = "valid_call" if actuations else ("escalate" if reports else "no_action")
+        alarming = [r for r in reports if r.get("severity") in ("warning", "escalate")]
+        category = "valid_call" if actuations else ("escalate" if alarming else "no_action")
         doc = {
             "version": 1,
             "room": {

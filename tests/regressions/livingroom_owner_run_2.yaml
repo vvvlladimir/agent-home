@@ -1,0 +1,76 @@
+# Copied from run r_1a1d43953a55cf263 (living_room, ok). Review `expect`.
+version: 1
+room:
+  name: Living Room
+  entities:
+  - entity_id: binary_sensor.esphome_radar_livingroom_occupancy
+    state: 'on'
+    tier: T3
+  - entity_id: light.bulb_office_livingroom
+    state: 'off'
+    tier: T0
+  - entity_id: light.bulbs_main_livingroom
+    state: 'off'
+    tier: T0
+  - entity_id: media_player.living_room_xbox_livingroom
+    state: 'off'
+    tier: T0
+  - entity_id: switch.socket_3d_printer
+    state: 'off'
+    tier: T2
+  - entity_id: switch.socket_ipad_charger
+    state: 'on'
+    tier: T2
+  - entity_id: switch.socket_jetson_nano
+    state: 'on'
+    tier: T2
+  - entity_id: switch.socket_monitor_livingroom
+    state: 'on'
+    tier: T2
+  - entity_id: switch.socket_tv_livingroom
+    state: 'on'
+    tier: T2
+  - entity_id: switch.wall_switch_livingroom
+    state: 'off'
+    tier: T2
+  - entity_id: number.esphome_radar_livingroom_occupancy_off_delay
+    state: '5.0'
+    tier: T3
+  - entity_id: number.esphome_radar_livingroom_zone_1_occupancy_off_delay
+    state: '5.0'
+    tier: T3
+  - entity_id: number.esphome_radar_livingroom_zone_2_occupancy_off_delay
+    state: '5.0'
+    tier: T3
+  - entity_id: number.esphome_radar_livingroom_zone_3_occupancy_off_delay
+    state: '15.0'
+    tier: T3
+  - entity_id: number.esphome_radar_livingroom_zone_4_occupancy_off_delay
+    state: '15.0'
+    tier: T3
+  - entity_id: number.socket_3d_printer_countdown
+    state: '0'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_livingroom_zone_1_occupancy
+    state: 'on'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_livingroom_zone_2_occupancy
+    state: 'on'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_livingroom_zone_3_occupancy
+    state: 'off'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_livingroom_zone_4_occupancy
+    state: 'off'
+    tier: T3
+scenarios:
+- id: run_r_1a1d43953a55cf263
+  category: escalate
+  wake: binary_sensor.esphome_radar_livingroom_occupancy changed off → on.
+  expect:
+    calls:
+    - tool: report
+      args:
+        severity: warning
+    no_actuation: true
+    max_steps: 3

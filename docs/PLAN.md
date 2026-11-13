@@ -50,7 +50,9 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] Kill switch from HA (`agent_house_kill_switch` event, optional `input_boolean`)
 - [x] `tests/eval`: tool-call eval against scripted LLM; two sample rooms (owner, Q3: Bedroom, Livingroom)
 - [x] Polling fallback for the feed (SSE passed ingress in M1; fallback kicks in after 8 s without a stream)
-- [ ] **Owner:** two room agents in Shadow for a day, traces + case files (OWNER_CHECKLIST M3)
+- [x] **Owner:** two room agents in Shadow, traces + case files (2026-11-13, ~1 h, 12 runs, no actions;
+      findings fixed: settings ranked after sensors (S13), report noise, case category, Jetson metrics
+      answering errors → `owner-reports/m3/README.md`). The full day in Shadow continues alongside M4.
 
 ## M4 — Orchestrator + automation lifecycle
 

@@ -142,6 +142,11 @@ Update the add-on, keep the global mode on **Shadow**. About 30 minutes.
    Shadow afterwards. A T2 entity (blinds, climate) instead shows a pending approval on the
    Dashboard; Approve or Deny it there.
 
+**Status 2026-11-13:** received (one hour, `owner-reports/m3/README.md`). Still open: leave both agents
+in Shadow for a full day after updating, and check the Jetson metrics endpoint, which dropped the
+connection in the diagnostics: `curl -s http://192.168.1.215:9100/metrics.json | head -c 300` and, if it
+fails, `journalctl -u agent-house-metrics -n 50` (since 0.1.0-dev.7 the error is in the answer).
+
 The Live feed shows *streaming* through ingress (verified in M1); if it ever shows *polling every 3 s*,
 SSE is being buffered and the feed falls back to polling — tell me.
 

@@ -293,3 +293,15 @@ def test_bench_py_refuses_an_unhealthy_server_and_unknown_profiles(tmp_path, llm
     assert bench.main(["--url", llm_server.url, "--profile", "nope", *common]) == 2
     bench.Client.wait_healthy = lambda self, seconds: False
     assert bench.main(["--url", "http://127.0.0.1:9", *common]) == 2
+
+
+def test_a_metrics_bug_is_answered_not_a_dropped_connection(metrics, monkeypatch):
+    """Owner diagnostics 2026-11-13: "RemoteProtocolError: Server disconnected without sending a
+    response" is what an exception inside do_GET looks like from the Pi."""
+
+    def broken():
+        raise KeyError("power_mode")
+
+    monkeypatch.setattr(metrics.module.Handler.sampler, "metrics", broken)
+    response = httpx.get(f"{metrics.url}/metrics.json")
+    assert response.status_code == 500 and "KeyError" in response.json()["error"]

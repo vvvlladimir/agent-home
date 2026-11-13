@@ -209,3 +209,23 @@ def test_the_owners_livingroom_prompt_shows_working_devices_and_room_sensors():
     working = [e for e in shown if ha.states[e]["state"] != "unavailable" and not e.endswith("_rgb_light")]
     assert shown[: len(working)] == working, "unavailable devices and indicator LEDs come last"
     assert "light.garland" in shown + findable, "unavailable is ranked down, never removed"
+
+
+def test_settings_an_agent_cannot_change_trail_the_room_sensors():
+    """Regression: run r_1a1d43953a55cf263. Six T3 `number.*_off_delay` / `*_countdown` settings took
+    prompt slots ahead of the room's sensors; the model then summarised settings, not the room."""
+    path = Path(__file__).parents[1] / "regressions" / "livingroom_owner_run_2.yaml"
+    case = yaml.safe_load(path.read_text())
+    ha = StubHA()
+    for row in case["room"]["entities"]:
+        ha.add(row["entity_id"], row["state"], area="living")
+    for sensor in ("sensor.livingroom_temperature", "sensor.livingroom_humidity", "binary_sensor.livingroom_window",
+                   "sensor.livingroom_illuminance", "sensor.livingroom_co2", "sensor.livingroom_pm25"):  # fmt: skip
+        ha.add(sensor, "1", area="living")
+    shown, findable = resolve_scope(parse_agent({**AGENT, "room": "living", "max_entities": 20}), ha, tier_of)
+    numbers = [i for i, e in enumerate(shown) if e.startswith("number.")]
+    sensors = [i for i, e in enumerate(shown) if e.startswith(("sensor.", "binary_sensor."))]
+    room = ha.registry.entities_in("living")
+    assert all(e in shown for e in room if e.startswith(("sensor.", "binary_sensor."))), "every sensor fits"
+    assert not numbers or min(numbers) > max(sensors), "T3 settings come after the sensors"
+    assert "number.socket_3d_printer_countdown" in shown + findable, "ranked down, never removed"

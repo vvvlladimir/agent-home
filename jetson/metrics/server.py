@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -294,7 +295,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/healthz":
             self._send(200, {"ok": True})
         elif path == "/metrics.json":
-            self._send(200, self.sampler.metrics())
+            try:
+                payload = self.sampler.metrics()
+            except Exception as err:  # noqa: BLE001 - answer, do not drop the connection
+                traceback.print_exc()
+                return self._send(500, {"ok": False, "error": f"{type(err).__name__}: {err}"[:300]})
+            self._send(200, payload)
         else:
             self._send(404, {"ok": False, "error": "not found"})
 

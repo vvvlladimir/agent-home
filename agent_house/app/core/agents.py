@@ -179,6 +179,8 @@ ROOM_SENSOR_SUFFIX = re.compile(
 )
 # Indicator LEDs of sensor boxes (ESPHome `*_rgb_light`, status LEDs): lights nobody asks for.
 INDICATOR = re.compile(r"_(rgb_light|status_led|status_light|led|indicator|backlight)$")
+# Device settings (delays, countdowns, modes): T3 by default, rarely what a room agent reads.
+SETTING_DOMAINS = frozenset({"number", "select", "text", "button", "time", "date", "datetime"})
 UNAVAILABLE = frozenset({"unavailable", "unknown"})
 
 
@@ -228,7 +230,11 @@ def resolve_scope(
             return 20, 0, entity_id
         if entity_id.split(".", 1)[0] in READ_ONLY_DOMAINS:
             return (10 if is_room_sensor(ha, entity_id) else 11), 0, entity_id
-        return 2 + TIERS.index(tier_of(entity_id)), 0, entity_id
+        tier = tier_of(entity_id)
+        if tier == "T3" and entity_id.split(".", 1)[0] in SETTING_DOMAINS:
+            # device settings the agent can never change (`number.*_off_delay`): after the sensors
+            return 12, 0, entity_id
+        return 2 + TIERS.index(tier), 0, entity_id
 
     candidates.sort(key=order)
     # pinned: the ticked entities always come first, the room fills up the prompt and the search
