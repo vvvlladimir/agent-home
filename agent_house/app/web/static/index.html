@@ -737,6 +737,63 @@
     </article>
   </section>
 
+  <!-- ───────────────────────── Migration (M5) ───────────────────────── -->
+  <section x-show="page === 'migration'" x-cloak>
+    <h1 x-text="t('Migration')"></h1>
+    <p class="muted" x-text="t('Your own automations, scripts and Node-RED flows, read-only. Ask for a replacement, compare both against history, then switch the original off. Nothing of yours is edited or deleted.')"></p>
+    <p><button class="btn" @click="importOriginals()" :disabled="migrationBusy" x-text="t('Import / refresh')"></button>
+      <span class="muted small" x-text="t('Node-RED: put flow exports (JSON) into /share/agent_house/nodered')"></span></p>
+    <p class="small" x-show="migrationMsg" x-text="migrationMsg"></p>
+    <p class="error" x-show="migrationError" x-text="migrationError"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th x-text="t('Original')"></th><th x-text="t('Source')"></th><th x-text="t('Enabled')"></th>
+          <th x-text="t('Replacement')"></th><th></th></tr></thead>
+        <tbody>
+          <template x-for="o in originals" :key="o.id">
+            <tr>
+              <td class="clickable" @click="loadParity(o)"><span x-text="o.title"></span><br>
+                <span class="muted small" x-text="o.summary || t('no readable config')"></span></td>
+              <td><span class="badge" x-text="t(sourceLabel(o.source))"></span></td>
+              <td>
+                <input type="checkbox" x-show="o.source === 'ha_automation'" :checked="o.enabled" :disabled="migrationBusy"
+                       @change="setOriginalEnabled(o, $event.target.checked)">
+                <span class="muted small" x-show="o.source !== 'ha_automation'" x-text="o.enabled === false ? t('off') : '—'"></span>
+                <span class="pill pill-bad" x-show="o.disabled_by_us" x-text="t('off by Agent House')"></span>
+              </td>
+              <td class="small">
+                <a x-show="o.replacement_proposal_id" href="#proposals" x-text="o.replacement_ha_id ? t('deployed') : t('proposal')"></a>
+                <span class="mono small" x-show="o.replacement_ha_id" x-text="o.replacement_ha_id"></span>
+              </td>
+              <td><button class="btn btn-ghost" @click="proposeReplacement(o)"
+                          :disabled="migrationBusy || !o.config || status?.kill_switch?.engaged" x-text="t('Propose replacement')"></button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" x-show="!originals.length" x-text="t('Nothing imported yet.')"></p>
+
+    <article class="card" x-show="originalSel" style="margin-top: 1rem">
+      <h2 x-text="originalSel?.title"></h2>
+      <template x-if="parity">
+        <div>
+          <p><strong x-text="t('Parity, last') + ' ' + parity.days + ' ' + t('days')"></strong>:
+            <span x-text="t('original') + ' ' + parity.original_fired + ' · ' + t('replacement') + ' ' + parity.replacement_would_fire + ' · ' + t('matched') + ' ' + parity.matched"></span>
+            <span class="pill" :class="parity.supported ? 'pill-ok' : 'pill-bad'" x-text="parity.supported ? t('all triggers replayed') : t('partly replayed')"></span></p>
+          <p class="muted small" x-text="t('Trigger firings replayed from history; conditions are not evaluated.')"></p>
+          <template x-for="u in parity.unsupported || []" :key="u"><p class="muted small" x-text="u"></p></template>
+          <template x-for="d in parity.diffs" :key="d.ts + d.side">
+            <p class="small"><span class="badge" x-text="t(d.side === 'original_only' ? 'only the original' : 'only the replacement')"></span>
+              <span x-text="new Date(d.ts * 1000).toLocaleString() + ' · ' + d.detail"></span></p>
+          </template>
+        </div>
+      </template>
+      <p class="muted" x-show="!parity && !originalSel?.replacement_proposal_id" x-text="t('No replacement yet: ask for one to get a parity report.')"></p>
+      <pre class="log" x-text="JSON.stringify(originalSel?.config, null, 2)"></pre>
+    </article>
+  </section>
+
   <!-- ───────────────────────── Placeholders for later milestones ───────────────────────── -->
   <template x-for="p in pages.filter(p => p.todo)" :key="p.id">
     <section x-show="page === p.id" x-cloak>

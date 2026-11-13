@@ -78,6 +78,7 @@ class HAState:
         self.areas, self.devices, self.entity_registry = [], [], []
         self.states: dict[str, dict] = {}
         self.automations: dict[str, dict] = {}
+        self.scripts: dict[str, dict] = {}
         self.service_calls: list[dict] = []
         self.config_writes: list[dict] = []
         self.history: dict[str, list[dict]] = {}
@@ -230,6 +231,13 @@ class HAState:
                 "mode": cfg.get("mode", "single"),
                 "current": 0,
             },
+        )
+
+    def put_script(self, object_id: str, config: dict) -> None:
+        """A UI-managed script: its config and its `script.<object_id>` entity."""
+        self.scripts[object_id] = dict(config)
+        self.set_state(
+            f"script.{object_id}", "off", {"friendly_name": config.get("alias", object_id), "mode": "single"}
         )
 
     def delete_automation(self, cid: str) -> None:
@@ -539,6 +547,12 @@ def create_app(state: HAState | None = None) -> FastAPI:
         ha.delete_automation(cid)
         ha.config_writes.append({"method": "DELETE", "id": cid, "config": None, "ts": time.time()})
         return {"result": "ok"}
+
+    @r.get("/config/script/config/{object_id}")
+    async def get_script(object_id: str):
+        if object_id not in ha.scripts:
+            raise HAError(404, "Resource not found")
+        return ha.scripts[object_id]
 
     @r.post("/config/core/check_config")
     async def check_config():

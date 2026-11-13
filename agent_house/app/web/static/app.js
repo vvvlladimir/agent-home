@@ -7,8 +7,7 @@ const PAGES = [
   { id: 'agents', label: 'Agents' },
   { id: 'proposals', label: 'Proposals' },
   { id: 'automations', label: 'Deployed automations' },
-  { id: 'migration', label: 'Migration', milestone: 'M5',
-    todo: 'Your existing automations and Node-RED flows next to their proposed replacements, with a parity report.' },
+  { id: 'migration', label: 'Migration' },
   { id: 'chat', label: 'Chat', milestone: 'M5',
     todo: 'Talk to the orchestrator or a room agent; tool calls are shown inline.' },
   { id: 'models', label: 'Models & Benchmarks' },
@@ -53,6 +52,13 @@ function app() {
     _stream: null,
     _poll: null,
     polling: false,
+    // migration
+    originals: [],
+    originalSel: null,
+    parity: null,
+    migrationMsg: '',
+    migrationError: '',
+    migrationBusy: false,
     // agents
     agentsList: [],
     agentForm: null,
@@ -150,6 +156,7 @@ function app() {
       if (this.page === 'models') this.loadModels();
       if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); }
       if (this.page === 'automations') this.loadDeployed();
+      if (this.page === 'migration') this.loadOriginals();
     },
     post(path, body) {
       return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -526,6 +533,41 @@ function app() {
         if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
         this.deployedSel = null;
       }, this.t('Removed.'));
+    },
+
+    // ── migration (M5) ─────────────────────────────────────────────────────────
+    async loadOriginals() {
+      try { this.originals = await this.api('api/migration/originals'); } catch (e) { this.migrationError = e.message; }
+    },
+    async migrationAction(fn, done) {
+      this.migrationMsg = ''; this.migrationError = ''; this.migrationBusy = true;
+      try { const out = await fn(); this.migrationMsg = done ? done(out) : ''; await this.loadOriginals(); }
+      catch (e) { this.migrationError = e.message; }
+      this.migrationBusy = false;
+    },
+    importOriginals() {
+      return this.migrationAction(() => this.post('api/migration/import'),
+        (r) => r.imported + ' ' + this.t('new') + ', ' + r.updated + ' ' + this.t('changed')
+          + ((r.skipped || []).length ? ' · ' + r.skipped.join(' · ') : ''));
+    },
+    proposeReplacement(o) {
+      return this.migrationAction(() => this.post('api/migration/originals/' + encodeURIComponent(o.id) + '/propose'),
+        () => this.t('Drafting a replacement: it appears here and on the Proposals page in a moment.'));
+    },
+    setOriginalEnabled(o, enabled) {
+      if (!enabled && !confirm(this.t('Switch your own automation off in Home Assistant? You can switch it on again here.'))) {
+        return this.loadOriginals();
+      }
+      return this.migrationAction(() => this.put('api/migration/originals/' + encodeURIComponent(o.id) + '/enabled', { enabled }));
+    },
+    async loadParity(o) {
+      this.originalSel = o; this.parity = null; this.migrationError = '';
+      if (!o.replacement_proposal_id) return;
+      try { this.parity = await this.api('api/migration/originals/' + encodeURIComponent(o.id) + '/parity?days=7'); }
+      catch (e) { this.migrationError = e.message; }
+    },
+    sourceLabel(source) {
+      return { ha_automation: 'HA automation', ha_script: 'HA script', node_red: 'Node-RED' }[source] || source;
     },
 
     async loadActions() { try { this.actions = await this.api('api/actions?limit=100'); } catch (e) { /* banner */ } },

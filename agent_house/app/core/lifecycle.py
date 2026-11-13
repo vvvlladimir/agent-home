@@ -339,8 +339,10 @@ class Lifecycle:
         origin_agent: str | None = None,
         run_id: str | None = None,
         ha_id: str | None = None,
+        replaces_original: str | None = None,
     ) -> dict:
-        """A new draft. `ha_id` = one of our deployed automations to change; else a new id."""
+        """A new draft. `ha_id` = one of our deployed automations to change; else a new id.
+        `replaces_original` = the id of an imported original this draft is meant to replace."""
         config, checks = await self.check(text)
         title = (title or (config or {}).get("alias") or "Untitled automation").strip()[:120]
         if ha_id is not None:
@@ -362,12 +364,14 @@ class Lifecycle:
             "origin_agent": origin_agent,
             "run_id": run_id,
             "ha_id": ha_id,
+            "replaces_original": replaces_original,
             "checks": json.dumps(checks),
         }
         self.store.execute(
             "INSERT INTO proposals (id, created, updated, status, title, yaml, rationale, expected_triggers, "
-            "origin_agent, run_id, ha_id, checks) VALUES (:id, :created, :updated, :status, :title, :yaml, "
-            ":rationale, :expected_triggers, :origin_agent, :run_id, :ha_id, :checks)",
+            "origin_agent, run_id, ha_id, replaces_original, checks) VALUES (:id, :created, :updated, "
+            ":status, :title, :yaml, :rationale, :expected_triggers, :origin_agent, :run_id, :ha_id, "
+            ":replaces_original, :checks)",
             proposal,
         )
         self.feed.add(

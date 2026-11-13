@@ -370,7 +370,17 @@ paths:
       x-milestone: M5
       summary: Read-only import of the owner's HA automations/scripts and Node-RED exports in /share/agent_house/nodered
       responses:
-        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {imported: {type: integer}, updated: {type: integer}}}}}}
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  imported: {type: integer}
+                  updated: {type: integer}
+                  total: {type: integer}
+                  skipped: {type: array, items: {type: string}, description: "what could not be read, and why"}
   /api/migration/originals:
     get:
       tags: [migration]
@@ -880,8 +890,10 @@ components:
         days: {type: integer}
         original_fired: {type: integer}
         replacement_would_fire: {type: integer}
-        matched: {type: integer}
-        supported: {type: boolean}
+        matched: {type: integer, description: firings of both sides at most 60 s apart}
+        supported: {type: boolean, description: "false when a trigger of either side cannot be replayed from history"}
+        unsupported: {type: array, items: {type: string}}
+        simulated: {type: boolean, description: "true: both sides are trigger replays, conditions are not evaluated"}
         diffs:
           type: array
           items:

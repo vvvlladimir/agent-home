@@ -5,7 +5,9 @@ Read-only except two write paths:
   tests/unit/test_actuator.py greps for other callers);
 - automation writes (`write_automation`, `delete_automation`, `set_automation_enabled`), whose only
   caller is `core/lifecycle.py`. Each refuses any id that is not `agent_house_<slug>`: the owner's
-  own automations can never be written, deleted or switched from here.
+  own automations can never be written or deleted from here.
+- `set_original_enabled` (M5 migration, only caller `core/migration.py`): `automation.turn_off` /
+  `turn_on` on one of the owner's automations, on the owner's explicit click. Never an edit.
 
 API shapes: docs/RESEARCH.md §3. The registry list responses and the Supervisor proxy
 behaviour are [UNVERIFIED-ON-HW]; `tests/integration/test_real_ha.py` checks them against a
@@ -49,6 +51,7 @@ READ_COMMANDS = frozenset(
 
 AUTOMATION_PREFIX = "agent_house_"
 OUR_AUTOMATION_ID = re.compile(r"^agent_house_[a-z0-9_]{1,64}$")
+OWNER_AUTOMATION = re.compile(r"^automation\.[a-z0-9_]+$")
 
 
 class HAError(Exception):
@@ -350,6 +353,33 @@ class HAClient:
             service_data={},
             target={"entity_id": entity_id},
         )
+
+    async def set_original_enabled(self, entity_id: str, enabled: bool) -> None:
+        """Switch one of the OWNER's automations off or on (`automation.turn_off` / `turn_on`): the
+        reversible "disable original" of the migration page, on the owner's explicit click. Its only
+        caller is `core/migration.py`. Nothing is edited or deleted; ours go through the lifecycle."""
+        state = self.states.get(entity_id) if isinstance(entity_id, str) else None
+        if state is None or not OWNER_AUTOMATION.fullmatch(entity_id):
+            raise HAError(f"{entity_id!r} is not an automation Home Assistant knows")
+        if str((state.get("attributes") or {}).get("id") or "").startswith(AUTOMATION_PREFIX):
+            raise HAError(f"{entity_id} is one of ours: use the Deployed automations page")
+        await self._send(
+            "call_service",
+            domain="automation",
+            service="turn_on" if enabled else "turn_off",
+            service_data={},
+            target={"entity_id": entity_id},
+        )
+
+    async def get_script(self, object_id: str) -> dict | None:
+        """Config of a UI-managed script (read-only); None when HA has no editable config for it.
+        The path is [UNVERIFIED-ON-HW] (docs/OWNER_CHECKLIST.md M5)."""
+        try:
+            return await self.rest_get(f"/config/script/config/{object_id}")
+        except HAError as err:
+            if "HTTP 404" in str(err):
+                return None
+            raise
 
     async def validate_automation(self, config: dict) -> dict:
         """WebSocket `validate_config` with the plural keys → {"triggers": {"valid", "error"}, …}."""

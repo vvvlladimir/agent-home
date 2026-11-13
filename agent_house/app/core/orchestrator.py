@@ -711,8 +711,11 @@ class Orchestrator:
         run_id: str | None = None,
         ha_id: str | None = None,
         priority: Priority = Priority.INTERACTIVE,
+        replaces_original: str | None = None,
+        new_run_id: str | None = None,
     ) -> dict:
-        """Ask the model for an automation; return the proposal (draft or blocked). Never deploys."""
+        """Ask the model for an automation; return the proposal (draft or blocked). Never deploys.
+        `new_run_id`: the id this draft's run gets (a caller that answers before the draft is done)."""
         if self.safety.kill_engaged:
             raise OrchestratorError("kill_switch", "the kill switch is engaged")
         request = request.strip()[:2000]
@@ -726,7 +729,7 @@ class Orchestrator:
             "\n".join(lines) or "(none)"
         )
         transcript: list[dict] = [{"role": "user", "text": user}]
-        trace = _Trace(self, origin_agent, run_id, request, priority)
+        trace = _Trace(self, origin_agent, run_id, request, priority, new_run_id)
         trace.step("context", {"system": self._system(), "user": user, "entities": len(lines)})
         redactor = Redactor.for_home(self.ha)
         proposal = None
@@ -800,6 +803,7 @@ class Orchestrator:
                             origin_agent=origin_agent,
                             run_id=trace.run_id,
                             ha_id=ha_id,
+                            replaces_original=replaces_original,
                         )
                     else:
                         proposal = await self.lifecycle.edit(proposal["id"], text)
@@ -879,20 +883,24 @@ class Orchestrator:
             except Exception:  # noqa: BLE001
                 log.exception("background draft failed")
 
-        task = asyncio.get_running_loop().create_task(job(), name=f"draft-{agent_id}")
+        self.spawn(job(), f"draft-{agent_id}")
+        return True
+
+    def spawn(self, job, name: str) -> None:
+        """A background job of the orchestrator; cancelled by stop()."""
+        task = asyncio.get_running_loop().create_task(job, name=name)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
-        return True
 
 
 class _Trace:
     """An orchestrator draft as a run (agent_id `orchestrator`), so Runs & traces shows it."""
 
     def __init__(
-        self, orch: Orchestrator, origin_agent, origin_run, request: str, priority: Priority
+        self, orch: Orchestrator, origin_agent, origin_run, request: str, priority: Priority, run_id=None
     ) -> None:
         self.store = orch.store
-        self.run_id = new_id("r")
+        self.run_id = run_id or new_id("r")
         self.started = time.time()
         self.trace: list[dict] = []
         self.steps = self.tokens_in = self.tokens_out = 0

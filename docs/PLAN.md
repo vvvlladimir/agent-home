@@ -69,7 +69,8 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## M5 — Migration + polish
 
-- [ ] Importer (HA automations/scripts, Node-RED export — samples in `owner-reports/nodered/`), parity report, reversible "disable original"
+- [x] Importer (HA automations/scripts, Node-RED export — samples in `owner-reports/nodered/`), parity report, reversible "disable original"
+      → `core/migration.py`, `core/nodered.py`, D18, S16
 - [ ] Chat page, config export/import
 - [ ] Habit finder: deterministic scan of HA history (no LLM) for repeated manual actions that follow
       a sensor or a time of day (e.g. desk lamp switched on by hand when radar zone 1 turns on);

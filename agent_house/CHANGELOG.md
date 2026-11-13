@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-dev.10 — M5 migration
+
+- **Migration** page: imports your own automations, scripts and Node-RED exports
+  (`/share/agent_house/nodered/*.json`) read-only, asks the orchestrator for a replacement (a normal
+  proposal), compares both against the last 7 days of history, and can switch your original off
+  and on again. Nothing of yours is edited or deleted.
+
 ## 0.1.0-dev.9 — the orchestrator finds your sensors
 
 - Fixed: drafts were declined with "there is no sensor for that" although it exists. The model saw

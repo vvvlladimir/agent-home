@@ -54,6 +54,7 @@ class Settings(BaseModel):
     data_dir: Path = Path("/data")
     port: int = 8099
     log_level: str = "info"
+    share_dir: Path = Path("/share/agent_house")  # read-only map; Node-RED exports in ./nodered
 
     # Home Assistant. Inside the add-on these defaults go through the Supervisor proxy.
     ha_url: str = "http://supervisor/core"
@@ -145,6 +146,7 @@ _ENV = {
     "AH_DATA_DIR": "data_dir",
     "AH_PORT": "port",
     "AH_LOG_LEVEL": "log_level",
+    "AH_SHARE_DIR": "share_dir",
     "AH_HA_URL": "ha_url",
     "AH_HA_WS_URL": "ha_ws_url",
     "AH_HA_TOKEN": "ha_token",

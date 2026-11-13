@@ -59,13 +59,15 @@ def _transitions(rows: list[dict]) -> list[tuple[float, str | None, str]]:
     return out
 
 
-async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None) -> dict:
+async def firings(
+    config: dict, ha, days: int = 7, now: datetime | None = None
+) -> tuple[list[dict], list[str]]:
+    """([{ts, trigger}] newest first, unsupported notes) for every trigger firing in the window."""
     days = max(1, min(int(days), 30))
     end = now or datetime.now(UTC)
     start = end - timedelta(days=days)
     unsupported: list[str] = []
     samples: list[dict] = []
-    fired = 0
     cache: dict[str, list[dict]] = {}
 
     async def history(entity_id: str) -> list[dict]:
@@ -74,8 +76,6 @@ async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None)
         return cache[entity_id]
 
     def hit(ts: float, label: str) -> None:
-        nonlocal fired
-        fired += 1
         samples.append({"ts": ts, "trigger": label})
 
     for index, trigger in enumerate(_list(config.get("triggers"))):
@@ -125,11 +125,21 @@ async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None)
             unsupported.append(f"{label}: cannot be simulated from history")
 
     samples.sort(key=lambda s: s["ts"], reverse=True)
+    return samples, unsupported
+
+
+def fully_supported(unsupported: list[str]) -> bool:
+    return not [u for u in unsupported if "ignored" not in u]
+
+
+async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None) -> dict:
+    days = max(1, min(int(days), 30))
+    samples, unsupported = await firings(config, ha, days, now)
     return {
         "days": days,
-        "supported": not [u for u in unsupported if "ignored" not in u],
+        "supported": fully_supported(unsupported),
         "unsupported": unsupported,
-        "would_fire": fired,
+        "would_fire": len(samples),
         "samples": samples[:MAX_SAMPLES],
         "conditions_evaluated": False,
         "computed": time.time(),

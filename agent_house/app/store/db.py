@@ -152,6 +152,22 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (day, provider, model)
     );
     """,
+    # 6 — M5: the owner's own automations, scripts and Node-RED flows as the importer read them
+    # (read-only copies; `ref` is HA's config id, the script's object id or the flow group's key)
+    """
+    CREATE TABLE originals (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        ref TEXT NOT NULL,
+        entity_id TEXT,
+        title TEXT NOT NULL,
+        enabled INTEGER,
+        summary TEXT,
+        config TEXT,
+        disabled_by_us INTEGER NOT NULL DEFAULT 0,
+        updated REAL NOT NULL
+    );
+    """,
 ]
 
 

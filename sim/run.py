@@ -51,6 +51,7 @@ def main() -> None:
         "AH_ANTHROPIC_API_KEY": "sk-ant-sim",
         "AH_OPENAI_BASE_URL": "http://127.0.0.1:8082/v1",
         "AH_OPENAI_API_KEY": "sk-proj-sim",
+        "AH_SHARE_DIR": str(ROOT / "owner-reports"),  # ./nodered: the owner's flow exports
     }
     for k, v in env.items():
         os.environ.setdefault(k, v)

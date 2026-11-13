@@ -179,6 +179,21 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    bundle (it now contains `proposals.json` and `automations.json`), and one line per proposal on
    whether the YAML is what you wanted.
 
+## M5 — migration (importer, parity, disable original)
+
+1. Copy your Node-RED exports (Node-RED → menu → Export → *all flows* or one tab → JSON) into
+   `/share/agent_house/nodered/` (Samba or File editor add-on). The add-on reads `/share` read-only.
+2. **Migration → Import / refresh**. Expect one row per HA automation, per UI script and per
+   top-level group of each Node-RED tab. `[UNVERIFIED-ON-HW]`: the script config path
+   (`/config/script/config/<object_id>`) and automations without an `id` (YAML-only) — those show
+   "no readable config"; note how many.
+3. Pick a simple HA automation → **Propose replacement**. A draft appears on Proposals; open the
+   original's row again for the **parity** line (original / replacement / matched over 7 days).
+4. Approve the replacement, then untick **Enabled** on the original: HA shows your automation as
+   off (not changed, not deleted). Tick it again: it is on again.
+5. Try one Node-RED group: the summary says what was read and how many logic nodes were not.
+   The draft is a starting point; say in `owner-reports/m5/README.md` how close it was.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.
