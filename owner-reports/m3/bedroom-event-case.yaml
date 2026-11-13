@@ -1,0 +1,72 @@
+# Copied from run r_1a1d43700e97ebce2 (bedroom, ok). Review `expect`.
+version: 1
+room:
+  name: Bedroom
+  entities:
+  - entity_id: binary_sensor.esphome_radar_bedroom_occupancy_ld241x
+    state: 'on'
+    tier: T3
+  - entity_id: light.bulb_bed_bedroom
+    state: 'off'
+    tier: T0
+  - entity_id: light.bulb_main_1_bedroom
+    state: 'on'
+    tier: T0
+  - entity_id: binary_sensor.esphome_radar_bedroom_occupancy_ld2450
+    state: 'on'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_bedroom_zone_1_occupancy
+    state: 'on'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_bedroom_zone_2_occupancy
+    state: 'off'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_bedroom_zone_3_occupancy
+    state: 'off'
+    tier: T3
+  - entity_id: binary_sensor.esphome_radar_bedroom_zone_4_occupancy
+    state: 'off'
+    tier: T3
+  - entity_id: binary_sensor.pressure_bed_2_occupancy
+    state: 'off'
+    tier: T3
+  - entity_id: binary_sensor.pressure_bed_group_binary
+    state: 'off'
+    tier: T3
+  - entity_id: number.pressure_bed_2_presence_delay
+    state: '60'
+    tier: T3
+  - entity_id: number.pressure_bed_2_presence_time
+    state: '5'
+    tier: T3
+  - entity_id: number.pressure_bed_presence_delay
+    state: '60'
+    tier: T3
+  - entity_id: number.pressure_bed_presence_time
+    state: '5'
+    tier: T3
+  - entity_id: number.socket_bedroom_countdown
+    state: '0'
+    tier: T3
+  - entity_id: sensor.esphome_radar_bedroom_ambient_light
+    state: '24.0633697509766'
+    tier: T3
+  - entity_id: sensor.pressure_bed_2_illuminance
+    state: '925'
+    tier: T3
+  - entity_id: switch.socket_bedroom
+    state: 'on'
+    tier: T2
+  - entity_id: switch.wall_switch_bedroom
+    state: 'on'
+    tier: T2
+  - entity_id: sensor.pressure_bed_illuminance
+    state: '1750'
+    tier: T3
+scenarios:
+- id: run_r_1a1d43700e97ebce2
+  category: no_action
+  wake: binary_sensor.esphome_radar_bedroom_occupancy_ld241x changed off → on.
+  expect:
+    no_actuation: true
+    max_steps: 2
