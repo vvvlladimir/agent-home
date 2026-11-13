@@ -50,10 +50,25 @@ _POWER = re.compile(r"\b(VDD_IN|POM_5V_IN) (\d+)mW")
 
 
 def _read(path: str) -> str | None:
+    """A small sysfs/procfs file, or None. Some Jetson thermal zones answer a read with EAGAIN
+    (owner's Orin Nano, 2026-11-13: buffered reads then return None and crash in the decoder),
+    so read the raw fd and treat any failure as "unknown"."""
     try:
-        return Path(SYSROOT + path).read_text(errors="replace").replace("\x00", "").strip()
+        fd = os.open(SYSROOT + path, os.O_RDONLY)
     except OSError:
         return None
+    try:
+        chunks = []
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    except OSError:  # BlockingIOError / EAGAIN, EIO, ENODATA from a sensor that is not ready
+        return None
+    finally:
+        os.close(fd)
+    return b"".join(chunks).decode("utf-8", errors="replace").replace("\x00", "").strip()
 
 
 def parse_tegrastats(line: str) -> dict:

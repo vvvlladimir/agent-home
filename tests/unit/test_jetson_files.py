@@ -305,3 +305,19 @@ def test_a_metrics_bug_is_answered_not_a_dropped_connection(metrics, monkeypatch
     monkeypatch.setattr(metrics.module.Handler.sampler, "metrics", broken)
     response = httpx.get(f"{metrics.url}/metrics.json")
     assert response.status_code == 500 and "KeyError" in response.json()["error"]
+
+
+def test_a_thermal_zone_that_cannot_be_read_is_skipped(tmp_path, monkeypatch):
+    """Owner's Orin Nano: one `thermal_zone*/temp` answers reads with EAGAIN; the endpoint crashed
+    with `TypeError: can't concat NoneType to bytes`."""
+
+    server = load(JETSON / "metrics" / "server.py", "jetson_metrics_server")
+    zone = tmp_path / "sys/class/thermal/thermal_zone9"
+    zone.mkdir(parents=True)
+    (zone / "type").write_text("cpu-thermal\n")
+    (zone / "temp").write_text("48000\n")
+    monkeypatch.setattr(server, "SYSROOT", str(tmp_path))
+    assert server._read("/sys/class/thermal/thermal_zone9/temp") == "48000"
+    monkeypatch.setattr(server.os, "read", lambda fd, n: (_ for _ in ()).throw(BlockingIOError(11, "EAGAIN")))
+    assert server._read("/sys/class/thermal/thermal_zone9/temp") is None
+    assert server.read_throttled() is None
