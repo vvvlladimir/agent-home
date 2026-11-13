@@ -658,8 +658,8 @@ components:
       type: object
       required: [provider]
       properties:
-        provider: {type: string, enum: [anthropic, local, auto]}
-        effective: {type: string, enum: [anthropic, local, none], description: what a request would use right now}
+        provider: {type: string, enum: [anthropic, openai, local, auto]}
+        effective: {type: string, enum: [anthropic, openai, local, none], description: what a request would use right now}
         model: {type: [string, "null"]}
         budget:
           type: object

@@ -22,10 +22,17 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 log = logging.getLogger(__name__)
 
 SUPERVISOR_INGRESS_IP = "172.30.32.2"  # the only peer HA ingress connects from
-SECRET_FIELDS = ("ha_token", "anthropic_api_key", "jetson_token")
+SECRET_FIELDS = ("ha_token", "anthropic_api_key", "openai_api_key", "jetson_token")
 
 
-URL_FIELDS = ("ha_url", "ha_ws_url", "jetson_llm_url", "jetson_metrics_url", "anthropic_base_url")
+URL_FIELDS = (
+    "ha_url",
+    "ha_ws_url",
+    "jetson_llm_url",
+    "jetson_metrics_url",
+    "anthropic_base_url",
+    "openai_base_url",
+)
 
 
 def redact_url(url: str) -> str:
@@ -62,10 +69,13 @@ class Settings(BaseModel):
     jetson_token: str = ""
 
     # Orchestrator
-    orchestrator_provider: str = "auto"  # anthropic | local | auto
+    orchestrator_provider: str = "auto"  # auto | local | anthropic | openai
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-5-5"  # D11
     anthropic_base_url: str = ""  # only the simulator sets this
+    openai_api_key: str = ""
+    openai_model: str = "gpt-6.1-sol"  # D16: mid tier, priced like claude-sonnet-5-5
+    openai_base_url: str = ""  # only the simulator sets this
     daily_budget_eur: float = 1.0
     redact_cloud: bool = True
 
@@ -146,6 +156,9 @@ _ENV = {
     "AH_ANTHROPIC_API_KEY": "anthropic_api_key",
     "AH_ANTHROPIC_MODEL": "anthropic_model",
     "AH_ANTHROPIC_BASE_URL": "anthropic_base_url",
+    "AH_OPENAI_API_KEY": "openai_api_key",
+    "AH_OPENAI_MODEL": "openai_model",
+    "AH_OPENAI_BASE_URL": "openai_base_url",
     "AH_DAILY_BUDGET_EUR": "daily_budget_eur",
     "AH_REDACT_CLOUD": "redact_cloud",
 }
@@ -157,6 +170,8 @@ _OPTION_KEYS = (
     "orchestrator_provider",
     "anthropic_api_key",
     "anthropic_model",
+    "openai_api_key",
+    "openai_model",
     "daily_budget_eur",
     "redact_cloud",
 )

@@ -255,3 +255,68 @@ def test_status_and_contract(base):
         if isinstance(op, dict) and op.get("x-milestone") == "M4"
     ]
     assert "/api/proposals" in paths and "/api/automations/{ha_id}/rollback" in paths
+
+
+@pytest.fixture
+def openai_cloud():
+    from sim import fake_openai
+
+    sim = fake_openai.OpenAISim()
+    with ServerThread(fake_openai.create_app(sim)) as server:
+        server.sim = sim
+        yield server
+
+
+def test_openai_drafts_through_the_responses_api_redacted_and_budgeted(settings, openai_cloud, ha_state):
+    ha_state.set_state("person.owner", "home", {"friendly_name": "Anna Schmidt"})
+    sim = openai_cloud.sim
+    app = serve(settings, orchestrator_provider="openai", openai_api_key=sim.api_key,
+                openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
+    try:
+        bad = GOOD.replace("light.living_room_lamp", "lock.front_door")
+        submit = {"name": "submit_automation", "arguments": {
+            "title": "Welcome", "rationale": "r", "expected_triggers": "arrival", "yaml": bad}}  # fmt: skip
+        fixed = {**submit, "arguments": {**submit["arguments"], "yaml": GOOD.replace(
+            "binary_sensor.living_room_motion", "person.person_1").replace('"on"', "home")}}  # fmt: skip
+        sim.script[:] = [{"function_calls": [submit]}, {"function_calls": [fixed]}, {"text": "Done."}]
+        response = httpx.post(f"{app.base}/api/proposals",
+                              json={"request": "When person.owner (Anna Schmidt) gets home, lamp on"}, timeout=30)  # fmt: skip
+        assert response.status_code == 201, response.text
+        proposal = response.json()
+        assert proposal["status"] == "draft" and "entity_id: person.owner" in proposal["yaml"]
+        bodies = [r["body"] for r in sim.requests]
+        assert "Anna" not in str(bodies) and "person.owner" not in str(bodies)
+        first, second = bodies[0], bodies[1]
+        assert first["model"] == "gpt-6.1-sol" and first["store"] is False
+        assert (
+            first["tools"][0]["strict"] is True
+            and first["tools"][0]["parameters"]["additionalProperties"] is False
+        )
+        kinds = [i.get("type") or i.get("role") for i in second["input"]]
+        assert kinds == ["user", "reasoning", "function_call", "function_call_output"], (
+            "reasoning passed back"
+        )
+        assert second["input"][1]["encrypted_content"] == "gAAAA-sim"
+        orchestrator = status(app.base)["orchestrator"]
+        assert orchestrator["effective"] == "openai" and orchestrator["model"] == "gpt-6.1-sol"
+        assert orchestrator["budget"]["spent_today_eur"] > 0
+        run = httpx.get(f"{app.base}/api/runs/{proposal['run_id']}").json()
+        assert run["provider"] == "openai"
+    finally:
+        app.close()
+
+
+def test_auto_skips_clouds_without_a_key_and_uses_openai(settings, openai_cloud, llm_sim):
+    app = serve(settings, orchestrator_provider="auto", openai_api_key=openai_cloud.sim.api_key,
+                openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
+    try:
+        llm_sim.script[:] = [{"status": 500}] * 6
+        openai_cloud.sim.script[:] = [
+            {"function_calls": [{"name": "decline", "arguments": {"reason": "no attic"}}]}
+        ]
+        response = httpx.post(
+            f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60
+        )
+        assert response.status_code == 422 and "no attic" in response.json()["detail"]
+    finally:
+        app.close()

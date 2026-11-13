@@ -18,14 +18,20 @@ configuration:
   orchestrator_provider:
     name: Orchestrator provider
     description: >-
-      auto uses Claude when an API key is set and the daily budget is not used up, and
-      falls back to the local model otherwise.
+      auto uses the local model first and, when it is down, Claude and then OpenAI (only those
+      with an API key, only while the daily budget lasts). anthropic, openai or local use only that one.
   anthropic_api_key:
     name: Anthropic API key
     description: Only needed when the orchestrator may use Claude. Stored by Home Assistant, never shown in the GUI.
   anthropic_model:
     name: Claude model
     description: Model id for the orchestrator, for example claude-haiku-5-5.
+  openai_api_key:
+    name: OpenAI API key
+    description: Only needed when the orchestrator may use OpenAI. Stored by Home Assistant, never shown in the GUI.
+  openai_model:
+    name: OpenAI model
+    description: Model id for the orchestrator, for example gpt-6.1-sol (or the cheaper gpt-6-luna).
   daily_budget_eur:
     name: Daily cloud budget (EUR)
     description: Hard stop for Claude API spending per day. 0 disables cloud calls.

@@ -171,3 +171,16 @@ From the Claude API reference bundled with Claude Code (model table cached 2026-
 
 - SDK 2.x sends the API key as `Authorization: Bearer …` (not `x-api-key`); `sim/fake_anthropic.py`
   accepts both. [VERIFIED-LOCAL, anthropic 2.8.0]
+
+## 7. OpenAI API (orchestrator, second cloud)
+
+From developers.openai.com (fetched 2026-11-13):
+- Models: `gpt-6-astra` (flagship, $10 / $50 per MTok, OpenAI's default recommendation),
+  `gpt-6.1-sol` ($2 / $10, "near-Astra for complex work"), `gpt-6.1-terra` ($1 / $5),
+  `gpt-6-luna` ($0.10 / $0.50). Third-party price lists disagree in places; the official page wins.
+- "GPT-6 Astra and GPT-6.1 Sol require the Responses API for tool calling." Function tools are flat
+  (`type`, `name`, `description`, `parameters`, `strict`); output items of type `function_call` carry
+  `call_id`, `name`, `arguments` (a JSON string); results go back as `function_call_output` items.
+  Reasoning items returned with tool calls must be passed back.
+- [UNVERIFIED] `store: false` + `include: ["reasoning.encrypted_content"]` against the real API: the
+  fake (`sim/fake_openai.py`) mirrors the documented shapes only.

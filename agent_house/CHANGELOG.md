@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-dev.8 — OpenAI as a second cloud
+
+- New options `openai_api_key` and `openai_model` (default `gpt-6.1-sol`, priced like Claude
+  Sonnet). `orchestrator_provider: openai` uses only OpenAI; `auto` tries the local model, then
+  Claude, then OpenAI — only the clouds you gave a key for. Same redaction, same daily budget.
+- Jetson metrics: a thermal sensor that cannot be read no longer breaks `/metrics.json`
+  (update the repository on the Jetson and restart `agent-house-metrics`).
+
 ## 0.1.0-dev.7 — M4 proposals and deployed automations
 
 - **Proposals** page: describe an automation in words (the orchestrator drafts it) or paste YAML.

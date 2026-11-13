@@ -11,7 +11,7 @@ from pathlib import Path
 
 import uvicorn
 
-from sim import fake_anthropic, fake_ha, fake_ingress, fake_jetson, fake_llm
+from sim import fake_anthropic, fake_ha, fake_ingress, fake_jetson, fake_llm, fake_openai
 from sim.server import ServerThread
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +49,8 @@ def main() -> None:
         "AH_JETSON_TOKEN": "jetson-sim",
         "AH_ANTHROPIC_BASE_URL": "http://127.0.0.1:8081",
         "AH_ANTHROPIC_API_KEY": "sk-ant-sim",
+        "AH_OPENAI_BASE_URL": "http://127.0.0.1:8082/v1",
+        "AH_OPENAI_API_KEY": "sk-proj-sim",
     }
     for k, v in env.items():
         os.environ.setdefault(k, v)
@@ -61,6 +63,7 @@ def main() -> None:
         ServerThread(fake_ha.create_app(ha), port=8123),
         ServerThread(fake_llm.create_app(llm), port=8080),
         ServerThread(fake_anthropic.create_app(), port=8081),
+        ServerThread(fake_openai.create_app(), port=8082),
         ServerThread(fake_jetson.create_app(jetson), port=9100),
         ServerThread(fake_ingress.create_app(f"http://127.0.0.1:{args.port}"), port=args.port + 1),
     ]

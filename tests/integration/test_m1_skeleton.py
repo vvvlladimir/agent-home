@@ -246,11 +246,13 @@ def test_mode_and_kill_switch_persist(ingress, settings):
 
 def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
     settings.anthropic_api_key = "sk-ant-very-secret"
+    settings.openai_api_key = "sk-proj-very-secret"
     settings.jetson_token = "jetson-very-secret"
     connected(ingress.base)
     shown = httpx.get(f"{ingress.base}/api/settings").json()
     assert_matches_contract(shown, "/api/settings")
     assert shown["options"]["ha_token"] == "***" and shown["options"]["anthropic_api_key"] == "***"
+    assert shown["options"]["openai_api_key"] == "***"
 
     bundle = httpx.get(f"{ingress.base}/api/diagnostics")
     assert bundle.headers["content-type"] == "application/zip"
@@ -260,7 +262,7 @@ def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
     jsonschema.validate(manifest, schema)
     assert set(manifest["files"]) <= set(archive.namelist())
     blob = b"".join(archive.read(name) for name in archive.namelist())
-    for secret in (settings.ha_token, "sk-ant-very-secret", "jetson-very-secret"):
+    for secret in (settings.ha_token, "sk-ant-very-secret", "sk-proj-very-secret", "jetson-very-secret"):
         assert secret.encode() not in blob
 
 

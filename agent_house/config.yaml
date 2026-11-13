@@ -1,6 +1,6 @@
 # Home Assistant add-on ("app") manifest. Field reference: docs/RESEARCH.md §1.
 name: Agent House
-version: "0.1.0-dev.7"
+version: "0.1.0-dev.8"
 slug: agent_house
 description: LLM agents that watch your rooms, propose automations and act within strict safety tiers
 url: https://github.com/vvvlladimir/agent-home
@@ -23,6 +23,7 @@ options:
   jetson_metrics_url: ""
   orchestrator_provider: auto
   anthropic_model: claude-haiku-5-5
+  openai_model: gpt-6.1-sol
   daily_budget_eur: 1.0
   redact_cloud: true
 schema:
@@ -30,8 +31,10 @@ schema:
   jetson_llm_url: str?
   jetson_metrics_url: str?
   jetson_token: password?
-  orchestrator_provider: list(auto|anthropic|local)
+  orchestrator_provider: list(auto|anthropic|openai|local)
   anthropic_api_key: password?
   anthropic_model: str
+  openai_api_key: password?
+  openai_model: str
   daily_budget_eur: float(0,100)
   redact_cloud: bool

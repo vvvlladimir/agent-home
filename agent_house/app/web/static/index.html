@@ -609,7 +609,7 @@
               <option value="" x-text="t('whole house')"></option>
               <template x-for="a in areas" :key="a.area_id"><option :value="a.area_id" x-text="a.name"></option></template>
             </select></label>
-          <p class="muted small" x-text="t('Drafted by the orchestrator:') + ' ' + (status?.orchestrator?.effective || '…') + (status?.orchestrator?.effective === 'anthropic' ? ' (' + t('redacted') + ')' : '')"></p>
+          <p class="muted small" x-text="t('Drafted by the orchestrator:') + ' ' + (status?.orchestrator?.effective || '…') + (['anthropic', 'openai'].includes(status?.orchestrator?.effective) ? ' (' + t('redacted') + ')' : '')"></p>
         </div>
       </template>
       <template x-if="draftForm.mode === 'yaml'">

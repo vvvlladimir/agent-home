@@ -143,9 +143,9 @@ Update the add-on, keep the global mode on **Shadow**. About 30 minutes.
    Dashboard; Approve or Deny it there.
 
 **Status 2026-11-13:** received (one hour, `owner-reports/m3/README.md`). Still open: leave both agents
-in Shadow for a full day after updating, and check the Jetson metrics endpoint, which dropped the
-connection in the diagnostics: `curl -s http://192.168.1.215:9100/metrics.json | head -c 300` and, if it
-fails, `journalctl -u agent-house-metrics -n 50` (since 0.1.0-dev.7 the error is in the answer).
+in Shadow for a full day after updating. Jetson metrics: the crash was a thermal zone answering
+EAGAIN (fixed); on the Jetson `git pull && sudo systemctl restart agent-house-metrics`, then
+`curl -s http://192.168.1.215:9100/metrics.json | head -c 300` must print JSON.
 
 The Live feed shows *streaming* through ingress (verified in M1); if it ever shows *polling every 3 s*,
 SSE is being buffered and the feed falls back to polling — tell me.
@@ -171,7 +171,8 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    proposal idea (Describe it again with the same automation, or paste changed YAML with the same
    alias), approve it, then **Roll back to** v1: HA shows the first version again.
 6. Engage the kill switch: *Approve*, *Roll back* and *Draft* answer "kill switch engaged". Release.
-7. Cloud (only with an API key): set `orchestrator_provider: anthropic`, draft once. The dashboard's
+7. Cloud (only with an API key): set `orchestrator_provider: anthropic` (or `openai` with
+   `openai_api_key`; default model `gpt-6.1-sol`), draft once. The dashboard's
    Orchestrator card shows the spend; the drafting trace's `context` step is what was sent before
    redaction. Then back to `auto`.
 8. Send `owner-reports/m4/`: a screenshot of Proposals and of Deployed automations, a diagnostics

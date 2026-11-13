@@ -1,9 +1,11 @@
 """Orchestrator: drafts automations for the owner, on the local model or in the cloud.
 
-Providers (add-on option `orchestrator_provider`, D11):
+Providers (add-on option `orchestrator_provider`, D11, D16):
 - `local`     — llama-server on the Jetson only;
 - `anthropic` — the Claude API only (`anthropic_model`, default `claude-haiku-5-5`);
-- `auto`      — local first; the cloud when the local model is unreachable or fails a turn.
+- `openai`    — the OpenAI Responses API only (`openai_model`, default `gpt-6.1-sol`);
+- `auto`      — local first; then every cloud provider that has a key (Claude, then OpenAI) when
+                the local model is unreachable or fails a turn.
 
 Cloud calls carry redacted text only (`redact.py`, unless `redact_cloud` is off) and are paid
 from a daily budget in EUR with a hard stop: a call whose worst case (prompt + `max_tokens`) would
@@ -39,13 +41,19 @@ PRICES_USD = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-opus-5-5": (4.0, 20.0),
     "claude-fable-5-2": (8.0, 40.0),
+    # OpenAI, developers.openai.com/api/docs/models (checked 2026-11-13)
+    "gpt-6-luna": (0.10, 0.50),
+    "gpt-6.1-terra": (1.0, 5.0),
+    "gpt-6.1-sol": (2.0, 10.0),
+    "gpt-6-astra": (10.0, 50.0),
 }
-FALLBACK_PRICE = (8.0, 40.0)
+FALLBACK_PRICE = (10.0, 50.0)
 EUR_PER_USD = 0.92  # fixed; the budget is an approximate guard, not accounting
 # Server-side refusal fallbacks exist for these models, not for Haiku (RESEARCH §6).
 FALLBACK_MODELS = frozenset({"claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-2"})
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 MAX_TOKENS = 2048
+OPENAI_MAX_TOKENS = 4096  # includes reasoning tokens on the GPT-6 models
 MAX_TURNS = 4
 MAX_ENTITY_LINES = 80
 MAX_QUEUED_DRAFTS = 3
@@ -118,7 +126,8 @@ class Turn:
     eur: float = 0.0
     provider: str = ""
     model: str | None = None
-    raw: list | None = None  # Anthropic content blocks, passed back unchanged (thinking blocks)
+    raw: list | None = None  # the provider's own output items, passed back unchanged to it only
+    raw_by: str | None = None  # (thinking blocks / encrypted reasoning items)
 
 
 def price_eur(model: str, tokens_in: float, tokens_out: float) -> float:
@@ -138,7 +147,7 @@ class Budget:
     def today(self) -> dict:
         row = self.store.query(
             "SELECT COALESCE(SUM(eur), 0) AS eur, COALESCE(SUM(tokens_in), 0) AS tin, "
-            "COALESCE(SUM(tokens_out), 0) AS tout FROM spend WHERE day=? AND provider='anthropic'",
+            "COALESCE(SUM(tokens_out), 0) AS tout FROM spend WHERE day=? AND provider<>'local'",
             (self.day(),),
         )[0]
         limit = float(self.settings.daily_budget_eur)
@@ -162,10 +171,10 @@ class Budget:
     def reserve(self, worst_case_eur: float) -> None:
         """check() and book the worst case in one step (no await in between)."""
         self.check(worst_case_eur)
-        self.add("anthropic", "(reserved)", 0, 0, worst_case_eur)
+        self.add("cloud", "(reserved)", 0, 0, worst_case_eur)
 
     def release(self, reserved_eur: float) -> None:
-        self.add("anthropic", "(reserved)", 0, 0, -reserved_eur)
+        self.add("cloud", "(reserved)", 0, 0, -reserved_eur)
 
     def add(self, provider: str, model: str, tokens_in: int, tokens_out: int, eur: float) -> None:
         self.store.execute(
@@ -253,6 +262,10 @@ class AnthropicProvider:
         self._client = None
 
     @property
+    def has_key(self) -> bool:
+        return bool(self.settings.anthropic_api_key)
+
+    @property
     def available(self) -> bool:
         return bool(self.settings.anthropic_api_key) and not self.budget.today()["exhausted"]
 
@@ -275,7 +288,7 @@ class AnthropicProvider:
             if item["role"] == "user":
                 out.append({"role": "user", "content": item["text"]})
             elif item["role"] == "assistant":
-                if item.get("raw"):
+                if item.get("raw") and item.get("raw_by") == "anthropic":
                     out.append({"role": "assistant", "content": item["raw"]})
                     continue
                 blocks: list[dict] = [{"type": "text", "text": item["text"]}] if item.get("text") else []
@@ -372,6 +385,138 @@ class AnthropicProvider:
             provider="anthropic",
             model=response.model,
             raw=raw,
+            raw_by="anthropic",
+        )
+
+
+class OpenAIProvider:
+    """OpenAI Responses API (the GPT-6 models take tools only there). `store=False`: nothing is
+    kept at OpenAI; reasoning items come back encrypted and are passed back unchanged."""
+
+    name = "openai"
+
+    def __init__(self, settings, budget: Budget) -> None:
+        self.settings, self.budget = settings, budget
+        self._client = None
+
+    @property
+    def has_key(self) -> bool:
+        return bool(self.settings.openai_api_key)
+
+    @property
+    def available(self) -> bool:
+        return bool(self.settings.openai_api_key) and not self.budget.today()["exhausted"]
+
+    def client(self):
+        if self._client is None:
+            from openai import AsyncOpenAI
+
+            self._client = AsyncOpenAI(
+                api_key=self.settings.openai_api_key,
+                base_url=self.settings.openai_base_url or None,
+                max_retries=0,  # a retry is a second bill; `auto` falls back instead
+                timeout=90.0,
+            )
+        return self._client
+
+    @staticmethod
+    def _input(transcript: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        for item in transcript:
+            if item["role"] == "user":
+                out.append({"role": "user", "content": item["text"]})
+            elif item["role"] == "assistant":
+                if item.get("raw") and item.get("raw_by") == "openai":
+                    out += item["raw"]
+                    continue
+                if item.get("text"):
+                    out.append({"role": "assistant", "content": item["text"]})
+                out += [
+                    {
+                        "type": "function_call",
+                        "call_id": c["id"],
+                        "name": c["name"],
+                        "arguments": json.dumps(c["input"], ensure_ascii=False),
+                    }
+                    for c in item.get("calls") or []
+                ]
+            else:
+                out += [
+                    {"type": "function_call_output", "call_id": r["id"], "output": r["content"]}
+                    for r in item["results"]
+                ]
+        return out
+
+    async def turn(self, system: str, transcript: list[dict], tools: list[dict], priority: Priority) -> Turn:
+        import openai
+
+        if not self.settings.openai_api_key:
+            raise ProviderError("no openai_api_key configured")
+        model = self.settings.openai_model
+        request = {
+            "model": model,
+            "instructions": system,
+            "input": self._input(transcript),
+            "tools": [
+                {
+                    "type": "function",
+                    "name": t["name"],
+                    "description": t["description"],
+                    "strict": True,
+                    "parameters": {
+                        "type": "object",
+                        "properties": t["properties"],
+                        "required": t["required"],
+                        "additionalProperties": False,
+                    },
+                }
+                for t in tools
+            ],
+            "max_output_tokens": OPENAI_MAX_TOKENS,
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+        }
+        estimate_in = math.ceil(len(json.dumps(request, ensure_ascii=False)) / 3.0)
+        worst = price_eur(model, estimate_in, OPENAI_MAX_TOKENS)
+        self.budget.reserve(worst)
+        try:
+            response = await self.client().responses.create(**request)
+        except (openai.APIStatusError, openai.APIConnectionError) as err:
+            raise ProviderError(f"OpenAI API: {type(err).__name__}: {err}"[:300]) from err
+        usage = response.usage
+        cached = getattr(getattr(usage, "input_tokens_details", None), "cached_tokens", 0) or 0
+        eur = price_eur(response.model or model, usage.input_tokens - 0.9 * cached, usage.output_tokens)
+        self.budget.add("openai", response.model or model, usage.input_tokens, usage.output_tokens, eur)
+        self.budget.release(worst)
+        raw = [item.model_dump(mode="json", exclude_none=True) for item in response.output]
+        calls, text, refused = [], [], False
+        for item in response.output:
+            if item.type == "function_call":
+                try:
+                    arguments = json.loads(item.arguments or "{}")
+                    error = None if isinstance(arguments, dict) else "arguments are not an object"
+                except ValueError:
+                    arguments, error = {}, "arguments are not valid JSON"
+                calls.append({"id": item.call_id, "name": item.name, "input": arguments, "error": error})
+            elif item.type == "message":
+                for part in item.content or []:
+                    if part.type == "output_text":
+                        text.append(part.text)
+                    elif part.type == "refusal":
+                        refused = True
+        if refused and not calls:
+            raise ProviderError("the OpenAI API declined the request (refusal)")
+        return Turn(
+            text="".join(text),
+            calls=calls,
+            stop_reason=response.status,
+            tokens_in=usage.input_tokens,
+            tokens_out=usage.output_tokens,
+            eur=eur,
+            provider="openai",
+            model=response.model,
+            raw=raw,
+            raw_by="openai",
         )
 
 
@@ -383,6 +528,7 @@ class Orchestrator:
         self.budget = Budget(store, settings)
         self.local = LocalProvider(llm)
         self.cloud = AnthropicProvider(settings, self.budget)
+        self.openai = OpenAIProvider(settings, self.budget)
         self._tasks: set[asyncio.Task] = set()
 
     async def stop(self) -> None:
@@ -395,15 +541,19 @@ class Orchestrator:
         return {
             "local": [self.local],
             "anthropic": [self.cloud],
-        }.get(self.settings.orchestrator_provider, [self.local, self.cloud])
+            "openai": [self.openai],
+        }.get(self.settings.orchestrator_provider, [self.local, self.cloud, self.openai])
 
     def status(self) -> dict:
         usable = [p for p in self.providers() if p.available]
         effective = usable[0].name if usable else "none"
+        model = {"anthropic": self.settings.anthropic_model, "openai": self.settings.openai_model}.get(
+            effective, self.local.llm.model
+        )
         return {
             "provider": self.settings.orchestrator_provider,
             "effective": effective,
-            "model": self.settings.anthropic_model if effective == "anthropic" else self.local.llm.model,
+            "model": model,
             "budget": self.budget.today(),
         }
 
@@ -415,7 +565,10 @@ class Orchestrator:
         for provider in self.providers():
             if self.safety.kill_engaged:
                 raise OrchestratorError("kill_switch", "the kill switch is engaged")
-            if provider is self.cloud and self.settings.redact_cloud:
+            cloud = provider is not self.local
+            if cloud and self.settings.orchestrator_provider == "auto" and not provider.has_key:
+                continue  # `auto` uses only the clouds the owner gave a key for
+            if cloud and self.settings.redact_cloud:
                 sent_system = redactor.redact(system)
                 sent = [self._redact_item(item, redactor) for item in transcript]
             else:
@@ -429,10 +582,10 @@ class Orchestrator:
                 log.warning("orchestrator provider %s failed: %s", provider.name, err)
                 errors.append(str(err))
                 continue
-            if provider is self.cloud and self.settings.redact_cloud:
+            if cloud and self.settings.redact_cloud:
                 turn.calls = [{**c, "input": redactor.restore(c["input"])} for c in turn.calls]
             return turn
-        if any("budget" in e for e in errors) and len(errors) == len(self.providers()):
+        if errors and all("budget" in e for e in errors):
             raise OrchestratorError("budget", "; ".join(errors))
         raise OrchestratorError("unavailable", "; ".join(errors) or "no provider is configured")
 
@@ -445,8 +598,8 @@ class Orchestrator:
                 **item,
                 "results": [{**r, "content": redactor.redact(r["content"])} for r in item["results"]],
             }
-        if item.get("raw"):
-            return item  # the cloud's own answer: written from redacted text, thinking signatures intact
+        # `raw` (the cloud's own output items, written from redacted text; thinking signatures and
+        # encrypted reasoning must stay byte-identical) goes back only to the provider that wrote it
         return {
             **item,
             "text": redactor.redact(item.get("text") or ""),
@@ -525,7 +678,12 @@ class Orchestrator:
                     if proposal is not None:
                         break
                     transcript += [
-                        {"role": "assistant", "text": turn.text or "…", "raw": turn.raw},
+                        {
+                            "role": "assistant",
+                            "text": turn.text or "…",
+                            "raw": turn.raw,
+                            "raw_by": turn.raw_by,
+                        },
                         {"role": "user", "text": "Call submit_automation or decline."},
                     ]
                     continue
@@ -579,7 +737,13 @@ class Orchestrator:
                         }
                     )
                 transcript += [
-                    {"role": "assistant", "text": turn.text, "calls": turn.calls, "raw": turn.raw},
+                    {
+                        "role": "assistant",
+                        "text": turn.text,
+                        "calls": turn.calls,
+                        "raw": turn.raw,
+                        "raw_by": turn.raw_by,
+                    },
                     {"role": "tool", "results": results},
                 ]
                 if done:
