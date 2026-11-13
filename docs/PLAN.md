@@ -79,4 +79,21 @@ steps are written down in `OWNER_CHECKLIST.md`.
       (one proposal per conflict, never two automations fighting over one entity)
 - [ ] Feedback after deploy: count how often the owner undoes what an `agent_house_` automation did
       (switches the light back within minutes); above a threshold, propose a fix or a rollback
+- [ ] Agent council — ownership: every entity has exactly one owner agent; room entities belong to
+      their room agent, everything without an area (people, phones, weather, sun, house-wide helpers)
+      to the orchestrator; no agent actuates or automates an entity it does not own
+- [ ] Agent council — shared board: agents post short facts ("bedroom: someone went to bed 23:10",
+      "living room: empty 30 min, TV on") with an expiry; every wake sees its neighbours' fresh facts
+      in the prompt; replaces free agent-to-agent chat (no loops, bounded tokens)
+- [ ] Agent council — house modes: the orchestrator owns `input_select.agent_house_mode`
+      (night / away / home / guests / work); room agents and deployed automations read it, so the
+      instant reactions between rooms run in HA, not through a model
+- [ ] Agent council — tasks down, escalation up: the orchestrator gives a room a task ("away: check
+      everything is off") and gets a report on the board; a room escalates to the orchestrator (not to
+      a neighbour) when it needs another owner's entity, sees a conflict or danger; `ask_agent` goes
+      through the orchestrator
+- [ ] Orchestrator as an agent: its own wake rules (mode changes, presence of people, daily review),
+      routine runs on the Jetson, the cloud only as the expert for drafts, history analysis,
+      conflicts and low-confidence cases (provider `auto` per task); 4B profile recommended for the
+      room agents (`docs/DECISIONS.md` after the owner's benchmark)
 - [ ] RUNBOOK, README screenshots, `v0.1.0`
