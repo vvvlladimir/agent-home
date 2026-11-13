@@ -714,6 +714,8 @@
         <button class="btn btn-ghost" @click="saveProposal()" :disabled="proposalBusy || proposalYaml === proposalSel?.yaml" x-text="t('Save edit and re-check')"></button>
         <button class="btn btn-ghost" @click="rejectProposal()" :disabled="proposalBusy" x-text="t('Reject')"></button>
       </div>
+      <p class="muted small" style="color: var(--warn)" x-show="proposalSel?.supersedes?.length"
+         x-text="t('Approving switches off:') + ' ' + (proposalSel?.supersedes || []).join(', ')"></p>
       <p class="muted small" x-show="proposalSel?.note" x-text="t('Note:') + ' ' + proposalSel?.note"></p>
       <p class="small" x-show="proposalMsg" x-text="proposalMsg"></p>
       <p class="error" x-show="proposalError" x-text="proposalError"></p>
@@ -736,6 +738,14 @@
           </div>
           <p class="muted small" x-text="t('Orchestrator') + ': ' + council.orchestrator_mode + ' · ' + t('auto house mode') + ': ' + (council.auto_house_mode ? t('on') : t('off')) + (council.night_window ? ' · ' + t('night') + ' ' + council.night_window : '')"></p>
           <p class="muted small" x-text="t('The orchestrator switches only this helper, in shadow unless its mode is live. Guests and work are set by the owner only.')"></p>
+          <h3 x-text="t('What wakes the orchestrator')"></h3>
+          <ul class="small">
+            <template x-for="w in council.orchestrator_wakes || []" :key="w.id">
+              <li :class="w.active ? '' : 'muted'"><span x-text="w.rule"></span>
+                · <span class="muted" x-text="w.last ? new Date(w.last * 1000).toLocaleString() : t('never')"></span>
+                <span class="muted" x-show="!w.active" x-text="'(' + t('off') + ')'"></span></li>
+            </template>
+          </ul>
           <p class="muted small" x-show="councilMsg" x-text="councilMsg"></p>
         </article>
 
