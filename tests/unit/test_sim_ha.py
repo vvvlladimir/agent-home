@@ -93,6 +93,13 @@ def test_history_filter_and_fail_next(ha, api):
     )
     data = r.json()
     assert [[s["state"] for s in lst] for lst in data] == [["19"], ["18"]]
+    later = (t0 + timedelta(minutes=30)).isoformat()
+    data = api.get(
+        f"/api/history/period/{later.replace('+', '%2B')}",
+        params={"filter_entity_id": "sensor.living_room_temperature"},
+    ).json()
+    assert data[0][0]["state"] == "19" and data[0][-1]["state"] == "20", "the state at start comes first"
+    assert data[0][0]["last_changed"] == later
     assert api.get("/api/history/period", params={"filter_entity_id": "light.hallway"}).status_code == 200
     ha.state.fail_next(1, 503)
     assert api.get("/api/states").status_code == 503
@@ -131,8 +138,12 @@ async def test_ws_commands_and_events(ha):
     devs = (await _cmd(ws, id=4, type="config/device_registry/list"))["result"]
     assert all(d["area_id"] for d in devs)
     assert len((await _cmd(ws, id=5, type="get_states"))["result"]) >= 26
-    v = (await _cmd(ws, id=6, type="validate_config", trigger=[{"platform": "state"}], action=[]))["result"]
-    assert v["trigger"]["valid"] and not v["action"]["valid"]
+    v = (await _cmd(ws, id=6, type="validate_config", triggers=[{"trigger": "state"}], actions=[]))["result"]
+    assert v["triggers"]["valid"] and not v["actions"]["valid"]
+    bad = await _cmd(ws, id=60, type="validate_config", triggers=[{"trigger": "no_such_platform"}])
+    assert bad["result"]["triggers"]["valid"] is False and bad["result"]["triggers"]["error"]
+    singular = await _cmd(ws, id=61, type="validate_config", trigger=[{"platform": "state"}])
+    assert singular["success"] is False, "real HA takes plural keys only"
     assert (await _cmd(ws, id=7, type="bogus"))["error"]["code"] == "unknown_command"
     assert (await _cmd(ws, id=8, type="subscribe_events", event_type="state_changed"))["success"]
     ha.state.set_state("binary_sensor.hallway_motion", "on")  # from the test thread

@@ -158,3 +158,9 @@ tr.clickable:hover { background: var(--hover, rgba(127, 127, 127, .08)); }
 .form.wide label.check { grid-template-columns: auto 1fr; justify-content: start; }
 details { margin: .25rem 0; }
 details summary { cursor: pointer; overflow-wrap: anywhere; }
+
+/* M4: proposals */
+.diff .diff-add { color: var(--ok); }
+.diff .diff-del { color: var(--bad); }
+.checks { list-style: none; padding: 0; margin: 0 0 .5rem; }
+.checks li { margin: .2rem 0; }

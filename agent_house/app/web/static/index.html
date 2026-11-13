@@ -141,7 +141,8 @@
           <dt x-text="t('Budget today')"></dt>
           <dd x-text="'€' + (status?.orchestrator?.budget?.spent_today_eur ?? 0).toFixed(2) + ' / €' + (status?.orchestrator?.budget?.daily_limit_eur ?? 0).toFixed(2)"></dd>
         </dl>
-        <p class="muted" x-text="t('The orchestrator arrives in M4; this card shows configuration only.')"></p>
+        <p class="muted small" x-show="status?.orchestrator?.budget?.exhausted" x-text="t('Cloud budget used up for today: cloud calls stop until midnight.')"></p>
+        <p class="muted small"><a href="#proposals" x-text="(status?.counts?.draft_proposals ?? 0) + ' ' + t('drafts waiting') + ' · ' + (status?.counts?.deployed_automations ?? 0) + ' ' + t('deployed')"></a></p>
       </article>
     </div>
 
@@ -586,6 +587,154 @@
         <p class="error" x-show="b.report.errors?.length" x-text="(b.report.errors || []).length + ' ' + t('request errors; see the diagnostics bundle')"></p>
       </article>
     </template>
+  </section>
+
+  <!-- ───────────────────────── Proposals (M4) ───────────────────────── -->
+  <section x-show="page === 'proposals'" x-cloak>
+    <h1 x-text="t('Proposals')"></h1>
+    <p class="muted" x-text="t('Automation drafts. Nothing reaches Home Assistant until you approve it; deployed ids start with agent_house_.')"></p>
+
+    <article class="card form" style="margin-bottom: 1rem">
+      <h2 x-text="t('New proposal')"></h2>
+      <div class="toolbar">
+        <label><input type="radio" value="request" x-model="draftForm.mode"> <span x-text="t('Describe it')"></span></label>
+        <label><input type="radio" value="yaml" x-model="draftForm.mode"> <span x-text="t('Write YAML')"></span></label>
+      </div>
+      <template x-if="draftForm.mode === 'request'">
+        <div>
+          <label><span x-text="t('What should happen, and when?')"></span>
+            <textarea rows="2" x-model="draftForm.request" :placeholder="t('Turn the bedroom lamp on when the radar sees someone after sunset')"></textarea></label>
+          <label><span x-text="t('Room (optional)')"></span>
+            <select x-model="draftForm.room">
+              <option value="" x-text="t('whole house')"></option>
+              <template x-for="a in areas" :key="a.area_id"><option :value="a.area_id" x-text="a.name"></option></template>
+            </select></label>
+          <p class="muted small" x-text="t('Drafted by the orchestrator:') + ' ' + (status?.orchestrator?.effective || '…') + (status?.orchestrator?.effective === 'anthropic' ? ' (' + t('redacted') + ')' : '')"></p>
+        </div>
+      </template>
+      <template x-if="draftForm.mode === 'yaml'">
+        <label><span x-text="t('Automation YAML')"></span>
+          <textarea rows="8" class="mono" x-model="draftForm.yaml" placeholder="alias: …&#10;triggers: …&#10;actions: …"></textarea></label>
+      </template>
+      <div class="toolbar">
+        <button class="btn" @click="createProposal()" :disabled="proposalBusy || (draftForm.mode === 'yaml' ? !draftForm.yaml.trim() : !draftForm.request.trim())"
+                x-text="proposalBusy ? t('Working…') : t('Draft')"></button>
+      </div>
+    </article>
+
+    <div class="toolbar">
+      <label><span x-text="t('Status')"></span>
+        <select x-model="proposalStatus" @change="loadProposals()">
+          <option value="" x-text="t('all')"></option>
+          <template x-for="s in ['draft', 'blocked', 'deployed', 'rejected', 'superseded', 'rolled_back']" :key="s">
+            <option :value="s" x-text="s"></option></template>
+        </select></label>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th x-text="t('Created')"></th><th x-text="t('Title')"></th><th x-text="t('Status')"></th>
+          <th x-text="t('From')"></th><th x-text="t('Automation id')"></th></tr></thead>
+        <tbody>
+          <template x-for="p in proposals" :key="p.id">
+            <tr class="clickable" @click="openProposal(p)" :class="{ dim: proposalSel && proposalSel.id !== p.id }">
+              <td x-text="clock(p.created)"></td>
+              <td x-text="p.title"></td>
+              <td><span class="pill" :class="{ draft: 'pill-ok', deployed: 'pill-ok', blocked: 'pill-bad' }[p.status] || 'pill-warn'" x-text="p.status"></span></td>
+              <td class="small" x-text="p.origin_agent || t('you')"></td>
+              <td class="mono small" x-text="p.ha_id"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" x-show="!proposals.length" x-text="t('No proposals with this status.')"></p>
+
+    <article class="card" x-show="proposalSel" style="margin-top: 1rem">
+      <h2><span x-text="proposalSel?.title"></span> <span class="mono small" x-text="proposalSel?.ha_id"></span></h2>
+      <p x-show="proposalSel?.rationale" x-text="proposalSel?.rationale"></p>
+      <p class="muted small" x-show="proposalSel?.expected_triggers" x-text="t('Expected to fire:') + ' ' + proposalSel?.expected_triggers"></p>
+      <p class="muted small" x-show="proposalSel?.run_id">
+        <a :href="'#runs'" @click="openRun(proposalSel.run_id)" x-text="t('Drafting trace') + ' ' + proposalSel?.run_id"></a></p>
+      <h3 x-text="t('Checks')"></h3>
+      <ul class="checks">
+        <template x-for="c in proposalSel?.checks || []" :key="c.name">
+          <li><span class="pill" :class="c.ok ? 'pill-ok' : 'pill-bad'" x-text="c.ok ? 'ok' : 'failed'"></span>
+              <strong x-text="c.name"></strong> <span class="small" :class="c.ok ? 'muted' : 'error'" x-text="c.detail || ''"></span></li>
+        </template>
+      </ul>
+      <template x-if="proposalSel?.diff">
+        <div><h3 x-text="t('Diff against what is deployed')"></h3>
+          <pre class="log diff"><template x-for="(line, i) in proposalSel.diff.split('\n')" :key="i"><span :class="diffClass(line)" x-text="line + '\n'"></span></template></pre></div>
+      </template>
+      <h3 x-text="t('YAML')"></h3>
+      <textarea rows="12" class="mono" x-model="proposalYaml" :readonly="!['draft', 'blocked'].includes(proposalSel?.status)"></textarea>
+      <h3 x-text="t('Shadow evidence')"></h3>
+      <div class="toolbar">
+        <label><span x-text="t('Days')"></span><input type="number" min="1" max="30" x-model="evidenceDays" style="width: 5rem"></label>
+        <button class="btn btn-ghost" @click="computeEvidence()" :disabled="proposalBusy" x-text="t('Simulate against history')"></button>
+      </div>
+      <template x-if="proposalSel?.evidence">
+        <div>
+          <p><strong x-text="proposalSel.evidence.would_fire"></strong>
+             <span x-text="t('trigger firings in the last') + ' ' + proposalSel.evidence.days + ' ' + t('days (conditions not evaluated)')"></span></p>
+          <p class="error small" x-show="proposalSel.evidence.unsupported?.length" x-text="t('Not simulated:') + ' ' + (proposalSel.evidence.unsupported || []).join('; ')"></p>
+          <ul class="small"><template x-for="(x, i) in proposalSel.evidence.samples || []" :key="i">
+            <li><span x-text="new Date(x.ts * 1000).toLocaleString()"></span> — <span class="mono" x-text="x.trigger"></span></li></template></ul>
+        </div>
+      </template>
+      <div class="toolbar" x-show="['draft', 'blocked'].includes(proposalSel?.status)">
+        <button class="btn" @click="approveProposal()" :disabled="proposalBusy || proposalSel?.status !== 'draft' || proposalYaml !== proposalSel?.yaml || status?.kill_switch?.engaged"
+                x-text="t('Approve and deploy')"></button>
+        <button class="btn btn-ghost" @click="saveProposal()" :disabled="proposalBusy || proposalYaml === proposalSel?.yaml" x-text="t('Save edit and re-check')"></button>
+        <button class="btn btn-ghost" @click="rejectProposal()" :disabled="proposalBusy" x-text="t('Reject')"></button>
+      </div>
+      <p class="muted small" x-show="proposalSel?.note" x-text="t('Note:') + ' ' + proposalSel?.note"></p>
+      <p class="small" x-show="proposalMsg" x-text="proposalMsg"></p>
+      <p class="error" x-show="proposalError" x-text="proposalError"></p>
+    </article>
+  </section>
+
+  <!-- ───────────────────────── Deployed automations (M4) ───────────────────────── -->
+  <section x-show="page === 'automations'" x-cloak>
+    <h1 x-text="t('Deployed automations')"></h1>
+    <p class="muted" x-text="t('Everything Agent House deployed into Home Assistant. Your own automations are never listed or changed here.')"></p>
+    <p class="small" x-show="deployedMsg" x-text="deployedMsg"></p>
+    <p class="error" x-show="deployedError" x-text="deployedError"></p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th x-text="t('Automation')"></th><th x-text="t('Version')"></th><th x-text="t('In HA')"></th>
+          <th x-text="t('Enabled')"></th><th x-text="t('From')"></th><th></th></tr></thead>
+        <tbody>
+          <template x-for="d in deployedList" :key="d.ha_id">
+            <tr>
+              <td class="clickable" @click="deployedSel = d"><span x-text="d.title"></span><br><span class="mono small" x-text="d.entity_id || d.ha_id"></span></td>
+              <td x-text="'v' + d.current_version"></td>
+              <td><span class="pill" :class="d.present_in_ha ? 'pill-ok' : 'pill-bad'" x-text="d.present_in_ha ? t('yes') : t('missing')"></span></td>
+              <td><input type="checkbox" :checked="d.enabled" :disabled="!d.present_in_ha" @change="setDeployedEnabled(d, $event.target.checked)"></td>
+              <td class="small" x-text="d.origin_agent || t('you')"></td>
+              <td><button class="btn btn-ghost" @click="removeDeployed(d)" x-text="t('Remove')"></button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted" x-show="!deployedList.length" x-text="t('Nothing deployed yet. Approve a proposal first.')"></p>
+
+    <article class="card" x-show="deployedSel" style="margin-top: 1rem">
+      <h2><span x-text="deployedSel?.title"></span> <span class="mono small" x-text="deployedSel?.ha_id"></span></h2>
+      <template x-for="v in deployedSel?.versions || []" :key="v.version">
+        <details :open="v.version === deployedSel.current_version">
+          <summary>
+            <strong x-text="'v' + v.version"></strong>
+            <span class="badge" x-show="v.version === deployedSel.current_version" x-text="t('current')"></span>
+            <span class="muted small" x-text="new Date(v.created * 1000).toLocaleString() + ' · ' + (v.note || '')"></span>
+          </summary>
+          <pre class="log" x-text="v.yaml"></pre>
+          <button class="btn btn-ghost" x-show="v.version !== deployedSel.current_version" @click="rollbackDeployed(deployedSel, v.version)"
+                  :disabled="status?.kill_switch?.engaged" x-text="t('Roll back to this version')"></button>
+        </details>
+      </template>
+    </article>
   </section>
 
   <!-- ───────────────────────── Placeholders for later milestones ───────────────────────── -->

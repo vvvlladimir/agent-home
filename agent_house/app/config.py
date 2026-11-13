@@ -64,7 +64,7 @@ class Settings(BaseModel):
     # Orchestrator
     orchestrator_provider: str = "auto"  # anthropic | local | auto
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-5-5"
+    anthropic_model: str = "claude-haiku-5-5"  # D11
     anthropic_base_url: str = ""  # only the simulator sets this
     daily_budget_eur: float = 1.0
     redact_cloud: bool = True

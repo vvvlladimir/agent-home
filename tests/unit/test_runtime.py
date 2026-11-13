@@ -57,10 +57,10 @@ def test_context_is_trimmed_to_the_token_budget_sensors_first(tmp_path):
     roomy = stack.rt.build_context(agent, "x")
     assert roomy["entities_included"] == 25 and roomy["entities_dropped"] == []
     tight = agent.model_copy(
-        update={"limits": agent.limits.model_copy(update={"context_budget_tokens": 1500})}
+        update={"limits": agent.limits.model_copy(update={"context_budget_tokens": 1800})}
     )
     trimmed = stack.rt.build_context(tight, "x")
-    assert trimmed["tokens_estimate"] <= 1500 < roomy["tokens_estimate"]
+    assert trimmed["tokens_estimate"] <= 1800 < roomy["tokens_estimate"]
     assert trimmed["entities_dropped"] and all(e.startswith("sensor.") for e in trimmed["entities_dropped"])
     assert CEILING in trimmed["system"]
 
@@ -465,3 +465,23 @@ async def test_one_schedule_wake_per_run(tmp_path):
     )
     tools = [t["result"] for t in steps(await run(stack), "tool")]
     assert tools[0]["ok"] is True and tools[1]["ok"] is False
+
+
+async def test_an_agent_proposes_an_automation_once_and_replays_do_not(tmp_path):
+    asked = []
+    stack = stack_with(
+        tmp_path,
+        call("propose_automation", description="lamp on at motion after dark"),
+        call("propose_automation", description="and again the same idea"),
+        {"text": "Proposed."},
+    )
+    stack.rt.orchestrator = type("Orch", (), {"request_draft": lambda self, *a: asked.append(a) or True})()
+    result = await run(stack)
+    outputs = [s["result"] for s in steps(result, "tool")]
+    assert outputs[0]["ok"] and outputs[0]["status"] == "queued"
+    assert not outputs[1]["ok"] and "one proposal" in outputs[1]["error"]
+    assert asked == [("room", result["id"], "lamp on at motion after dark", "room")]
+    stack.llm.steps = [call("propose_automation", description="lamp on at motion after dark"), {"text": "ok"}]
+    stack.rt.replay(result["id"])
+    await settle(stack)
+    assert len(asked) == 1, "a replay never drafts"

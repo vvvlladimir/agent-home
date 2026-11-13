@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-dev.7 — M4 proposals and deployed automations
+
+- **Proposals** page: describe an automation in words (the orchestrator drafts it) or paste YAML.
+  Every draft is checked (YAML, schema, safety policy, Home Assistant's own validation), shows a
+  diff against what is deployed and can be simulated against the last days of history. Nothing
+  reaches Home Assistant until you press *Approve and deploy*.
+- **Deployed automations** page: everything Agent House deployed (`agent_house_*` ids), with
+  versions, rollback, enable / disable and remove. Your own automations are never changed.
+- The orchestrator uses the local model first and Claude (`claude-haiku-5-5` by default) when the
+  local model is down; cloud prompts are redacted and stop at the daily budget.
+- Room agents can suggest an automation (`propose_automation`); it lands on the Proposals page.
+- The kill switch also stops drafting, deploying, rollbacks and enabling automations.
+- From the M3 run: device settings (`number.*_off_delay`, countdowns) no longer push room sensors
+  out of the prompt; people walking in is no longer reported as a warning; the Jetson metrics
+  endpoint answers errors instead of dropping the connection.
+
 ## 0.1.0-dev.6 — agents see the right entities
 
 - The prompt lists what matters first: entities in the agent's wake rules, then the ones it has

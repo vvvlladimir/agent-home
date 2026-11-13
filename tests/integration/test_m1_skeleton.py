@@ -264,7 +264,7 @@ def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
         assert secret.encode() not in blob
 
 
-@pytest.mark.parametrize("path", ["api/proposals", "api/automations", "api/chat"])
+@pytest.mark.parametrize("path", ["api/chat", "api/migration/originals"])
 def test_later_milestones_answer_501_with_the_contract_error_shape(ingress, path):
     response = httpx.get(f"{ingress.base}/{path}")
     assert response.status_code == 501 and response.json()["error"] == "not_implemented"

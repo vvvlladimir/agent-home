@@ -68,7 +68,8 @@ def create_app(sim: AnthropicSim | None = None) -> FastAPI:
                 },
             }
         )
-        if h.get("x-api-key") != sim.api_key:
+        # SDK 2.x sends the key as a bearer token; older clients use x-api-key
+        if sim.api_key not in (h.get("x-api-key"), h.get("authorization", "").removeprefix("Bearer ")):
             return error(401, "invalid x-api-key")
         if bad := rejected_param(body):
             return error(400, bad)

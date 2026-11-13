@@ -107,6 +107,51 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (agent_id, entity_id)
     );
     """,
+    # 5 — M4: automation drafts (proposals), every version we deployed, and the orchestrator's
+    # cloud spend per day (the budget's hard stop reads it)
+    """
+    CREATE TABLE proposals (
+        id TEXT PRIMARY KEY,
+        created REAL NOT NULL,
+        updated REAL NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        yaml TEXT NOT NULL,
+        rationale TEXT, expected_triggers TEXT, origin_agent TEXT, run_id TEXT,
+        ha_id TEXT NOT NULL,
+        replaces_original TEXT,
+        checks TEXT NOT NULL DEFAULT '[]',
+        evidence TEXT,
+        note TEXT
+    );
+    CREATE INDEX proposals_status ON proposals (status);
+    CREATE TABLE automation_versions (
+        ha_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        created REAL NOT NULL,
+        yaml TEXT NOT NULL,
+        proposal_id TEXT,
+        note TEXT,
+        PRIMARY KEY (ha_id, version)
+    );
+    CREATE TABLE deployed (
+        ha_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        current_version INTEGER NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        removed INTEGER NOT NULL DEFAULT 0,
+        origin_agent TEXT, run_id TEXT
+    );
+    CREATE TABLE spend (
+        day TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        eur REAL NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, provider, model)
+    );
+    """,
 ]
 
 

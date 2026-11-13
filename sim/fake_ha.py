@@ -248,23 +248,49 @@ class HAState:
             if not any(k in cfg for k in need):
                 raise HAError(400, f"Message malformed: required key not provided @ data['{need[0]}']")
 
-    @staticmethod
-    def validate_part(kind: str, value: Any) -> dict:
+    TRIGGER_PLATFORMS = frozenset(
+        {"state", "numeric_state", "time", "time_pattern", "sun", "event", "homeassistant", "template",
+         "zone", "device", "mqtt", "webhook", "calendar", "tag", "conversation"}
+    )  # fmt: skip
+    ACTION_KEYS = frozenset(
+        {"action", "service", "delay", "condition", "choose", "if", "sequence", "parallel", "repeat",
+         "wait_template", "wait_for_trigger", "event", "scene", "stop", "variables"}
+    )  # fmt: skip
+
+    @classmethod
+    def validate_part(cls, kind: str, value: Any) -> dict:
+        """One key of the WebSocket `validate_config` command (plural keys, like real HA)."""
         items = value if isinstance(value, list) else [value]
         if not items or any(not isinstance(i, dict) or not i for i in items):
             return {"valid": False, "error": f"{kind}: expected a non-empty object or list of objects"}
-        if kind == "trigger" and not all("platform" in i or "trigger" in i for i in items):
-            return {"valid": False, "error": "required key not provided @ data['trigger']"}
+        for item in items:
+            if kind == "triggers":
+                platform = item.get("trigger", item.get("platform"))
+                if platform is None:
+                    return {"valid": False, "error": "required key not provided @ data['trigger']"}
+                if platform not in cls.TRIGGER_PLATFORMS:
+                    return {"valid": False, "error": f"Invalid trigger '{platform}' specified"}
+            elif kind == "conditions" and "condition" not in item:
+                return {"valid": False, "error": "required key not provided @ data['condition']"}
+            elif kind == "actions" and not set(item) & cls.ACTION_KEYS:
+                return {"valid": False, "error": f"Unable to determine action @ data[0]: {sorted(item)}"}
         return {"valid": True, "error": None}
 
     # ---- history --------------------------------------------------------------------------
     def history_for(self, ids: list[str], start: datetime, end: datetime) -> list[list[dict]]:
+        """Like real HA: each list starts with the state the entity had at `start` (its
+        `last_changed` moved to `start`), then every change up to `end`."""
         out = []
         for eid in ids:
             rows = self.history.get(eid, []) + ([self.states[eid]] if eid in self.states else [])
-            rows = [r for r in rows if start <= _dt(r["last_changed"]) <= end]
-            if rows:
-                out.append(rows)
+            before = [r for r in rows if _dt(r["last_changed"]) < start]
+            inside = [r for r in rows if start <= _dt(r["last_changed"]) <= end]
+            if before:
+                inside.insert(
+                    0, {**before[-1], "last_changed": start.isoformat(), "last_updated": start.isoformat()}
+                )
+            if inside:
+                out.append(inside)
         return out
 
     # ---- registries + info ----------------------------------------------------------------
@@ -598,6 +624,10 @@ async def _handle(ha: HAState, conn: _Conn, msg: dict) -> None:
         except HAError:
             fail("service_not_found", f"Service {msg.get('domain')}.{msg.get('service')} not found.")
     elif typ == "validate_config":
-        ok({k: ha.validate_part(k, msg[k]) for k in ("trigger", "condition", "action") if k in msg})
+        singular = [k for k in ("trigger", "condition", "action") if k in msg]
+        if singular:  # real HA wants the plural keys (docs/RESEARCH.md §3)
+            fail("invalid_format", f"extra keys not allowed @ data['{singular[0]}']")
+        else:
+            ok({k: ha.validate_part(k, msg[k]) for k in ("triggers", "conditions", "actions") if k in msg})
     else:
         fail("unknown_command", "Unknown command.")

@@ -253,6 +253,30 @@ paths:
       parameters: [{name: status, in: query, schema: {$ref: "#/components/schemas/ProposalStatus"}}]
       responses:
         "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Proposal"}}}}}
+    post:
+      tags: [automations]
+      operationId: createProposal
+      x-milestone: M4
+      summary: "A new draft: the owner's own `yaml`, or a `request` in words that the orchestrator turns into YAML"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: {type: string}
+                title: {type: string}
+                rationale: {type: string}
+                request: {type: string, maxLength: 2000}
+                room: {type: string, description: "area id: limits the orchestrator to that room's entities"}
+                ha_id: {type: string, description: "one of our deployed automations to change"}
+      responses:
+        "201": {description: drafted (status draft or blocked), content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
   /api/proposals/{proposal_id}:
     parameters: [{$ref: "#/components/parameters/proposal_id"}]
     get:
@@ -810,6 +834,7 @@ components:
         unsupported: {type: array, items: {type: string}}
         would_fire: {type: integer}
         samples: {type: array, items: {type: object, properties: {ts: {type: number}, trigger: {type: string}}}}
+        conditions_evaluated: {type: boolean, description: "false: would_fire counts trigger firings, conditions are not replayed"}
         computed: {type: number}
     DeployedAutomation:
       type: object

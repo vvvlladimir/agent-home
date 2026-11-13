@@ -56,15 +56,16 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## M4 — Orchestrator + automation lifecycle
 
-- [ ] Providers: anthropic / local / auto with fallback; daily budget with hard stop
-      (owner, Q6: local Qwen is the default once M2 passes; cloud fallback `claude-haiku-5-5`)
-- [ ] Redaction for cloud prompts
-- [ ] Lifecycle: propose → YAML/schema/policy scan/`validate_config` → diff → approve → deploy → version → rollback
-- [ ] HA client write paths guarded by the `agent_house_` prefix
-- [ ] Shadow evidence: trigger simulation against history
-- [ ] Proposals + Deployed automations pages
-- [ ] Align `sim/fake_ha.py` `validate_config` with real HA (plural keys); history includes the state at start
-- [ ] Safety tests: T3 never actuated, drafts never reach HA, kill switch halts everything
+- [x] Providers: anthropic / local / auto with fallback; daily budget with hard stop
+      (owner, Q6: local Qwen is the default once M2 passes; cloud fallback `claude-haiku-5-5`) → `core/orchestrator.py`, D14
+- [x] Redaction for cloud prompts → `core/redact.py`, S15
+- [x] Lifecycle: propose → YAML/schema/policy scan/`validate_config` → diff → approve → deploy → version → rollback → `core/lifecycle.py`, S14
+- [x] HA client write paths guarded by the `agent_house_` prefix (`guard_ours`)
+- [x] Shadow evidence: trigger simulation against history → `core/evidence.py`
+- [x] Proposals + Deployed automations pages; room agents suggest automations (`propose_automation`)
+- [x] Align `sim/fake_ha.py` `validate_config` with real HA (plural keys); history includes the state at start
+- [x] Safety tests: T3 never actuated, drafts never reach HA, kill switch halts everything (`tests/unit/test_safety_invariants.py`, `test_lifecycle.py`, `tests/integration/test_m4_automations.py`)
+- [ ] **Owner:** draft, check, simulate, deploy, roll back one automation on the real HA (OWNER_CHECKLIST M4)
 
 ## M5 — Migration + polish
 

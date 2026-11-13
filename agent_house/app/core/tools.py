@@ -50,6 +50,18 @@ TOOLS: list[dict] = [
         ["key", "value"],
     ),
     _tool("recall", "Read your saved notes.", {"key": {"type": "string", "description": "optional"}}, []),
+    _tool(
+        "propose_automation",
+        "Suggest a permanent Home Assistant automation for your room. It is drafted and the owner "
+        "reviews it; nothing changes until then.",
+        {
+            "description": {
+                "type": "string",
+                "description": "what should happen, when, e.g. lamp on at motion after dark",
+            }
+        },
+        ["description"],
+    ),
 ]
 TOOL_NAMES = [tool["function"]["name"] for tool in TOOLS]
 READ_TOOLS = frozenset({"get_state", "list_entities", "get_history", "recall"})
@@ -97,6 +109,7 @@ class ToolBox:
         self.actions: list[dict] = []  # policy decisions of the call being executed
         self.asked = False
         self.scheduled = False
+        self.proposed = False
 
     async def execute(self, name: str, args: dict) -> dict:
         handler = getattr(self, f"_{name}", None) if name in TOOL_NAMES else None
@@ -265,6 +278,25 @@ class ToolBox:
         if not self.dry and not self.rt.gate.schedule(self.agent.id, minutes * 60, reason.strip()):
             return {"ok": False, "error": "you already have the maximum number of scheduled wakes"}
         return {"ok": True, "status": "scheduled"}
+
+    async def _propose_automation(self, args: dict) -> dict:
+        description = args.get("description")
+        if not isinstance(description, str) or len(description.strip()) < 10:
+            return {"ok": False, "error": "description must say what should happen and when"}
+        if self.proposed:
+            return {"ok": False, "error": "one proposal per wake. Finish with one short sentence."}
+        self.proposed = True
+        orchestrator = getattr(self.rt, "orchestrator", None)
+        if self.dry:
+            return {"ok": True, "status": "queued"}
+        if orchestrator is None or not orchestrator.request_draft(
+            self.agent.id, self.run["id"], description.strip()[:1000], self.agent.room
+        ):
+            return {
+                "ok": False,
+                "error": "the orchestrator is busy or unavailable; mention it in your answer",
+            }
+        return {"ok": True, "status": "queued", "note": "the owner reviews it on the Proposals page"}
 
     async def _remember(self, args: dict) -> dict:
         key, value = args.get("key"), args.get("value")

@@ -1,8 +1,11 @@
 """Home Assistant client: REST for one-shot reads, WebSocket for registries and live events.
 
-Read-only except `call_service`, whose only caller is `core/actuator.py` (after the policy
-decision; tests/unit/test_actuator.py greps for other callers). Automation config writes arrive
-in M4 behind the automation lifecycle; nothing else in the code base may talk to HA.
+Read-only except two write paths:
+- `call_service`, whose only caller is `core/actuator.py` (after the policy decision;
+  tests/unit/test_actuator.py greps for other callers);
+- automation writes (`write_automation`, `delete_automation`, `set_automation_enabled`), whose only
+  caller is `core/lifecycle.py`. Each refuses any id that is not `agent_house_<slug>`: the owner's
+  own automations can never be written, deleted or switched from here.
 
 API shapes: docs/RESEARCH.md §3. The registry list responses and the Supervisor proxy
 behaviour are [UNVERIFIED-ON-HW]; `tests/integration/test_real_ha.py` checks them against a
@@ -15,6 +18,7 @@ import asyncio
 import inspect
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -43,8 +47,22 @@ READ_COMMANDS = frozenset(
 )
 
 
+AUTOMATION_PREFIX = "agent_house_"
+OUR_AUTOMATION_ID = re.compile(r"^agent_house_[a-z0-9_]{1,64}$")
+
+
 class HAError(Exception):
     pass
+
+
+class NotOurs(HAError):
+    """A write was asked for an automation Agent House did not create."""
+
+
+def guard_ours(ha_id: object) -> str:
+    if not isinstance(ha_id, str) or not OUR_AUTOMATION_ID.fullmatch(ha_id):
+        raise NotOurs(f"refused: {ha_id!r} is not an {AUTOMATION_PREFIX}<slug> automation")
+    return ha_id
 
 
 class HAClient:
@@ -278,6 +296,65 @@ class HAClient:
             service_data=dict(data or {}),
             target={"entity_id": entity_id},
         )
+
+    # --- automation writes (core/lifecycle.py only) -------------------------------------
+    async def _rest(self, method: str, path: str, body: Any = None) -> Any:
+        try:
+            response = await self._http.request(method, path, json=body)
+        except httpx.HTTPError as err:
+            raise HAError(f"{type(err).__name__}: {err}") from err
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("message")
+            except ValueError:
+                detail = response.text[:200]
+            raise HAError(f"HTTP {response.status_code} for {method} {path}: {detail}")
+        return response.json() if response.content else None
+
+    async def write_automation(self, ha_id: str, config: dict) -> None:
+        """Create or replace one of OUR automations; HA reloads it by itself (RESEARCH §3)."""
+        guard_ours(ha_id)
+        if not isinstance(config, dict):
+            raise HAError("an automation config must be an object")
+        await self._rest("POST", f"/config/automation/config/{ha_id}", {**config, "id": ha_id})
+
+    async def delete_automation(self, ha_id: str) -> None:
+        guard_ours(ha_id)
+        await self._rest("DELETE", f"/config/automation/config/{ha_id}")
+
+    async def get_automation(self, ha_id: str) -> dict | None:
+        """Config of any automation by its config id (read-only); None when HA does not know it."""
+        try:
+            return await self.rest_get(f"/config/automation/config/{ha_id}")
+        except HAError as err:
+            if "HTTP 404" in str(err):
+                return None
+            raise
+
+    def automation_entity(self, ha_id: str) -> str | None:
+        """automation.<alias slug> whose `attributes.id` is the config id."""
+        for entity_id, state in self.states.items():
+            if entity_id.startswith("automation.") and (state.get("attributes") or {}).get("id") == ha_id:
+                return entity_id
+        return None
+
+    async def set_automation_enabled(self, ha_id: str, enabled: bool) -> None:
+        guard_ours(ha_id)
+        entity_id = self.automation_entity(ha_id)
+        if entity_id is None:
+            raise HAError(f"{ha_id} has no automation entity in Home Assistant")
+        await self._send(
+            "call_service",
+            domain="automation",
+            service="turn_on" if enabled else "turn_off",
+            service_data={},
+            target={"entity_id": entity_id},
+        )
+
+    async def validate_automation(self, config: dict) -> dict:
+        """WebSocket `validate_config` with the plural keys → {"triggers": {"valid", "error"}, …}."""
+        parts = {k: config[k] for k in ("triggers", "conditions", "actions") if config.get(k)}
+        return await self.command("validate_config", **parts)
 
     def _fail_pending(self, reason: str) -> None:
         for future in self._pending.values():

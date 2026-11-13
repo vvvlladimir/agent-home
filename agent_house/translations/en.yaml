@@ -25,7 +25,7 @@ configuration:
     description: Only needed when the orchestrator may use Claude. Stored by Home Assistant, never shown in the GUI.
   anthropic_model:
     name: Claude model
-    description: Model id for the orchestrator, for example claude-opus-5-5.
+    description: Model id for the orchestrator, for example claude-haiku-5-5.
   daily_budget_eur:
     name: Daily cloud budget (EUR)
     description: Hard stop for Claude API spending per day. 0 disables cloud calls.

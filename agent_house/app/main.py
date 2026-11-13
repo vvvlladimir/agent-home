@@ -14,14 +14,17 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .api.agents import router as agents_router
+from .api.automations import router as automations_router
 from .api.routes import router
 from .config import RuntimeSettings, Settings, load_runtime, load_settings
 from .core.actuator import Actuator
 from .core.agents import AgentStore
 from .core.bench import BenchRunner
 from .core.gate import EventGate
+from .core.lifecycle import Lifecycle
 from .core.llm import LLMManager
 from .core.monitor import JetsonMonitor
+from .core.orchestrator import Orchestrator
 from .core.runtime import AgentRuntime, WakeRefused
 from .core.safety import KILL_EVENT, Safety
 from .ha.client import HAClient
@@ -48,6 +51,8 @@ class Context:
     agents_rt: AgentRuntime
     actuator: Actuator
     gate: EventGate
+    lifecycle: Lifecycle
+    orchestrator: Orchestrator
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -116,7 +121,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             feed.add("gate_drop", f"{agent_id}: not woken, {err}", level="debug", agent_id=agent_id)
 
     gate = EventGate(agents, feed, store, agents_rt.scope, wake)
-    agents_rt.actuator, agents_rt.gate = actuator, gate
+    lifecycle = Lifecycle(store, feed, ha, safety, protected=kill_entity)
+    orchestrator = Orchestrator(settings, llm, store, feed, ha, safety, lifecycle, agents_rt)
+    agents_rt.actuator, agents_rt.gate, agents_rt.orchestrator = actuator, gate, orchestrator
     ctx = Context(
         settings=settings,
         store=store,
@@ -131,6 +138,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         agents_rt=agents_rt,
         actuator=actuator,
         gate=gate,
+        lifecycle=lifecycle,
+        orchestrator=orchestrator,
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -176,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             helper_sync.cancel()
             await ctx.gate.stop()
+            await ctx.orchestrator.stop()
             await ctx.agents_rt.stop()
             await ctx.bench.stop()
             await ctx.llm.stop()
@@ -186,6 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Agent House", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
     app.include_router(agents_router)  # before `router`: its catch-all answers 501 for the rest
+    app.include_router(automations_router)
     app.include_router(router)
 
     @app.get("/healthz", include_in_schema=False)

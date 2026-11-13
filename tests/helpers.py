@@ -107,7 +107,9 @@ class ScriptedLLM:
         return LLMResult(
             message=message,
             text=visible_text(message),
-            tool_calls=extract_tool_calls(message, finish, TOOL_NAMES),
+            tool_calls=extract_tool_calls(
+                message, finish, [t["function"]["name"] for t in tools or []] or TOOL_NAMES
+            ),
             finish_reason=finish,
             timings={"prompt_tokens": 100, "predicted_n": 10},
             ttft_ms=1.0,
@@ -163,3 +165,58 @@ async def run(stack, agent_id: str = "room", reason: str = "test wake", source: 
 
 def steps(run: dict, kind: str) -> list[dict]:
     return [s["data"] for s in run["trace"] if s["type"] == kind]
+
+
+class AutomationHA(StubHA):
+    """StubHA plus the automation config API, with the HA client's own id guard and
+    `sim/fake_ha.py`'s `validate_config` rules."""
+
+    connected = True
+
+    def __init__(self, entities: list[dict] | None = None, **kwargs) -> None:
+        super().__init__(entities, **kwargs)
+        self.automations: dict[str, dict] = {"1700000000001": {"id": "1700000000001", "alias": "Owner's own"}}
+        self.writes: list[tuple] = []
+        self.history_rows: dict[str, list[dict]] = {}
+
+    async def validate_automation(self, config: dict) -> dict:
+        from sim.fake_ha import HAState
+
+        parts = {k: config[k] for k in ("triggers", "conditions", "actions") if config.get(k)}
+        return {k: HAState.validate_part(k, v) for k, v in parts.items()}
+
+    async def get_automation(self, ha_id: str):
+        return self.automations.get(ha_id)
+
+    async def write_automation(self, ha_id: str, config: dict) -> None:
+        from app.ha.client import guard_ours
+
+        guard_ours(ha_id)
+        if self.fail:
+            raise HAError(self.fail)
+        self.writes.append(("write", ha_id, config))
+        self.automations[ha_id] = {**config, "id": ha_id}
+        self.states[f"automation.{ha_id}"] = {"entity_id": f"automation.{ha_id}", "state": "on",
+                                              "attributes": {"id": ha_id}}  # fmt: skip
+
+    async def delete_automation(self, ha_id: str) -> None:
+        from app.ha.client import guard_ours
+
+        guard_ours(ha_id)
+        self.writes.append(("delete", ha_id, None))
+        self.automations.pop(ha_id, None)
+        self.states.pop(f"automation.{ha_id}", None)
+
+    def automation_entity(self, ha_id: str):
+        entity = f"automation.{ha_id}"
+        return entity if entity in self.states else None
+
+    async def set_automation_enabled(self, ha_id: str, enabled: bool) -> None:
+        from app.ha.client import guard_ours
+
+        guard_ours(ha_id)
+        self.writes.append(("enable" if enabled else "disable", ha_id, None))
+        self.states[f"automation.{ha_id}"]["state"] = "on" if enabled else "off"
+
+    async def history(self, entity_id, start, end) -> list[dict]:
+        return self.history_rows.get(entity_id, [])

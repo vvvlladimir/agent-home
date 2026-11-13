@@ -150,6 +150,34 @@ fails, `journalctl -u agent-house-metrics -n 50` (since 0.1.0-dev.7 the error is
 The Live feed shows *streaming* through ingress (verified in M1); if it ever shows *polling every 3 s*,
 SSE is being buffered and the feed falls back to polling — tell me.
 
+## M4 — proposals and deployed automations
+
+Update to 0.1.0-dev.7 (or later), keep the global mode on **Shadow**. About 30 minutes. Optional for
+the cloud part: put an Anthropic API key into the add-on's Configuration tab (`anthropic_api_key`);
+`claude-haiku-5-5` and `daily_budget_eur: 1.0` are the defaults.
+
+1. **Proposals → Describe it**, room *Bedroom*: "Turn the bed lamp on at 20 % when the bed radar sees
+   someone between 22:00 and 06:00". Press *Draft*. `[UNVERIFIED-ON-HW]` how long the local model
+   takes and whether it passes the checks on the first try; open the *Drafting trace* link to see it.
+2. Open the proposal: all four checks `ok` (yaml, schema, policy, ha_validate). The `ha_validate`
+   check is Home Assistant's own `validate_config`: `[UNVERIFIED-ON-HW]` against 2026.11.1.
+   Press **Simulate against history** (7 days): the count should match how often the radar fired.
+3. Try a blocked one: *Write YAML* with an action on `lock.*` or an `event:` step → status `blocked`,
+   *Approve* is disabled.
+4. **Approve and deploy** the lamp proposal. In HA → Settings → Automations a new automation with the
+   same alias appears; its id (*⋮ → Information*) starts with `agent_house_`. Your own automations
+   are unchanged.
+5. **Deployed automations**: untick *Enabled* → the automation is off in HA; tick it again. Edit the
+   proposal idea (Describe it again with the same automation, or paste changed YAML with the same
+   alias), approve it, then **Roll back to** v1: HA shows the first version again.
+6. Engage the kill switch: *Approve*, *Roll back* and *Draft* answer "kill switch engaged". Release.
+7. Cloud (only with an API key): set `orchestrator_provider: anthropic`, draft once. The dashboard's
+   Orchestrator card shows the spend; the drafting trace's `context` step is what was sent before
+   redaction. Then back to `auto`.
+8. Send `owner-reports/m4/`: a screenshot of Proposals and of Deployed automations, a diagnostics
+   bundle (it now contains `proposals.json` and `automations.json`), and one line per proposal on
+   whether the YAML is what you wanted.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.

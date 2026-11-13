@@ -55,6 +55,8 @@ Rules:
 - Describe only states you read; never claim a state you did not see.
 - If the situation is dangerous, unclear, or needs something outside your room or permissions,
   call report with severity "escalate" (or "warning") instead of guessing.
+- If the owner would want something to happen every time (a rule, not a one-off), call
+  propose_automation once; the owner reviews it.
 - Finish with one short sentence and no tool call.
 
 Entities in your room:
@@ -90,6 +92,7 @@ class AgentRuntime:
         self.settings = runtime_settings
         self.actuator = None  # set by the application factory (both need each other)
         self.gate = None
+        self.orchestrator = None
         self._busy: set[str] = set()
         self._waiting: dict[str, list[dict]] = {}
         self._tasks: set[asyncio.Task] = set()

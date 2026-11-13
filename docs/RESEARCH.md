@@ -91,7 +91,7 @@ installs on the sandbox's Python 3.13) and, in CI, against the current release o
   HTTP 400 with `message`; `DELETE` → `{"result": "ok"}`, then `GET` is 404.
 - `automation.turn_off` exists and sets the entity to `off`.
 - WebSocket `validate_config` takes **plural** keys (`triggers`, `conditions`, `actions`) and answers
-  `{"triggers": {"valid": bool, "error": …}}`. `sim/fake_ha.py` still uses the singular keys: fix in M4.
+  `{"triggers": {"valid": bool, "error": …}}`. `sim/fake_ha.py` follows this since M4 (singular keys are an error).
 - A wrong bearer token → HTTP 401.
 - Headless start without onboarding: pre-seed `.storage/auth` + `.storage/onboarding` and sign a
   long-lived JWT ourselves (`tests/integration/real_ha.py`). The recorder rejects in-memory SQLite.
@@ -156,7 +156,7 @@ From the Claude API reference bundled with Claude Code (model table cached 2026-
 
 - Official Python SDK `anthropic` 2.x (`AsyncAnthropic`), Messages API, manual tool loop (we need a
   policy check, budget check and trace around every step).
-- Default model **`claude-opus-5-5`** ($4 / $20 per MTok). Cheaper options the owner may choose:
+- Default model **`claude-haiku-5-5`** since D11 (owner Q6; $0.10 / $0.50 per MTok); `claude-opus-5-5` is $4 / $20. Cheaper options the owner may choose:
   `claude-sonnet-5-5` ($2 / $10), `claude-haiku-5-5` ($0.10 / $0.50). The model is an add-on option.
 - Request rules on current models: no `temperature` / `top_p` / `top_k`; thinking cannot be disabled
   and takes no budget (omit `thinking`, steer with `output_config.effort`; default `medium` on Opus 5.5,
@@ -168,3 +168,6 @@ From the Claude API reference bundled with Claude Code (model table cached 2026-
   list byte-stable and put volatile house state last; verify with `usage.cache_read_input_tokens`.
 - Typed errors (`RateLimitError`, `APIStatusError`, `APIConnectionError`) drive the `auto` fallback to
   the local model.
+
+- SDK 2.x sends the API key as `Authorization: Bearer …` (not `x-api-key`); `sim/fake_anthropic.py`
+  accepts both. [VERIFIED-LOCAL, anthropic 2.8.0]

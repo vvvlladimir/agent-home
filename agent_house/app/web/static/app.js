@@ -5,10 +5,8 @@ const PAGES = [
   { id: 'feed', label: 'Live feed' },
   { id: 'runs', label: 'Runs & traces' },
   { id: 'agents', label: 'Agents' },
-  { id: 'proposals', label: 'Proposals', milestone: 'M4',
-    todo: 'Automation drafts with YAML diff, rationale and shadow-mode evidence. Approve, reject or edit.' },
-  { id: 'automations', label: 'Deployed automations', milestone: 'M4',
-    todo: 'Everything Agent House deployed into Home Assistant: versions, diff, one-click rollback, enable / disable.' },
+  { id: 'proposals', label: 'Proposals' },
+  { id: 'automations', label: 'Deployed automations' },
   { id: 'migration', label: 'Migration', milestone: 'M5',
     todo: 'Your existing automations and Node-RED flows next to their proposed replacements, with a parity report.' },
   { id: 'chat', label: 'Chat', milestone: 'M5',
@@ -74,6 +72,20 @@ function app() {
     actions: [],
     pending: [],
     inbox: [],
+    // proposals and deployed automations (M4)
+    proposals: [],
+    proposalStatus: 'draft',
+    proposalSel: null,
+    proposalYaml: '',
+    proposalMsg: '',
+    proposalError: '',
+    proposalBusy: false,
+    draftForm: { request: '', room: '', yaml: '', mode: 'request' },
+    evidenceDays: 7,
+    deployedList: [],
+    deployedSel: null,
+    deployedMsg: '',
+    deployedError: '',
 
     async init() {
       this.applyTheme(this.stored('theme'));
@@ -136,6 +148,8 @@ function app() {
       if (this.page === 'runs') { this.loadRuns(); this.loadActions(); this.loadAgents(); }
       if (this.page === 'settings') { this.loadSettings(); this.loadLogs(); }
       if (this.page === 'models') this.loadModels();
+      if (this.page === 'proposals') { this.loadProposals(); this.loadAreas(); }
+      if (this.page === 'automations') this.loadDeployed();
     },
     post(path, body) {
       return this.api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
@@ -424,6 +438,96 @@ function app() {
         }
       } catch (e) { this.runMsg = e.message; }
     },
+    // ── proposals (M4) ─────────────────────────────────────────────────────────
+    async loadProposals() {
+      const query = this.proposalStatus ? '?status=' + encodeURIComponent(this.proposalStatus) : '';
+      try { this.proposals = await this.api('api/proposals' + query); } catch (e) { this.proposalError = e.message; }
+    },
+    openProposal(p) {
+      this.proposalSel = p;
+      this.proposalYaml = p.yaml;
+      this.proposalMsg = ''; this.proposalError = '';
+    },
+    async proposalAction(fn, done) {
+      this.proposalBusy = true; this.proposalMsg = ''; this.proposalError = '';
+      try {
+        const result = await fn();
+        if (result && result.id) this.openProposal(result);
+        this.proposalMsg = done;
+        this.loadProposals();
+        this.refresh();
+      } catch (e) { this.proposalError = e.message; }
+      this.proposalBusy = false;
+    },
+    createProposal() {
+      const f = this.draftForm;
+      const body = f.mode === 'yaml' ? { yaml: f.yaml } : { request: f.request, room: f.room || undefined };
+      return this.proposalAction(async () => {
+        const created = await this.post('api/proposals', body);
+        this.proposalStatus = '';
+        return created;
+      }, this.t('Drafted. Review the checks, then approve or reject.'));
+    },
+    saveProposal() {
+      return this.proposalAction(() => this.put('api/proposals/' + this.proposalSel.id, { yaml: this.proposalYaml }),
+        this.t('Saved; the checks ran again.'));
+    },
+    approveProposal() {
+      if (!confirm(this.t('Deploy this automation to Home Assistant? It runs on its own from then on.'))) return;
+      return this.proposalAction(() => this.post('api/proposals/' + this.proposalSel.id + '/approve'),
+        this.t('Deployed. See Deployed automations.'));
+    },
+    rejectProposal() {
+      const note = prompt(this.t('Why? (optional)')) ?? null;
+      if (note === null) return;
+      return this.proposalAction(() => this.post('api/proposals/' + this.proposalSel.id + '/reject', { note }),
+        this.t('Rejected.'));
+    },
+    async computeEvidence() {
+      this.proposalBusy = true; this.proposalError = '';
+      try {
+        const evidence = await this.post('api/proposals/' + this.proposalSel.id + '/evidence', { days: Number(this.evidenceDays) });
+        this.proposalSel = { ...this.proposalSel, evidence };
+      } catch (e) { this.proposalError = e.message; }
+      this.proposalBusy = false;
+    },
+    diffClass(line) {
+      if (line.startsWith('+') && !line.startsWith('+++')) return 'diff-add';
+      if (line.startsWith('-') && !line.startsWith('---')) return 'diff-del';
+      return '';
+    },
+
+    // ── deployed automations (M4) ──────────────────────────────────────────────
+    async loadDeployed() {
+      try {
+        this.deployedList = await this.api('api/automations');
+        if (this.deployedSel) this.deployedSel = this.deployedList.find((d) => d.ha_id === this.deployedSel.ha_id) || null;
+      } catch (e) { this.deployedError = e.message; }
+    },
+    async deployedAction(fn, done) {
+      this.deployedMsg = ''; this.deployedError = '';
+      try { await fn(); this.deployedMsg = done; } catch (e) { this.deployedError = e.message; }
+      this.loadDeployed();
+      this.refresh();
+    },
+    setDeployedEnabled(d, enabled) {
+      return this.deployedAction(() => this.put('api/automations/' + d.ha_id + '/enabled', { enabled }),
+        enabled ? this.t('Enabled.') : this.t('Disabled.'));
+    },
+    rollbackDeployed(d, version) {
+      if (!confirm(this.t('Deploy version') + ' ' + version + '?')) return;
+      return this.deployedAction(() => this.post('api/automations/' + d.ha_id + '/rollback', { version }),
+        this.t('Rolled back.'));
+    },
+    removeDeployed(d) {
+      if (!confirm(this.t('Remove this automation from Home Assistant? Its versions stay here.'))) return;
+      return this.deployedAction(async () => {
+        const response = await fetch('api/automations/' + d.ha_id, { method: 'DELETE' });
+        if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+        this.deployedSel = null;
+      }, this.t('Removed.'));
+    },
+
     async loadActions() { try { this.actions = await this.api('api/actions?limit=100'); } catch (e) { /* banner */ } },
     async loadPending() {
       try {

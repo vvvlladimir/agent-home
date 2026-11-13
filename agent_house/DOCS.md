@@ -5,8 +5,9 @@ orchestrator sees the whole house and writes automations for you to approve. Ref
 Home Assistant: an approved automation keeps running when this add-on, the Jetson or the
 internet is down.
 
-**This build is the M1 skeleton.** It connects to Home Assistant read-only and shows status,
-rooms, entities and a live feed. No agent runs yet and nothing is actuated.
+**This build is M4 (development).** Room agents run in Shadow Mode, the orchestrator drafts
+automations, and you review, deploy, version and roll them back on the *Proposals* and
+*Deployed automations* pages. Migration from your own automations and the chat arrive in M5.
 
 ## Safety model
 
@@ -22,8 +23,11 @@ rooms, entities and a live feed. No agent runs yet and nothing is actuated.
   | T2 | act only after your approval | climate, cover, switch, water_heater, input_number |
   | T3 | never | lock, alarm_control_panel, valve, siren, camera, garage covers, anything not listed |
 
-- Automations written by agents are **drafts** until you approve them. Deployed ones get an
-  `agent_house_` id. Your own automations are never edited or deleted.
+- Automations written by agents are **drafts** until you approve them. Each draft is checked
+  (YAML, schema, safety policy, Home Assistant's own validation); T3 entities, events, scripts and
+  area-wide targets are refused. Deployed ones get an `agent_house_` id and a version history.
+  Your own automations are never edited or deleted.
+- **Cloud calls** (only with an API key) carry redacted text and stop at `daily_budget_eur`.
 
 ## Configuration
 
@@ -32,11 +36,11 @@ rooms, entities and a live feed. No agent runs yet and nothing is actuated.
 | `jetson_llm_url` | `llama-server` on the Jetson, e.g. `http://192.168.1.50:8080`. Empty until the Jetson is set up. |
 | `jetson_metrics_url` | Metrics endpoint from `jetson/metrics`, e.g. `http://192.168.1.50:9100`. Optional. |
 | `jetson_token` | Shared secret for switching model profiles. Optional. |
-| `orchestrator_provider` | `auto` (Claude when a key is set and budget remains, else local), `anthropic`, `local`. |
+| `orchestrator_provider` | `auto` (the local model first, Claude when it is down and a key and budget remain), `anthropic`, `local`. |
 | `anthropic_api_key` | Only for the orchestrator. Never shown in the GUI or the diagnostics bundle. |
-| `anthropic_model` | Claude model id, default `claude-opus-5-5`. |
+| `anthropic_model` | Claude model id, default `claude-haiku-5-5` (cheapest; `claude-sonnet-5-5` or `claude-opus-5-5` cost more and draw down the budget faster). |
 | `daily_budget_eur` | Hard daily stop for cloud spending. |
-| `redact_cloud` | Strip names, coordinates and camera/media entities from cloud prompts. |
+| `redact_cloud` | Replace people's and zones' names, person/tracker ids, addresses, coordinates, IPs, URLs, phone numbers and secrets in cloud prompts. |
 | `log_level` | `debug`, `info`, `warning`, `error`. |
 
 Node-RED exports for the migration assistant (M5) go into `/share/agent_house/nodered/`; the

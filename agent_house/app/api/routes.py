@@ -31,16 +31,6 @@ def _iso(ts: float | None) -> str | None:
 
 def build_status(ctx) -> dict:
     kill = ctx.safety.kill
-    settings = ctx.settings
-    has_key = bool(settings.anthropic_api_key)
-    local_ok = ctx.llm.state in ("ok", "busy")
-    provider = settings.orchestrator_provider
-    if provider == "anthropic":
-        effective = "anthropic" if has_key else "none"
-    elif provider == "local":
-        effective = "local" if local_ok else "none"
-    else:
-        effective = "anthropic" if has_key else ("local" if local_ok else "none")
     return {
         "version": __version__,
         "time": datetime.now(UTC).isoformat(),
@@ -49,23 +39,12 @@ def build_status(ctx) -> dict:
         "ha": ctx.ha.status(),
         "llm": ctx.llm.status(),
         "jetson": ctx.monitor.jetson_status(),
-        "orchestrator": {
-            "provider": provider,
-            "effective": effective,
-            "model": settings.anthropic_model if effective == "anthropic" else ctx.llm.model,
-            "budget": {
-                "daily_limit_eur": settings.daily_budget_eur,
-                "spent_today_eur": 0.0,
-                "tokens_in_today": 0,
-                "tokens_out_today": 0,
-                "exhausted": False,
-            },
-        },
+        "orchestrator": ctx.orchestrator.status(),
         "counts": {
             "agents": len(ctx.agents.agents),
             "pending_approvals": ctx.actuator.pending_count(),
-            "draft_proposals": 0,
-            "deployed_automations": 0,
+            "draft_proposals": ctx.lifecycle.count_open(),
+            "deployed_automations": ctx.lifecycle.count_deployed(),
             "runs_today": ctx.agents_rt.runs_today(),
         },
     }
@@ -326,6 +305,8 @@ async def get_diagnostics(request: Request) -> Response:
         "policy.json": ctx.safety.policy,
         "runs.json": ctx.agents_rt.list_runs(limit=50),
         "actions.json": ctx.actuator.list(limit=100),
+        "proposals.json": ctx.lifecycle.list(),
+        "automations.json": ctx.lifecycle.deployed(),
     }
     log_text = "\n".join(
         f"{_iso(r['ts'])} {r['level'].upper():7} {r['logger']}: {r['message']}" for r in ring.tail(limit=2000)
