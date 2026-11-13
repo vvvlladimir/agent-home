@@ -720,6 +720,87 @@
     </article>
   </section>
 
+  <!-- ───────────────────────── Council (M5) ───────────────────────── -->
+  <section x-show="page === 'council'" x-cloak>
+    <h1 x-text="t('Council')"></h1>
+    <p class="error" x-show="councilError" x-text="councilError"></p>
+    <template x-if="council">
+      <div>
+        <article class="card form" style="margin-bottom: 1rem">
+          <h2 x-text="t('House mode')"></h2>
+          <p><strong x-text="council.mode || t('unknown')"></strong>
+            <span class="muted small" x-text="'· ' + council.mode_entity + ' · ' + (council.modes || []).join(', ')"></span></p>
+          <div x-show="!council.mode_entity_present">
+            <p class="muted" x-text="t('The mode helper does not exist in Home Assistant yet, so the house mode cannot be read or switched.')"></p>
+            <button class="btn" type="button" @click="councilPost('api/council/mode-helper', 'Mode helper created.')" x-text="t('Create the mode helper')"></button>
+          </div>
+          <p class="muted small" x-text="t('Orchestrator') + ': ' + council.orchestrator_mode + ' · ' + t('auto house mode') + ': ' + (council.auto_house_mode ? t('on') : t('off')) + (council.night_window ? ' · ' + t('night') + ' ' + council.night_window : '')"></p>
+          <p class="muted small" x-text="t('The orchestrator switches only this helper, in shadow unless its mode is live. Guests and work are set by the owner only.')"></p>
+          <p class="muted small" x-show="councilMsg" x-text="councilMsg"></p>
+        </article>
+
+        <article class="card" style="margin-bottom: 1rem">
+          <h2 x-text="t('Shared board')"></h2>
+          <div class="table-wrap"><table>
+            <thead><tr>
+              <th x-text="t('Time')"></th><th x-text="t('Agent')"></th><th x-text="t('Kind')"></th><th x-text="t('Text')"></th>
+              <th x-text="t('Target')"></th><th x-text="t('Expires in')"></th>
+            </tr></thead>
+            <tbody>
+              <template x-for="b in council.board" :key="b.id">
+                <tr :style="b.kind === 'escalation' ? 'background: color-mix(in srgb, var(--warn) 18%, transparent)' : ''">
+                  <td x-text="clock(b.ts)"></td><td x-text="b.agent_id"></td>
+                  <td><span class="pill" :class="b.kind === 'escalation' ? 'pill-warn' : ''" x-text="b.kind"></span></td>
+                  <td x-text="b.text"></td><td x-text="b.target || ''"></td><td x-text="until(b.expires)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table></div>
+          <p class="muted" x-show="!council.board.length" x-text="t('The board is empty.')"></p>
+        </article>
+
+        <article class="card form" style="margin-bottom: 1rem">
+          <h2 x-text="t('Ownership')"></h2>
+          <ul>
+            <template x-for="[agent, n] in Object.entries(council.ownership?.counts || {})" :key="agent">
+              <li><span x-text="agent"></span>: <span x-text="n"></span></li>
+            </template>
+          </ul>
+          <div x-show="Object.keys(council.ownership?.shared_rooms || {}).length">
+            <p class="error" x-text="t('Rooms claimed by more than one agent:')"></p>
+            <ul>
+              <template x-for="[room, agents] in Object.entries(council.ownership?.shared_rooms || {})" :key="room">
+                <li><span x-text="room"></span>: <span x-text="fmt(agents)"></span></li>
+              </template>
+            </ul>
+          </div>
+          <form class="toolbar" @submit.prevent="lookupOwner()">
+            <input type="text" class="mono" x-model="ownerQuery" placeholder="light.kitchen" :aria-label="t('Who owns this entity?')">
+            <button class="btn" type="submit" x-text="t('Look up')"></button>
+            <span class="muted small" x-text="ownerResult"></span>
+          </form>
+        </article>
+
+        <article class="card form" style="margin-bottom: 1rem">
+          <h2 x-text="t('Daily review')"></h2>
+          <p class="muted small" x-text="t('Scheduled at') + ': ' + (council.review?.at || t('off')) + (council.review?.running ? ' · ' + t('running') : '')"></p>
+          <template x-if="council.review?.last">
+            <div>
+              <p class="small"><span x-text="clock(council.review.last.ts)"></span> · <span x-text="council.review.last.drafted ?? 0"></span> <span x-text="t('drafted')"></span>
+                <a x-show="council.review.last.run_id" href="#runs" @click="openRun(council.review.last.run_id)" x-text="t('trace')"></a></p>
+              <p style="white-space: pre-wrap" x-text="council.review.last.summary"></p>
+            </div>
+          </template>
+          <p class="muted" x-show="!council.review?.last" x-text="t('No review has run yet.')"></p>
+          <p class="muted small" x-show="council.last_scan" x-text="council.last_scan ? t('Last scan') + ': ' + clock(council.last_scan.scanned) + ' · ' + council.last_scan.changes + ' ' + t('changes scanned') + ', ' + council.last_scan.manual + ' ' + t('by hand') : ''"></p>
+          <div class="toolbar">
+            <button class="btn" type="button" :disabled="council.review?.running" @click="councilPost('api/council/review', 'Review started; the result goes to the inbox.')" x-text="t('Run review now')"></button>
+          </div>
+        </article>
+      </div>
+    </template>
+  </section>
+
   <!-- ───────────────────────── Deployed automations (M4) ───────────────────────── -->
   <section x-show="page === 'automations'" x-cloak>
     <h1 x-text="t('Deployed automations')"></h1>
@@ -898,6 +979,14 @@
             <input type="number" min="0" max="2" step="0.1" x-model="runtimeForm.llm_presence_penalty" :placeholder="t('profile default')"></label>
           <label><span x-text="t('Daily review at (HH:MM, empty = off)')"></span>
             <input type="text" class="mono" x-model="runtimeForm.daily_review_at" placeholder="04:30"></label>
+          <label><span x-text="t('Orchestrator mode')"></span>
+            <select x-model="runtimeForm.orchestrator_mode">
+              <option value="shadow">shadow</option><option value="live">live</option>
+            </select></label>
+          <label class="check"><input type="checkbox" :checked="runtimeForm.auto_house_mode === 'true'" @change="runtimeForm.auto_house_mode = $event.target.checked ? 'true' : 'false'">
+            <span x-text="t('Orchestrator may switch the house mode automatically')"></span></label>
+          <label><span x-text="t('Night window (HH:MM-HH:MM)')"></span>
+            <input type="text" class="mono" x-model="runtimeForm.night_window" placeholder="23:00-06:00"></label>
           <label><span x-text="t('Habit finder: days of history')"></span>
             <input type="number" min="3" max="30" step="1" x-model="runtimeForm.habit_days"></label>
           <label><span x-text="t('Habit finder: days a habit must show up on')"></span>
