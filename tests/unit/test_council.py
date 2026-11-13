@@ -196,3 +196,58 @@ async def test_asks_are_capped_per_hour(tmp_path):
     results = [s.council.ask("room", "hall", f"question {i}") for i in range(8)]
     assert sum(r["ok"] for r in results) <= 6 and "per hour" in results[-1]["error"]
     await settle(s)
+
+
+# --- escalation reaches the orchestrator's triage ------------------------------------------------
+ESCALATE = call("report", severity="escalate", summary="light.hall_ceiling is on and the hall is empty")
+
+
+async def test_an_escalation_naming_another_owners_entity_is_forwarded_as_a_task(tmp_path):
+    s = stack(tmp_path, ESCALATE, {"text": "reported"}, {"text": "Hall: switched it off."})
+    result = await run(s)
+    await settle(s)
+    assert steps(result, "tool")[0]["result"] == {"ok": True, "status": "forwarded", "to": "hall"}
+    [task] = s.rt.list_runs(agent="hall")
+    assert task["wake_source"] == "task" and "(asked by room)" in task["wake_reason"]
+    kinds = {(r["kind"], r["agent_id"], r["target"]) for r in s.council.board.list()}
+    assert ("escalation", "room", "hall") in kinds and ("report", "hall", ORCHESTRATOR) in kinds
+    assert s.rt.inbox()[-1]["severity"] == "alarm", "the owner still sees it"
+
+
+@pytest.mark.parametrize("source", ["task", "chat"])
+async def test_escalations_from_task_or_chat_runs_are_never_forwarded(tmp_path, source):
+    s = stack(tmp_path, ESCALATE, {"text": "reported"})
+    result = await run(s, source=source)
+    await settle(s)
+    assert steps(result, "tool")[0]["result"]["status"] == "on_board"
+    assert s.rt.list_runs(agent="hall") == []
+    escalations = [r for r in s.council.board.list() if r["kind"] == "escalation"]
+    assert [r["target"] for r in escalations] == [ORCHESTRATOR]
+
+
+async def test_escalations_without_another_owner_stay_for_the_review_and_are_bounded(tmp_path):
+    s = stack(tmp_path)
+    for text in ("Smoke detected", "person.owner left the stove on", "light.room_ceiling flickers"):
+        assert s.council.escalate("room", text, source="manual")["status"] == "on_board"
+    results = [s.council.escalate("room", f"light.hall_ceiling #{i}", source="manual") for i in range(8)]
+    assert sum(r["status"] == "forwarded" for r in results) <= 6 and "per hour" in results[-1]["note"]
+    assert s.council.ask("room", "hall", "one more?")["ok"] is False, "one hourly budget with ask_agent"
+    s.agents.save(s.agents.get("hall").model_copy(update={"enabled": False}))
+    assert s.council.escalate("zz", "light.hall_ceiling", source="manual")["status"] == "on_board"
+    await settle(s)
+
+
+async def test_the_orchestrators_wake_rules_are_listed_with_their_last_firing(tmp_path):
+    s = stack(tmp_path, auto_house_mode=True)
+    wakes = {w["id"]: w for w in s.council.status()["orchestrator_wakes"]}
+    assert list(wakes) == ["house_mode", "person", "daily_review", "escalation"]
+    assert all(w["last"] is None and w["rule"] for w in wakes.values()) and wakes["person"]["active"]
+    s.council.on_state(MODE_ENTITY, {"state": "home"}, {"state": "night"})
+    s.council.on_state("person.owner", {"state": "home"}, {"state": "not_home"})
+    s.council.escalate("room", "Smoke detected", source="manual")
+    await settle(s)
+    fired = {w["id"]: w["last"] for w in s.council.status()["orchestrator_wakes"]}
+    assert fired["house_mode"] and fired["person"] and fired["escalation"] and fired["daily_review"] is None
+    assert s.store.get("orchestrator_wakes") == {k: v for k, v in fired.items() if v}
+    off = stack(tmp_path)
+    assert {w["id"]: w["active"] for w in off.council.status()["orchestrator_wakes"]}["person"] is False

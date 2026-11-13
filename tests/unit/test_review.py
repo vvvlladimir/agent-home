@@ -119,3 +119,80 @@ async def test_no_expert_without_auto(tmp_path):
     s.orch.cloud = FakeCloud()
     proposal = await s.orch.draft("lamp on motion", task="habit")
     assert proposal["status"] == "blocked" and s.orch.cloud.calls == 0
+
+
+# --- conflicts: one proposal per conflict, never two of ours fighting; one proposal per entity ----
+OFF = GOOD.replace("Lamp after motion", "Lamp off").replace("light.turn_on", "light.turn_off")
+AUTO = {"context_event_type": "automation_triggered", "context_domain": "automation"}
+
+
+def fight_rows(first: str, second: str, times: int = 3) -> list[dict]:
+    now = datetime.now().astimezone().replace(second=0, microsecond=0)
+    rows = []
+    for back in range(1, times + 1):
+        moment = now - timedelta(days=back)
+        rows.append({"when": moment.isoformat(), "entity_id": "light.room_lamp", "state": "on", **AUTO,
+                     "context_entity_id": first})  # fmt: skip
+        rows.append({"when": (moment + timedelta(seconds=30)).isoformat(), "entity_id": "light.room_lamp",
+                     "state": "off", **AUTO, "context_entity_id": second})  # fmt: skip
+    return rows
+
+
+async def deploy(s, text: str) -> str:
+    proposal = await s.lifecycle.create(text)
+    return (await s.lifecycle.approve(proposal["id"]))["ha_id"]
+
+
+async def test_a_conflict_between_two_of_ours_replaces_one_and_supersedes_the_other(tmp_path):
+    s = stack(tmp_path, {"text": "One conflict."}, submit(GOOD), {"text": "Submitted."})
+    on, off = await deploy(s, GOOD), await deploy(s, OFF)
+    s.ha.logbook_rows = fight_rows(f"automation.{on}", f"automation.{off}")
+    result = await s.review.run()
+    [finding] = s.insights.list()
+    assert finding["kind"] == "conflict" and result["drafted"][0]["status"] == "draft"
+    proposal = s.lifecycle.get(finding["proposal_id"])
+    mine, [other] = proposal["ha_id"], proposal["supersedes"]
+    assert {mine, other} == {on, off}
+    assert f"{other} will be switched off" in finding["request"]
+    assert f"Supersedes {other}" in proposal["rationale"]
+    s.ha.writes.clear()
+    await s.lifecycle.approve(proposal["id"])
+    assert [(w[0], w[1]) for w in s.ha.writes] == [("disable", other), ("write", mine)]
+    enabled = {d["ha_id"]: d["enabled"] for d in s.lifecycle.deployed()}
+    assert enabled == {mine: True, other: False}, "exactly one of ours acts on the lamp"
+
+
+async def test_a_conflict_with_the_owners_automation_touches_nothing_of_theirs(tmp_path):
+    s = stack(tmp_path, {"text": "One conflict."}, submit(GOOD), {"text": "Submitted."})
+    on = await deploy(s, GOOD)
+    s.ha.add("automation.owner_night", "on")
+    s.ha.logbook_rows = fight_rows(f"automation.{on}", "automation.owner_night")
+    await s.review.run()
+    [finding] = s.insights.list()
+    proposal = s.lifecycle.get(finding["proposal_id"])
+    assert proposal["ha_id"] == on and proposal["supersedes"] == []
+    assert "automation.owner_night is yours and stays untouched" in proposal["rationale"]
+    assert "Migration page" in finding["request"]
+    s.ha.writes.clear()
+    await s.lifecycle.approve(proposal["id"])
+    assert [(w[0], w[1]) for w in s.ha.writes] == [("write", on)]
+    assert s.ha.states["automation.owner_night"]["state"] == "on"
+
+
+async def test_one_proposal_per_entity_per_review_and_none_beside_an_open_one(tmp_path):
+    s = stack(tmp_path, submit(GOOD), {"text": "Submitted."})
+    lamp = {"entity_id": "light.room_lamp", "sides": ["automation:automation.a", "automation:automation.b"],
+            "count": 2, "examples": []}  # fmt: skip
+    s.insights._save("conflict:lamp", "conflict", "Conflict", "settle it", lamp, "room")
+    s.insights._save("habit:lamp", "habit", "Lamp habit", "lamp on", {"entity_id": "light.room_lamp"}, "room")
+    s.insights._save(
+        "habit:ceiling", "habit", "Ceiling", "ceiling on", {"entity_id": "light.room_ceiling"}, "room"
+    )
+    await s.lifecycle.create(GOOD.replace("light.room_lamp", "light.room_ceiling"))  # open draft of ours
+    drafted = await s.review.draft_new()
+    assert [d["finding"] for d in drafted] == ["conflict:lamp"], "conflicts win; the rest waits"
+    assert (
+        s.insights.get("habit:lamp")["status"] == "new" and s.insights.get("habit:ceiling")["status"] == "new"
+    )
+    s.llm.steps = []
+    assert await s.review.draft_new() == [], "the lamp now has an open proposal of ours"

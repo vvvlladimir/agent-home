@@ -7,6 +7,11 @@
    digest itself is the review. It goes to the inbox as a report of agent `orchestrator`.
 4. New findings become proposals, at most `MAX_DRAFTS` per review, conflicts first, then undone
    automations, then habits: one proposal per finding, so never two drafts for one conflict.
+   One proposal per entity: a finding is skipped (it stays `new` for a later review) when an
+   earlier finding of this review targets the same entity, or when an open proposal of ours
+   (draft, blocked, being approved) already acts on it.
+   A conflict between two of our automations is drafted as a change of one that supersedes the
+   other (switched off on approval); the owner's automations and scripts are never touched.
    An undone automation that should rather be rolled back says so in its inbox line; nothing is
    rolled back or deployed here.
 """
@@ -17,12 +22,15 @@ import logging
 import time
 from datetime import datetime, timedelta
 
+from .insights import _targets
+from .lifecycle import action_entities
 from .llm import Priority
 from .orchestrator import OrchestratorError
 
 log = logging.getLogger(__name__)
 
 MAX_DRAFTS = 3
+PENDING = ("draft", "blocked", "approved")  # proposals that may still reach HA
 ORDER = {"conflict": 0, "undo": 1, "habit": 2}
 LATE_LIMIT = timedelta(hours=2)  # a review missed by more (add-on was down) waits for the next day
 
@@ -54,6 +62,7 @@ class Review:
         self.running = True
         now = now or datetime.now().astimezone()
         self.store.set("review_last_day", now.date().isoformat())
+        self.council.wake_fired("daily_review")
         try:
             try:
                 scan = await self.insights.scan()
@@ -138,10 +147,32 @@ class Review:
             lines.append(f"History scan failed: {scan['error']}")
         return "\n".join(lines)
 
+    def targets(self, finding: dict) -> set[str]:
+        """The entities a finding's proposal would act on."""
+        if finding["kind"] == "undo":
+            return _targets(self.lifecycle, finding["ha_id"]) if finding["ha_id"] else set()
+        entity_id = finding["data"].get("entity_id")
+        return {entity_id} if entity_id else set()
+
+    def pending_entities(self) -> set[str]:
+        """Entities that open proposals of ours act on."""
+        marks = ",".join("?" * len(PENDING))
+        rows = self.store.query(f"SELECT yaml FROM proposals WHERE status IN ({marks})", PENDING)
+        return set().union(*(action_entities(r["yaml"]) for r in rows))
+
     async def draft_new(self) -> list[dict]:
+        """At most `MAX_DRAFTS` findings, conflicts first; one proposal per entity per review."""
         new = sorted(self.insights.list("new"), key=lambda f: (ORDER.get(f["kind"], 9), -f["updated"]))
-        out = []
-        for finding in new[:MAX_DRAFTS]:
+        out: list[dict] = []
+        taken = self.pending_entities()
+        for finding in new:
+            if len(out) >= MAX_DRAFTS:
+                break
+            targets = self.targets(finding)
+            if targets & taken:
+                log.info("finding %s waits: %s has a proposal", finding["id"], sorted(targets & taken))
+                continue
+            taken |= targets
             result = await self.draft(finding["id"])
             if result and result.get("proposal_id"):
                 status = self.lifecycle.get(result["proposal_id"])["status"]
@@ -157,19 +188,24 @@ class Review:
             return finding
         self.insights.set_status(finding_id, "drafting")
         ha_id = finding["ha_id"] if finding["kind"] in ("undo", "conflict") else None
-        if ha_id and not any(d["ha_id"] == ha_id for d in self.lifecycle.deployed(ha_id)):
+        if ha_id and not self.lifecycle.deployed(ha_id):
             ha_id = None
+        supersedes = [
+            sid for sid in finding["data"].get("supersedes") or []
+            if finding["kind"] == "conflict" and sid != ha_id and self.lifecycle.deployed(sid)
+        ]  # fmt: skip
         try:
             proposal = await self.orch.draft(
                 finding["request"], room=finding["room"] if finding["kind"] == "habit" else None,
                 origin_agent="orchestrator", ha_id=ha_id, priority=Priority.BACKGROUND, task=finding["kind"],
+                supersedes=supersedes or None,
             )  # fmt: skip
         except Exception as err:  # noqa: BLE001 - OrchestratorError, LifecycleError, …
             self.feed.add(
                 "council", f"finding not drafted: {finding['title']} ({err})"[:300], level="warning"
             )
             return self.insights.set_status(finding_id, "failed")
-        evidence = _evidence_text(finding)
+        evidence = _evidence_text(finding, supersedes)
         if evidence:
             self.lifecycle.annotate(proposal["id"], evidence)
         if proposal["status"] in ("draft", "blocked") and finding["kind"] == "habit":
@@ -182,7 +218,7 @@ class Review:
         )
 
 
-def _evidence_text(finding: dict) -> str:
+def _evidence_text(finding: dict, supersedes: list[str] | None = None) -> str:
     data = finding["data"]
     if finding["kind"] == "habit" and data.get("kind") == "follow":
         return (
@@ -197,5 +233,13 @@ def _evidence_text(finding: dict) -> str:
     if finding["kind"] == "undo":
         return f"undone by hand {data['undone']} of {data['acted']} times ({int(data['rate'] * 100)}%)"
     if finding["kind"] == "conflict":
-        return f"switched back and forth {data['count']}× by {' and '.join(data['sides'])}"
+        text = f"switched back and forth {data['count']}× by {' and '.join(data['sides'])}."
+        theirs = data.get("theirs") or []
+        if supersedes:
+            text += (f" Supersedes {', '.join(supersedes)}: switched off when you approve "
+                     "(turn it back on from the Deployed page).")  # fmt: skip
+        if theirs:
+            text += (f" {', '.join(theirs)} is yours and stays untouched; switch it off from the "
+                     "Migration page if this automation should decide.")  # fmt: skip
+        return text
     return ""
