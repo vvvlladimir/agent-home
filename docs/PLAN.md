@@ -104,4 +104,5 @@ steps are written down in `OWNER_CHECKLIST.md`.
       conflicts and low-confidence cases (provider `auto` per task); 4B profile recommended for the
       room agents (`docs/DECISIONS.md` after the owner's benchmark)
       → `Council.status().orchestrator_wakes`, `Orchestrator.providers(task)`, D21, D23
-- [ ] RUNBOOK, README screenshots, `v0.1.0`
+- [x] RUNBOOK, README screenshots, `v0.1.0` → `docs/RUNBOOK.md`, `docs/img/v010-*.png`, tag `v0.1.0`
+- [ ] **Owner:** council, daily review and feedback on the real HA (OWNER_CHECKLIST M5 council, v0.1.0)

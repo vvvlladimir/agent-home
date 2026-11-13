@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0 — first release (prototype)
+
+- **Council** page: the house mode helper `input_select.agent_house_mode` (create it with one
+  click), the shared board where rooms post short facts, tasks, reports and escalations, which
+  agent owns which entity, what wakes the orchestrator, and the daily review.
+- **One owner per entity**: a room agent may act on and automate only its own room; everything
+  without an area belongs to the orchestrator, which itself only switches the house mode helper
+  (in shadow unless `orchestrator_mode: live`). `ask_agent` and escalations go through the
+  orchestrator to the owner, at most 6 per hour, never from a task.
+- **Daily review** (04:30, `daily_review_at`): scans the logbook for habits, automations you undo
+  and automations that fight, summarises the day on the local model and drafts at most three
+  proposals, one per entity. A conflict between two of ours becomes one proposal that
+  **supersedes** the other: approving it switches that one off (you can switch it back on).
+- Optional **automatic house mode** (home / away / night from people and the night window);
+  guests and work stay yours.
+- Room agents default to `qwen35-4b-balanced` after the benchmark on the Jetson.
+- Fixed: right after a model switch the status could say `ok` without a model name.
+- `docs/RUNBOOK.md`: daily routine, safety levers, going live room by room, incidents.
+
 ## 0.1.0-dev.10 — M5 migration
 
 - **Migration** page: imports your own automations, scripts and Node-RED exports
