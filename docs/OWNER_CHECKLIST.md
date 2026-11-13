@@ -6,17 +6,17 @@ step says what to commit so the next session can read the result.
 Where results go: `owner-reports/` (see its README). After committing, run `make analyze-report`
 or just start the next session.
 
-## Questions (answer in `owner-reports/answers.md`, any format)
+## Questions — answered 2026-11-13 (`owner-reports/answers.md`)
 
-| # | Question | Default used until answered |
+| # | Question | Answer |
 |---|---|---|
-| Q1 | Supervisor and HA Core versions? (`ha info`, or Settings → About) | Supervisor ≥ 2026.04, Core 2026.x |
-| Q2 | JetPack version on the Jetson? (`cat /etc/nv_tegra_release`) | detected at runtime; scripts branch on 6.x / 7.x |
-| Q3 | Which rooms first, and 5–20 entities for each? | two sample rooms from your area registry |
-| Q4 | Any perimeter entity not named like its domain (a garage door on a `switch`, a gate on a `cover`)? | only `cover.*garage*` is treated as T3 on top of the T3 domains |
-| Q5 | Can you export your Node-RED flows as JSON? | importer reads `/share/agent_house/nodered/*.json` if present |
-| Q6 | Daily Claude budget, and which model? | €1 / day, `claude-opus-5-5` (cheaper: `claude-sonnet-5-5`, `claude-haiku-5-5`) |
-| Q7 | Static IP or DNS name of the Jetson? (`.local` names usually do not resolve inside add-ons) | you enter the URL in the add-on options |
+| Q1 | Supervisor and HA Core versions? | Core 2026.11.1, Supervisor 2026.11.0 |
+| Q2 | JetPack version on the Jetson? | L4T R36.5.0 → JetPack 6.x; scripts take the 6.x branch |
+| Q3 | Which rooms first? | Bedroom, Livingroom (entities from the area registry) |
+| Q4 | Perimeter entity not named like its domain? | None |
+| Q5 | Node-RED flows as JSON? | Yes: `owner-reports/nodered/*.json` |
+| Q6 | Daily Claude budget, and which model? | `claude-haiku-5-5`; local Qwen becomes the default once it works; budget €1/day (default kept) |
+| Q7 | Jetson address? | `http://192.168.1.215` (port set in M2) |
 
 ## M1 — install the skeleton
 
@@ -28,24 +28,27 @@ Before starting: this build is read-only. It cannot switch anything in your home
 2. Install **Agent House**. The Supervisor builds the image on the Pi; expect a few minutes.
 3. Start it and open **Agent House** in the sidebar.
 4. Check and note:
-   - [ ] the page renders with styling (if it is unstyled, a URL is not relative: tell me)
-   - [ ] the "HA" pill is green and shows your Core version
-   - [ ] Dashboard → Rooms lists your areas with plausible entity counts
-   - [ ] Agents page: locks, alarm panel, garage door show **T3**; lights show **T0**
-   - [ ] Live feed shows state changes within a second or two of them happening (if they arrive in
+   - [x] the page renders with styling (if it is unstyled, a URL is not relative: tell me)
+   - [x] the "HA" pill is green and shows your Core version
+   - [x] Dashboard → Rooms lists your areas with plausible entity counts
+   - [x] Agents page: locks, alarm panel, garage door show **T3**; lights show **T0**
+   - [x] Live feed shows state changes within a second or two of them happening (if they arrive in
          bursts or not at all, SSE is being buffered by ingress: tell me)
-   - [ ] the kill switch toggles and survives an add-on restart
+   - [x] the kill switch toggles and survives an add-on restart
 5. Commit to `owner-reports/`:
    - `screenshots/m1-dashboard.png`
    - `diagnostics/<date>.zip` from Settings & Logs → Download diagnostics bundle
    - `logs/m1-addon.log`: Add-on → Log tab, or `ha apps logs <slug>` (older CLI: `ha addons logs`)
    - if the build failed: the Supervisor log (`ha supervisor logs`) instead
 
-What this settles: [UNVERIFIED-ON-HW] image build on the Pi, ingress path handling, SSE through
+**Done 2026-11-13**: all six checks passed; screenshot, diagnostics bundle and add-on log are in
+`owner-reports/`.
+
+What this settled: [VERIFIED-ON-HW] image build on the Pi, ingress path handling, SSE through
 ingress, the `supervisor/core` REST and WebSocket proxy with `SUPERVISOR_TOKEN`, registry shapes on
 your HA version.
 
-## M2 — Jetson (scripts arrive in the next milestone)
+## M2 — Jetson (scripts arrive in the next milestone; target: JetPack 6.x / L4T R36.5, 192.168.1.215)
 
 Planned commands, so you know what is coming; do not run anything yet:
 

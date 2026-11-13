@@ -1,0 +1,13 @@
+/package/admin/s6-overlay/libexec/preinit: info: container permissions: uid=0 (root), euid=0, gid=0 (root), egid=0
+/package/admin/s6-overlay/libexec/preinit: info: /run permissions: uid=0 (root), gid=0 (root), perms=oxorgxgruxuwur
+s6-rc-compile: warning: source /etc/s6-overlay/s6-rc.d is empty
+s6-rc: info: service s6rc-oneshot-runner: starting
+s6-rc: info: service fix-attrs: starting
+s6-rc: info: service s6rc-oneshot-runner successfully started
+s6-rc: info: service legacy-cont-init: starting
+s6-rc: info: service fix-attrs successfully started
+s6-rc: info: service legacy-services: starting
+s6-rc: info: service legacy-cont-init successfully started
+s6-rc: info: service legacy-services successfully started
+2026-11-13 00:51:38,068 INFO    app.main: Agent House 0.1.0-dev.1 starting (data dir /data)
+2026-11-13 00:51:38,182 INFO    app.ha.client: connected to Home Assistant 2026.11.1 (5 areas, 1887 entities)

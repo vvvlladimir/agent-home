@@ -23,7 +23,8 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] GUI: dashboard, live feed, entity browser with tiers, settings & logs; placeholders for later pages
 - [x] Tier resolution (`core/policy.py`) with invariant tests
 - [x] CI green on GitHub (run 2: lint+tests 3.13/3.14, app linter, hadolint, amd64+aarch64 image, real HA Core)
-- [ ] **Owner:** install on the Pi, open the panel, commit screenshot + diagnostics (OWNER_CHECKLIST M1)
+- [x] **Owner:** install on the Pi, open the panel, commit screenshot + diagnostics (OWNER_CHECKLIST M1, 2026-11-13)
+- [x] **Owner:** answers Q1–Q7 → `owner-reports/answers.md`
 
 ## M2 — Inference stack
 
@@ -47,12 +48,13 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [ ] Traces: store, API, GUI page with replay and copy-as-test-case
 - [ ] Agents CRUD page (area picker, tiers, wake rules, prompt preview with token estimate)
 - [ ] Kill switch from HA (`agent_house_kill_switch` event, optional `input_boolean`)
-- [ ] `tests/eval`: tool-call eval against scripted LLM; two sample rooms
+- [ ] `tests/eval`: tool-call eval against scripted LLM; two sample rooms (owner, Q3: Bedroom, Livingroom)
 - [ ] If SSE does not pass the real ingress: polling fallback for the feed
 
 ## M4 — Orchestrator + automation lifecycle
 
 - [ ] Providers: anthropic / local / auto with fallback; daily budget with hard stop
+      (owner, Q6: local Qwen is the default once M2 passes; cloud fallback `claude-haiku-5-5`)
 - [ ] Redaction for cloud prompts
 - [ ] Lifecycle: propose → YAML/schema/policy scan/`validate_config` → diff → approve → deploy → version → rollback
 - [ ] HA client write paths guarded by the `agent_house_` prefix
@@ -63,6 +65,6 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## M5 — Migration + polish
 
-- [ ] Importer (HA automations/scripts, Node-RED export), parity report, reversible "disable original"
+- [ ] Importer (HA automations/scripts, Node-RED export — samples in `owner-reports/nodered/`), parity report, reversible "disable original"
 - [ ] Chat page, config export/import
 - [ ] RUNBOOK, README screenshots, `v0.1.0`

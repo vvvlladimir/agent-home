@@ -1,12 +1,14 @@
 .PHONY: help install lint contracts test test-realha sim addon-lint shellcheck analyze-report ci
-PY ?= python3
+VENV ?= .venv
+PY ?= $(VENV)/bin/python
 PORT ?= 8099
 SH_FILES := $(shell git ls-files -co --exclude-standard '*.sh')
 
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/'
 
-install: ## install dev dependencies
+install: ## create .venv and install dev dependencies into it
+	test -x $(PY) || python3 -m venv $(VENV)
 	$(PY) -m pip install -q -r requirements-dev.txt
 
 lint: ## ruff + yamllint
