@@ -138,3 +138,29 @@ def test_an_explicit_entity_list_is_the_scope():
     ha = StubHA()
     agent = parse_agent({**AGENT, "entities": ["light.room_lamp", "light.gone"]})
     assert resolve_scope(agent, ha, tier_of) == (["light.room_lamp"], [])
+
+
+def test_device_noise_is_filtered_and_button_stays():
+    ha = StubHA()
+    for entity_id in (
+        "update.room_lamp_firmware", "device_tracker.room_phone", "sensor.room_lamp_linkquality",
+        "sensor.room_plug_rssi", "sensor.room_remote_battery", "button.room_tv_restart",
+    ):  # fmt: skip
+        ha.add(entity_id, "1", area="room")
+    ha.add("sensor.room_remote_level", "80", area="room")
+    ha.states["sensor.room_remote_level"]["attributes"]["device_class"] = "battery"
+    shown, findable = resolve_scope(parse_agent({**AGENT, "max_entities": 25}), ha, tier_of)
+    scope = shown + findable
+    assert "button.room_tv_restart" in scope, "buttons are real actions, not noise"
+    for noise in ("update.room_lamp_firmware", "device_tracker.room_phone", "sensor.room_lamp_linkquality",
+                  "sensor.room_plug_rssi", "sensor.room_remote_battery", "sensor.room_remote_level"):  # fmt: skip
+        assert noise not in scope
+
+
+def test_room_sensors_rank_before_other_sensors_and_the_rest_stays_findable():
+    ha = StubHA()
+    ha.add("sensor.room_power", "12", area="room")
+    ha.states["binary_sensor.room_motion"]["attributes"]["device_class"] = "motion"
+    shown, findable = resolve_scope(parse_agent({**AGENT, "max_entities": 7}), ha, tier_of)
+    assert shown[-1] == "binary_sensor.room_motion"
+    assert "sensor.room_power" in findable and "sensor.room_illuminance" in findable

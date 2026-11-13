@@ -21,7 +21,7 @@
       "items": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
       "maxItems": 25,
       "default": [],
-      "description": "Entity allowlist. Empty = every entity of the room, capped at max_entities."
+      "description": "Entity allowlist, shown in full. Empty = every entity of the room minus device noise (battery, signal, firmware, …); the first max_entities go into the prompt, the rest the agent finds with list_entities (at most 200)."
     },
     "max_entities": {"type": "integer", "minimum": 1, "maximum": 25, "default": 20},
     "tier_overrides": {

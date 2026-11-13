@@ -144,12 +144,43 @@ class AgentStore:
         return True
 
 
-def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]]:
-    """(entities the agent sees and may touch, entities left out by the cap), both ordered.
+# Noise in a real HA: device bookkeeping, not anything a room agent reasons about.
+NOISE_DOMAINS = frozenset({"update", "device_tracker"})
+NOISE_DEVICE_CLASSES = frozenset({"battery", "signal_strength", "voltage", "connectivity", "update"})
+NOISE_SUFFIX = re.compile(
+    r"_(linkquality|rssi|signal|signal_strength|last_seen|uptime|firmware|update_state|battery|"
+    r"battery_low|voltage|power_on_behavior|identify)$"
+)
+# Sensors that describe the room itself come before the other read-only entities.
+ROOM_SENSOR_CLASSES = frozenset(
+    {"motion", "occupancy", "presence", "door", "window", "opening", "temperature", "humidity",
+     "illuminance", "smoke", "moisture", "gas", "carbon_monoxide"}
+)  # fmt: skip
+SCOPE_HARD_CAP = 200  # what an agent may reach via list_entities; the prompt shows max_entities
 
-    An explicit `entities` list is taken as is (minus ids HA does not know). Otherwise: every
-    visible entity of the room that is not a config/diagnostic helper, things the agent can
-    actuate first, then sensors, capped at `max_entities`. `tier_of(entity_id) -> tier`.
+
+def _device_class(ha, entity_id: str) -> str | None:
+    attrs = (ha.states.get(entity_id) or {}).get("attributes") or {}
+    meta = ha.registry.entity_meta.get(entity_id, {})
+    return attrs.get("device_class") or meta.get("device_class") or meta.get("original_device_class")
+
+
+def is_noise(ha, entity_id: str) -> bool:
+    """Device bookkeeping (battery, signal, firmware, …) that only fills an agent's context."""
+    domain = entity_id.split(".", 1)[0]
+    if domain in NOISE_DOMAINS or NOISE_SUFFIX.search(entity_id):
+        return True
+    return domain in READ_ONLY_DOMAINS and _device_class(ha, entity_id) in NOISE_DEVICE_CLASSES
+
+
+def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]]:
+    """(entities shown in the prompt, further entities the agent may find via list_entities).
+
+    Both lists together are the agent's allowlist. An explicit `entities` list is taken as is
+    (minus ids HA does not know) and is shown in full. Otherwise: every visible entity of the
+    room except config/diagnostic helpers and device noise, ranked low tiers first, then T3,
+    then room sensors (motion, temperature, …), then other read-only entities; the first
+    `max_entities` go into the prompt. `tier_of(entity_id) -> tier`.
     """
     if agent.entities:
         known = [e for e in agent.entities if e in ha.states]
@@ -161,15 +192,19 @@ def resolve_scope(agent: AgentConfig, ha, tier_of) -> tuple[list[str], list[str]
         if e in ha.states
         and not registry.is_hidden(e)
         and not registry.entity_meta.get(e, {}).get("entity_category")
+        and not is_noise(ha, e)
     ]
 
     def order(entity_id: str) -> tuple[int, str]:
         # low tiers first (the everyday lights and fans), T3 last among actuators, sensors after
-        read_only = entity_id.split(".", 1)[0] in READ_ONLY_DOMAINS
-        rank = len(TIERS) if read_only else TIERS.index(tier_of(entity_id))
+        if entity_id.split(".", 1)[0] in READ_ONLY_DOMAINS:
+            rank = len(TIERS) + (0 if _device_class(ha, entity_id) in ROOM_SENSOR_CLASSES else 1)
+        else:
+            rank = TIERS.index(tier_of(entity_id))
         return rank, entity_id
 
     candidates.sort(key=order)
+    candidates = candidates[:SCOPE_HARD_CAP]
     return candidates[: agent.max_entities], candidates[agent.max_entities :]
 
 

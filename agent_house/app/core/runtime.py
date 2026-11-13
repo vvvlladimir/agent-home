@@ -105,7 +105,8 @@ class AgentRuntime:
     def scope(self, agent: AgentConfig | None) -> set[str]:
         if agent is None:
             return set()
-        return set(resolve_scope(agent, self.ha, lambda e: self.tier(agent, e))[0])
+        shown, findable = resolve_scope(agent, self.ha, lambda e: self.tier(agent, e))
+        return set(shown) | set(findable)
 
     def memory(self, agent_id: str) -> dict[str, str]:
         rows = self.store.query("SELECT key, value FROM memory WHERE agent_id=? ORDER BY key", (agent_id,))
@@ -125,6 +126,8 @@ class AgentRuntime:
             table = (
                 "\n".join(f"- {e} ({self._name(e)}) [{self.tier(agent, e)}]" for e in included) or "(none)"
             )
+            if dropped:
+                table += f"\n({len(dropped)} more in your room: find them with list_entities + a search word)"
             template = agent.system_prompt.strip() or DEFAULT_PROMPT
             system = template
             for variable, value in (

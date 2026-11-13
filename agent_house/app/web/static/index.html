@@ -344,8 +344,8 @@
             </select></label>
 
           <h3 x-text="t('Entities and tiers')"></h3>
-          <p class="muted small" x-text="t('None ticked = every entity of the room, actuators first, capped below. Overrides can only make a tier stricter.')"></p>
-          <label><span x-text="t('Cap')"></span><input type="number" min="1" max="25" x-model="agentForm.max_entities"></label>
+          <p class="muted small" x-text="t('None ticked = every entity of the room except device noise (battery, signal, firmware). The first ones up to the cap go into the prompt, the agent finds the rest with a search. Ticked = exactly these. Overrides can only make a tier stricter.')"></p>
+          <label><span x-text="t('In the prompt (max)')"></span><input type="number" min="1" max="25" x-model="agentForm.max_entities"></label>
           <div class="table-wrap"><table><tbody>
             <template x-for="e in roomEntities" :key="e.entity_id">
               <tr :class="{ dim: e.hidden }">
@@ -417,7 +417,7 @@
                  · <span x-text="preview.entities_included + ' ' + t('entities')"></span></p>
               <div class="bar"><span :style="'width:' + pct(preview.tokens_estimate, preview.budget) + '%'"></span></div>
               <p class="muted small" x-show="preview.entities_dropped.length"
-                 x-text="t('Left out:') + ' ' + preview.entities_dropped.join(', ')"></p>
+                 x-text="t('Not in the prompt, findable by the agent:') + ' ' + preview.entities_dropped.join(', ')"></p>
               <h3 x-text="t('System')"></h3><pre class="log" x-text="preview.system"></pre>
               <h3 x-text="t('User (example wake)')"></h3><pre class="log" x-text="preview.user"></pre>
               <p class="muted small" x-text="t('Estimate ≈ characters / 3.5, not the model tokenizer. No model is called.')"></p>

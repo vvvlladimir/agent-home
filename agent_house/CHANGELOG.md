@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-dev.4 — smarter entity selection
+
+- Room agents skip device noise (firmware updates, trackers, battery, signal and voltage sensors);
+  buttons stay.
+- The prompt lists the most useful entities first (lights and fans, then other devices, then
+  motion/temperature/door sensors). The rest of the room stays reachable: the agent finds it with
+  a search in `list_entities`.
+
 ## 0.1.0-dev.3 — M3 room agents in Shadow Mode
 
 - Room agents: create and edit them in the GUI (room, entities and tiers, wake rules, schedules,

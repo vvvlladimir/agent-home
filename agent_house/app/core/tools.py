@@ -12,12 +12,17 @@ from datetime import UTC, datetime, timedelta
 from .benchkit import TOOLS as BASE_TOOLS
 from .benchkit import _tool, normalize_call
 
+LIST_LIMIT = 25  # rows per list_entities answer; more are announced, not sent
+
 TOOLS: list[dict] = [
     *BASE_TOOLS,  # get_state, call_service, report: the shapes the benchmark measured
     _tool(
         "list_entities",
-        "List the entities of your room with their current state and tier.",
-        {"domain": {"type": "string", "description": "optional filter, e.g. light"}},
+        "Find entities of your room that your prompt does not list, with their state and tier.",
+        {
+            "domain": {"type": "string", "description": "optional filter, e.g. light"},
+            "search": {"type": "string", "description": "optional word in the id or name, e.g. heater"},
+        },
         [],
     ),
     _tool(
@@ -121,17 +126,28 @@ class ToolBox:
         return out
 
     async def _list_entities(self, args: dict) -> dict:
-        domain = args.get("domain")
+        domain = args.get("domain") if isinstance(args.get("domain"), str) else None
+        search = args.get("search").strip().lower() if isinstance(args.get("search"), str) else ""
+        matches = [
+            entity_id
+            for entity_id in self.scope
+            if entity_id in self.rt.ha.states
+            and (not domain or entity_id.split(".", 1)[0] == domain)
+            and (not search or search in f"{entity_id} {self.rt._name(entity_id)}".lower())
+        ]
         rows = [
             {
                 "entity_id": entity_id,
+                "name": self.rt._name(entity_id),
                 "state": state_text(self.rt.ha.states[entity_id]),
                 "tier": self.rt.tier(self.agent, entity_id),
             }
-            for entity_id in self.scope
-            if entity_id in self.rt.ha.states and (not domain or entity_id.split(".", 1)[0] == domain)
+            for entity_id in matches[:LIST_LIMIT]
         ]
-        return {"ok": True, "entities": rows}
+        out = {"ok": True, "entities": rows}
+        if len(matches) > LIST_LIMIT:
+            out["more"] = f"{len(matches) - LIST_LIMIT} more: narrow down with domain or search"
+        return out
 
     async def _get_history(self, args: dict) -> dict:
         entity_id, error = self._entity(args)

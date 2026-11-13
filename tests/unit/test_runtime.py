@@ -407,3 +407,20 @@ async def test_copy_as_test_case_is_a_valid_eval_file(tmp_path):
     assert entity == {"entity_id": "lock.room_door", "state": "locked", "tier": "T3"}
     assert text.startswith("# Copied from run")
     await asyncio.sleep(0)
+
+
+async def test_entities_outside_the_prompt_are_findable_and_usable(tmp_path):
+    stack = stack_with(
+        tmp_path,
+        call("list_entities", search="ILLUMIN"),
+        call("get_state", entity_id="sensor.room_illuminance"),
+        agents=[{**AGENT, "max_entities": 2}],
+    )
+    agent = stack.agents.get("room")
+    context = stack.rt.build_context(agent, "test")
+    assert "sensor.room_illuminance" not in context["system"]
+    assert "more in your room: find them with list_entities" in context["system"]
+    assert "sensor.room_illuminance" in stack.rt.scope(agent)
+    tools = [t["result"] for t in steps(await run(stack), "tool")]
+    assert [e["entity_id"] for e in tools[0]["entities"]] == ["sensor.room_illuminance"]
+    assert tools[1]["ok"] is True
