@@ -1,4 +1,4 @@
-.PHONY: help install lint contracts test test-realha sim addon-lint shellcheck analyze-report ci
+.PHONY: help install lint contracts test test-realha sim addon-lint shellcheck analyze-report gui gui-check ci
 VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PORT ?= 8099
@@ -35,5 +35,12 @@ shellcheck: ## shellcheck every tracked shell script
 
 analyze-report: ## read owner-reports/ and update docs/DECISIONS.md
 	$(PY) tools/analyze_report.py owner-reports
+
+gui: ## build the Vue GUI (agent_house/frontend) into agent_house/app/web/static
+	cd agent_house/frontend && npm ci --no-audit --no-fund && npm run build
+
+gui-check: gui ## the committed GUI build matches its sources
+	@git add -N agent_house/app/web/static
+	@git diff --exit-code --stat -- agent_house/app/web/static || (echo "run 'make gui' and commit agent_house/app/web/static"; exit 1)
 
 ci: lint contracts test addon-lint shellcheck ## everything CI runs except the image build

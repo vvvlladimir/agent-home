@@ -1,0 +1,22 @@
+{
+  "name": "agent-house-frontend",
+  "private": true,
+  "type": "module",
+  "description": "Agent House GUI (Vue 3). Source only: `npm run build` writes ../app/web/static, which is committed and served by the add-on.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "gen:api": "openapi-typescript ../../contracts/openapi.yaml -o src/api-types.ts"
+  },
+  "dependencies": {
+    "vue": "3.5.45"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.11",
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.8",
+    "vue-tsc": "3.3.14"
+  }
+}

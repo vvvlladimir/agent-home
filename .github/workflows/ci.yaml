@@ -29,6 +29,19 @@ jobs:
       - run: make install
       - run: make ci
 
+  gui:
+    name: GUI type check and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: agent_house/frontend/package-lock.json
+      # builds into agent_house/app/web/static and fails if that differs from what is committed
+      - run: make gui-check
+
   addon-lint:
     name: Add-on linters
     runs-on: ubuntu-latest

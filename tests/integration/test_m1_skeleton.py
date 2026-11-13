@@ -74,17 +74,25 @@ def test_gui_is_served_under_the_ingress_prefix(ingress):
             assert httpx.get(f"{ingress.base}/{url}").status_code == 200, url
 
 
+FRONTEND_SRC = ROOT / "agent_house" / "frontend" / "src"
+
+
 def test_static_sources_contain_no_absolute_urls():
-    """Absolute paths and CDN links would work in `make sim` on / but 404 inside Home Assistant."""
+    """Absolute paths and CDN links would work in `make sim` on / but 404 inside Home Assistant.
+    Checks the built GUI (what the add-on serves) and the Vue sources it is built from."""
+    files = [f for f in STATIC.rglob("*") if f.suffix in (".html", ".js", ".css")]
+    files += [f for f in FRONTEND_SRC.rglob("*") if f.suffix in (".ts", ".vue", ".css") and f.name != "api-types.ts"]
+    assert any(f.suffix == ".js" for f in files), "no built GUI in app/web/static: run `make gui`"
     offenders = []
-    for file in [STATIC / "index.html", STATIC / "app.js", STATIC / "app.css"]:
+    for file in files:
         text = file.read_text()
         for pattern in (
-            r"""(?:href|src|action)\s*=\s*["']/""",
+            r"""(?:href|src|action)\s*=\s*["']/(?!/)""",
             r"""fetch\(\s*["'`]/""",
             r"""EventSource\(\s*["'`]/""",
             r"""url\(\s*["']?/""",
-            r"""https?://(?!www\.w3\.org)""",
+            # w3.org: XML namespaces; vuejs.org/error-reference: a link inside Vue's own error text
+            r"""https?://(?!www\.w3\.org|vuejs\.org/error-reference)""",
         ):
             offenders += [f"{file.name}: {m.group(0)}" for m in re.finditer(pattern, text)]
     assert not offenders, offenders
@@ -92,7 +100,7 @@ def test_static_sources_contain_no_absolute_urls():
 
 def test_absolute_paths_do_not_exist_outside_the_prefix(ingress):
     assert httpx.get(f"{ingress.url}/api/status").status_code == 404
-    assert httpx.get(f"{ingress.url}/static/app.js").status_code == 404
+    assert httpx.get(f"{ingress.url}/static/i18n/en.json").status_code == 404
 
 
 def test_ingress_path_header_is_recorded(ingress):
@@ -109,7 +117,7 @@ def test_only_the_ingress_peer_may_connect(settings):
 
     settings.allowed_peers = ["172.30.32.2"]  # the real Supervisor address; the test client is 127.0.0.1
     with ServerThread(create_app(settings)) as server:
-        for path in ("/", "/api/status", "/static/app.js", "/api/events/stream"):
+        for path in ("/", "/api/status", "/static/i18n/en.json", "/api/events/stream"):
             response = httpx.get(server.url + path)
             assert response.status_code == 403, path
 
