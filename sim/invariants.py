@@ -206,8 +206,8 @@ def check_trace(result: dict, mode: str, caps: dict[str, int] | None = None) -> 
     alarms = defaultdict(list)
     for item in result.get("inbox") or []:
         if item.get("severity") == "alarm" and item.get("status", "new") == "new":
-            for e in ENTITY.findall(item.get("summary") or ""):
-                alarms[".".join(e)].append(item)
+            for eid in {".".join(e) for e in ENTITY.findall(item.get("summary") or "")}:  # once per item
+                alarms[eid].append(item)
     dup = []
     for eid, items in alarms.items():
         items.sort(key=lambda i: i.get("ts") or 0)

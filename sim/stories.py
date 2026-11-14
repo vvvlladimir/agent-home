@@ -101,6 +101,29 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
     return sorted(events + extra), names
 
 
+def owner_history(story: dict, ha, entities: list[str]) -> int:
+    """The owner's automations existed before the story: the backfilled logbook shows them too
+    (stories run 2026-11-14: the first look drafted the TV off from a history without them)."""
+    n = 0
+    for auto in story.get("owner_automations") or []:
+        eid = resolve(auto["entity"], entities)
+        for row in ha.logbook_rows:
+            if (
+                row.get("entity_id") != eid
+                or row.get("state") != auto["state"]
+                or not row.get("context_user_id")
+            ):
+                continue
+            if auto.get("days", "all") == "workdays" and datetime.fromisoformat(row["when"]).weekday() >= 5:
+                continue
+            row.pop("context_user_id", None)
+            row.pop("context_service", None)
+            row.update({"context_event_type": "automation_triggered", "context_domain": "automation",
+                        "context_entity_id": auto["ref"], "context_name": auto["ref"]})  # fmt: skip
+            n += 1
+    return n
+
+
 def _clock_at(day: datetime, hhmm: str, sd_min: float, rng: random.Random) -> datetime:
     h, m = (int(x) for x in hhmm.split(":"))
     return day + timedelta(hours=h, minutes=m + (rng.gauss(0, sd_min / 2) if sd_min else 0))
@@ -464,10 +487,10 @@ def coverage(result: dict) -> dict[str, int]:
     runs, feed, props = result["runs"], result["feed"], result["proposals"]
     c = Counter()
     for r in runs:
-        if r.get("agent_id") == "orchestrator":
-            c["daily_review" if r.get("wake_source") == "review" else "orchestrator_poke"] += 1
-        elif r.get("agent_id") == "manager" or r.get("wake_source") == "manager":
+        if r.get("wake_source") in ("manager", "manage"):  # the manager runs as the orchestrator
             c["manager_run"] += 1
+        elif r.get("agent_id") == "orchestrator":
+            c["daily_review" if r.get("wake_source") == "review" else "orchestrator_poke"] += 1
         else:
             c["room_run"] += 1
     for p in props:
@@ -520,6 +543,7 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
             if r.status_code >= 300:
                 raise polygon.SetupError(f"settings: {r.status_code} {r.text[:200]}")
         entities = stack.on_ha(lambda: sorted(stack.ha.states))
+        stack.on_ha(lambda: owner_history(story, stack.ha, entities))
         start = days_mod.first_midnight()
         events, names = given(story, start, seed, entities)
         missing = [k for k, v in names.items() if v is None]

@@ -77,11 +77,14 @@ class Driver:
         def check() -> bool:
             rt, orch = self.ctx.agents_rt, self.ctx.orchestrator
             review = getattr(self.ctx.council, "review", None)
+            manager = getattr(self.ctx.council, "manager", None)
+            task = getattr(manager, "_task", None)  # without it a trip passed during one model call
             return bool(
                 rt._busy
                 or any(rt._waiting.values())
                 or getattr(orch, "_tasks", None)
                 or (review is not None and review.running)
+                or (task is not None and not task.done())
                 or self.ctx.gate.pending()
             )
 

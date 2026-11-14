@@ -28,7 +28,7 @@ def stack(tmp_path, *script, **settings):
     s.orch.council = s.council
     s.rt.orchestrator = s.orch
     s.now = [1_000_000.0]
-    s.manager = Manager(s.orch, s.council, s.actuator, None, runtime, clock=lambda: s.now[0])
+    s.manager = Manager(s.orch, s.council, s.actuator, None, runtime, now=lambda: s.now[0])
     s.council.manager = s.manager
     return s
 

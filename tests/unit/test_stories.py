@@ -126,3 +126,22 @@ actions:
     assert repeated_days(draft(""), "media_player.tv", "off", at, "workdays") == "mon,tue,wed,thu,fri"
     assert repeated_days(draft("fri, sat, sun"), "media_player.tv", "off", at, "workdays") == "fri"
     assert repeated_days(draft(""), "media_player.tv", "off", 6 * 60, "workdays") == ""  # far from it
+
+
+def test_the_owners_automation_is_in_the_backfilled_history_too():
+    from types import SimpleNamespace
+
+    from sim.stories import owner_history
+
+    story = {"owner_automations": [{"ref": "automation.tv_off", "entity": "media_player.tv", "state": "off",
+                                    "days": "workdays"}]}  # fmt: skip
+    rows = [
+        {"when": "2026-11-16T23:10:00+01:00", "entity_id": "media_player.tv", "state": "off", "context_user_id": "u",
+         "context_event_type": "call_service", "context_domain": "media_player"},  # Monday
+        {"when": "2026-11-21T23:10:00+01:00", "entity_id": "media_player.tv", "state": "off", "context_user_id": "u"},
+        {"when": "2026-11-16T19:10:00+01:00", "entity_id": "media_player.tv", "state": "on", "context_user_id": "u"},
+    ]  # fmt: skip
+    assert owner_history(story, SimpleNamespace(logbook_rows=rows), ["media_player.tv"]) == 1
+    assert rows[0]["context_entity_id"] == "automation.tv_off" and "context_user_id" not in rows[0]
+    assert rows[0]["context_event_type"] == "automation_triggered"
+    assert rows[1]["context_user_id"] == "u" and rows[2]["context_user_id"] == "u"

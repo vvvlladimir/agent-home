@@ -28,7 +28,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from collections import deque
 
 from . import clock
@@ -122,14 +121,16 @@ TOOLS = [
 class Manager:
     """Wiring (app factory): `orch`, `council`, `actuator`, `metrics` and the runtime settings."""
 
-    def __init__(self, orch, council, actuator, metrics, settings, clock=time.time) -> None:
+    def __init__(self, orch, council, actuator, metrics, settings, now=None) -> None:
         self.orch, self.council, self.actuator, self.metrics = orch, council, actuator, metrics
-        self.settings, self.clock = settings, clock
+        # house time (D32): the sweep interval, the hourly cap and "runs since" are wall-clock
+        # meaning; on real time the polygon's lived days never reached a sweep (stories run 2026-11-14)
+        self.settings, self.clock = settings, now or clock.time
         self.store, self.feed, self.ha, self.safety = orch.store, orch.feed, orch.ha, orch.safety
         self._wakes: deque[float] = deque()
         self._pending: list[str] = []
         self._task: asyncio.Task | None = None
-        self._last_sweep = clock()
+        self._last_sweep = self.clock()
         self._last_run = 0.0
         self._last_run_id: str | None = None
         self.weak: list[dict] = []  # automations flagged by the last metrics read
