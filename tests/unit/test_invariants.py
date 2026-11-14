@@ -140,3 +140,16 @@ def test_a_review_about_drafts_made_days_earlier_is_true():
     }
     c = by_name(check_trace(trace(proposals=[old_draft], inbox=[review]), "shadow"))
     assert c["inbox_no_phantom_approval"]["ok"]
+
+
+def test_rules_and_denials_about_approval_are_not_claims():
+    """Run 5: two honest lines that the first pattern took for phantom approvals."""
+    honest = [
+        {"id": 3, "ts": T0, "summary": "Undone: four drafts, and none is waiting for owner approval yet."},
+        {
+            "id": 7,
+            "ts": T0,
+            "summary": "I have not changed anything: the heater is T2 and needs owner approval.",
+        },
+    ]
+    assert by_name(check_trace(trace(inbox=honest), "shadow"))["inbox_no_phantom_approval"]["ok"]
