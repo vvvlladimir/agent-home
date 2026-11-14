@@ -4,6 +4,7 @@
         --room-llm compatible --room-model Qwen/Qwen3.5-4B --no-pace --backfill-days 14
     python -m sim.qa coordinate .agent-logs/qa/<stamp>
     python -m sim.qa verify .agent-logs/qa/<stamp>
+    python -m sim.qa claude                     # all of it on Claude Code alone, no keys (D30)
 
 `run`: one `sim.polygon serve` per role (own ports, own data dir) and one headless Claude Code
 session per role (`claude -p`, cheap model, only `curl` and file tools), in parallel. Each writes
@@ -13,6 +14,11 @@ kind, similar text), asks the coordinator model (Qwen through an OpenAI-compatib
 question per candidate pair, and writes `backlog.json` + `backlog.md`.
 `verify`: replays each backlog item's steps on a fresh polygon with a fresh tester that sees only
 the steps; only items reproduced there are `confirmed`.
+`claude`: run + coordinate + verify where every model is a `claude -p` session (room agents haiku/low,
+orchestrator sonnet/medium, testers haiku, attackers sonnet, coordinator haiku/low, verifier
+sonnet/medium); needs only a logged-in `claude` CLI, e.g. a claude.ai/code cloud session.
+`up`, `pairs`, `coordinate --same`, `verify-up`, `verify-collect`, `down`: the same loop driven by a
+lead Claude Code session whose subagents are the testers and verifiers (skill `/polygon-claude`).
 Everything model-related is outside the add-on; nothing here runs in `make test` except the pure
 helpers (`validate`, `group`, `render`).
 """
@@ -127,23 +133,57 @@ def render(backlog: list[dict]) -> str:
 
 
 # --- processes -----------------------------------------------------------------------------------
-def start_polygon(out: Path, polygon_args: list[str]) -> tuple[subprocess.Popen, dict]:
+def start_polygon(
+    out: Path, polygon_args: list[str], detached: bool = False, wait_s: float = 300.0
+) -> tuple[subprocess.Popen, dict]:
+    """`sim.polygon serve` in the background; its first stdout line is the meta JSON. Detached
+    polygons outlive this process (own session) and are stopped with `python -m sim.qa down`."""
     out.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", "sim.polygon", "serve", "--out-dir", str(out), *polygon_args]
-    log = (out / "polygon.log").open("w")
-    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=log, text=True)
-    line = proc.stdout.readline() if proc.stdout else ""
-    if not line.strip().startswith("{"):
-        proc.terminate()
-        raise SystemExit(f"polygon did not start, see {out / 'polygon.log'}")
-    return proc, json.loads(line)
+    meta_file = out / "polygon.out"
+    proc = subprocess.Popen(cmd, cwd=ROOT, stdout=meta_file.open("w"), stderr=(out / "polygon.log").open("w"),
+                            text=True, start_new_session=detached)  # fmt: skip
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline and proc.poll() is None:
+        line = meta_file.read_text().split("\n", 1)[0].strip()
+        if line.startswith("{") and meta_file.read_text().count("\n"):
+            return proc, json.loads(line)
+        time.sleep(0.5)
+    proc.terminate()
+    raise SystemExit(f"polygon did not start, see {out / 'polygon.log'}")
 
 
-def tester(prompt: str, cwd: Path, model: str, max_turns: int) -> subprocess.Popen:
+def _remember(out: Path, proc: subprocess.Popen) -> None:
+    f = out / "pids.json"
+    pids = json.loads(f.read_text()) if f.exists() else []
+    f.write_text(json.dumps([*pids, proc.pid]))
+
+
+def model_args(models: str) -> tuple[str, list[str]]:
+    """Backends for the models inside the add-on: `claude -p` when it works here, else the fakes."""
+    if models in ("auto", "claude"):
+        from sim import claude_bridge  # noqa: PLC0415
+
+        try:
+            if claude_bridge.ask("Is 2 + 2 equal to 4?").get("same") is True:
+                return "claude", CLAUDE_POLYGON
+        except claude_bridge.BridgeError as err:
+            if models == "claude":
+                raise SystemExit(f"claude -p does not work here: {err}") from None
+    return "fake", ["--backfill-days", "14"]
+
+
+CLAUDE_POLYGON = ["--orchestrator", "claude", "--room-llm", "claude", "--no-pace", "--backfill-days", "14"]
+CLAUDE_ROLE_MODELS = {"intruder": "sonnet", "chaos": "sonnet"}  # attackers need the stronger model
+
+
+def tester(prompt: str, cwd: Path, model: str, max_turns: int, effort: str | None = None) -> subprocess.Popen:
     if shutil.which("claude") is None:
         raise SystemExit("the `claude` CLI is not on PATH")
     cmd = ["claude", "-p", prompt, "--model", model, "--max-turns", str(max_turns), "--output-format", "json",
            "--allowedTools", "Bash(curl:*)", "Read", "Write"]  # fmt: skip
+    if effort:
+        cmd += ["--effort", effort]
     return subprocess.Popen(cmd, cwd=cwd, stdout=(cwd / "session.json").open("w"), stderr=subprocess.STDOUT)
 
 
@@ -170,8 +210,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             proc, meta = start_polygon(work / "polygon", args.polygon)
             polygons.append(proc)
             (work / "polygon.json").write_text(json.dumps(meta, indent=2, default=str))
+            model = getattr(args, "role_models", {}).get(role, args.tester_model)
             sessions.append((role, tester(brief(role, roles[role], meta, work, args.max_calls), work,
-                                          args.tester_model, args.max_turns)))  # fmt: skip
+                                          model, args.max_turns, args.tester_effort)))  # fmt: skip
             print(f"{role}: {meta['urls']['app']}", flush=True)
         deadline = time.monotonic() + args.timeout
         for role, session in sessions:
@@ -183,6 +224,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     finally:
         for proc in polygons:
             proc.terminate()
+    args.dir = out
     print(json.dumps({"out": str(out)}))
     return 0
 
@@ -214,9 +256,25 @@ def ask_same(a: dict, b: dict, url: str, model: str, key: str) -> bool:
         return False  # unsure = keep both: a duplicate costs less than a lost finding
 
 
-def cmd_coordinate(args: argparse.Namespace) -> int:
+def ask_same_claude(a: dict, b: dict) -> bool:
+    """The same question through `claude -p` (haiku, low effort) instead of an API key."""
+    from sim import claude_bridge  # noqa: PLC0415
+
+    def short(x: dict) -> str:
+        keys = ("title", "endpoint", "expected", "actual")
+        return json.dumps({k: x.get(k) for k in keys}, ensure_ascii=False)
+
+    question = ("Two bug reports from testers of one app. Do they describe the same faulty behaviour under "
+                f"materially the same conditions?\nA: {short(a)}\nB: {short(b)}")  # fmt: skip
+    try:
+        return claude_bridge.ask(question).get("same") is True
+    except claude_bridge.BridgeError:
+        return False  # unsure = keep both
+
+
+def load_findings(directory: Path) -> tuple[list[dict], list[dict]]:
     items, rejected = [], []
-    for path in sorted(args.dir.glob("*/findings.json")):
+    for path in sorted(directory.glob("*/findings.json")):
         try:
             raw = json.loads(path.read_text())
         except json.JSONDecodeError as err:
@@ -228,10 +286,22 @@ def cmd_coordinate(args: argparse.Namespace) -> int:
                 rejected.append({"file": str(path), "title": (item or {}).get("title"), "problems": problems})
             else:
                 items.append({**item, "role": path.parent.name})
+    return items, rejected
+
+
+def cmd_coordinate(args: argparse.Namespace) -> int:
+    items, rejected = load_findings(args.dir)
     key = os.environ.get("AH_SIM_COMPATIBLE_API_KEY", "")
     same = set()
+    judged = {tuple(p) for p in json.loads(args.same)} if getattr(args, "same", None) else None
     for i, j in candidate_pairs(items):
-        if key and not args.no_model:
+        if judged is not None:  # the lead session judged the pairs itself
+            if (i, j) in judged:
+                same.add((i, j))
+        elif getattr(args, "claude", False) and not args.no_model:
+            if ask_same_claude(items[i], items[j]):
+                same.add((i, j))
+        elif key and not args.no_model:
             if ask_same(items[i], items[j], args.url, args.model, key):
                 same.add((i, j))
         elif items[i]["title"].lower() == items[j]["title"].lower():
@@ -243,6 +313,38 @@ def cmd_coordinate(args: argparse.Namespace) -> int:
     return 0
 
 
+def verify_prompt(entry: dict, meta: dict, work: Path) -> str:
+    return (
+        f"Agent House add-on API: {meta['urls']['app']} ; house panel: {meta['urls']['panel']} "
+        "(writes need header X-Sim-Panel: 1). Replay these steps with curl, adapting ids and "
+        f"ports to this instance: {json.dumps(entry['steps'])}. Expected: {entry['expected']}. "
+        f"Reported: {entry['actual']}. Write {work}/verdict.json as "
+        '{"reproduced": true|false, "evidence": "quoted response"} and nothing else.'
+    )
+
+
+def apply_verdicts(directory: Path) -> dict:
+    """Read `verify/<id>/verdict.json` into the backlog; no verdict keeps the item a candidate."""
+    data = json.loads((directory / "backlog.json").read_text())
+    for entry in data["backlog"]:
+        if entry["status"] != "candidate":
+            continue
+        try:
+            verdict = json.loads((directory / "verify" / entry["id"] / "verdict.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        entry["status"] = {True: "confirmed", False: "not_reproduced"}.get(
+            verdict.get("reproduced"), "candidate"
+        )
+        entry["verify"] = str(verdict.get("evidence"))[:500]
+    (directory / "backlog.json").write_text(json.dumps(data, indent=2))
+    (directory / "backlog.md").write_text(render(data["backlog"]))
+    return {
+        s: sum(e["status"] == s for e in data["backlog"])
+        for s in ("confirmed", "not_reproduced", "candidate")
+    }
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     data = json.loads((args.dir / "backlog.json").read_text())
     for entry in data["backlog"]:
@@ -250,32 +352,89 @@ def cmd_verify(args: argparse.Namespace) -> int:
             continue
         work = args.dir / "verify" / entry["id"]
         proc, meta = start_polygon(work / "polygon", args.polygon)
+        session = None
         try:
-            prompt = (
-                f"Agent House add-on API: {meta['urls']['app']} ; house panel: {meta['urls']['panel']} "
-                "(writes need header X-Sim-Panel: 1). Replay these steps with curl, adapting ids and "
-                f"ports to this instance: {json.dumps(entry['steps'])}. Expected: {entry['expected']}. "
-                f"Reported: {entry['actual']}. Write {work}/verdict.json as "
-                '{"reproduced": true|false, "evidence": "quoted response"} and nothing else.'
+            session = tester(
+                verify_prompt(entry, meta, work), work, args.tester_model, 30, args.tester_effort
             )
-            session = tester(prompt, work, args.tester_model, 30)
             session.wait(args.timeout)
         except subprocess.TimeoutExpired:
-            session.terminate()
+            if session:
+                session.terminate()
         finally:
             proc.terminate()
+    print(json.dumps(apply_verdicts(args.dir)))
+    return 0
+
+
+# --- the lead session drives it: polygons here, testers and verifiers as its subagents (D30) --------
+def cmd_up(args: argparse.Namespace) -> int:
+    """Start one detached polygon per role and write each role's brief; print where they are."""
+    roles = yaml.safe_load((HERE / "roles.yaml").read_text())["roles"]
+    chosen = list(roles) if args.roles == ["all"] else args.roles
+    if unknown := sorted(set(chosen) - set(roles)):
+        raise SystemExit(f"unknown roles: {unknown}")
+    out = args.out or ROOT / ".agent-logs" / "qa" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    backend, extra = model_args(args.models)
+    listing = {}
+    for role in chosen:
+        work = out / role
+        proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon], detached=True)
+        _remember(out, proc)
+        (work / "polygon.json").write_text(json.dumps(meta, indent=2, default=str))
+        (work / "brief.md").write_text(brief(role, roles[role], meta, work, args.max_calls))
+        listing[role] = {"brief": str(work / "brief.md"), "findings": str(work / "findings.json"),
+                         "app": meta["urls"]["app"]}  # fmt: skip
+    print(json.dumps({"out": str(out), "models": backend, "roles": listing}, indent=2))
+    return 0
+
+
+def cmd_pairs(args: argparse.Namespace) -> int:
+    """Candidate duplicate pairs for the lead to judge (indexes as `coordinate --same` takes them)."""
+    items, _ = load_findings(args.dir)
+    keys = ("role", "title", "endpoint", "expected", "actual")
+    pick = lambda n: {k: items[n].get(k) for k in keys}  # noqa: E731
+    pairs = [{"pair": [i, j], "a": pick(i), "b": pick(j)} for i, j in candidate_pairs(items)]
+    print(json.dumps(pairs, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_verify_up(args: argparse.Namespace) -> int:
+    """A fresh detached polygon and a replay prompt per backlog candidate."""
+    data = json.loads((args.dir / "backlog.json").read_text())
+    _, extra = model_args(args.models)
+    listing = {}
+    for entry in data["backlog"]:
+        if entry["status"] != "candidate":
+            continue
+        work = args.dir / "verify" / entry["id"]
+        proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon], detached=True)
+        _remember(args.dir, proc)
+        (work / "prompt.md").write_text(verify_prompt(entry, meta, work))
+        listing[entry["id"]] = {"prompt": str(work / "prompt.md"), "severity": entry["severity"]}
+    print(json.dumps(listing, indent=2))
+    return 0
+
+
+def cmd_verify_collect(args: argparse.Namespace) -> int:
+    print(json.dumps(apply_verdicts(args.dir)))
+    return 0
+
+
+def cmd_down(args: argparse.Namespace) -> int:
+    import signal  # noqa: PLC0415
+
+    f = args.dir / "pids.json"
+    pids = json.loads(f.read_text()) if f.exists() else []
+    stopped = 0
+    for pid in pids:
         try:
-            verdict = json.loads((work / "verdict.json").read_text())
-        except (OSError, json.JSONDecodeError):
-            verdict = {"reproduced": None, "evidence": "no verdict"}
-        entry["status"] = {True: "confirmed", False: "not_reproduced"}.get(
-            verdict.get("reproduced"), "candidate"
-        )
-        entry["verify"] = str(verdict.get("evidence"))[:500]
-    (args.dir / "backlog.json").write_text(json.dumps(data, indent=2))
-    (args.dir / "backlog.md").write_text(render(data["backlog"]))
-    print(json.dumps({s: sum(e["status"] == s for e in data["backlog"]) for s in
-                      ("confirmed", "not_reproduced", "candidate")}))  # fmt: skip
+            os.killpg(pid, signal.SIGTERM)
+            stopped += 1
+        except (ProcessLookupError, PermissionError):
+            pass
+    f.unlink(missing_ok=True)
+    print(json.dumps({"stopped": stopped}))
     return 0
 
 
@@ -301,9 +460,58 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("dir", type=Path)
     verify.add_argument("--tester-model", default="haiku")
     verify.add_argument("--timeout", type=float, default=900.0)
+    coord.add_argument("--claude", action="store_true", help="ask `claude -p` (haiku) instead of an API")
+    coord.add_argument("--same", help='pairs judged the same, JSON, e.g. "[[0, 2]]" (from `pairs`)')
+    up = sub.add_parser("up", help="detached polygons + briefs per role, for testers run as subagents")
+    up.add_argument("--roles", nargs="+", default=["newcomer", "migrator", "fussy_tenant"], help="or `all`")
+    up.add_argument("--models", choices=("auto", "claude", "fake"), default="auto",
+                    help="models in the add-on: claude -p if it works here (auto), else fakes")  # fmt: skip
+    up.add_argument("--max-calls", type=int, default=80)
+    up.add_argument("--out", type=Path)
+    pairs = sub.add_parser("pairs", help="candidate duplicate pairs to judge")
+    pairs.add_argument("dir", type=Path)
+    vup = sub.add_parser("verify-up", help="a fresh detached polygon + replay prompt per candidate")
+    vup.add_argument("dir", type=Path)
+    vup.add_argument("--models", choices=("auto", "claude", "fake"), default="auto")
+    vcol = sub.add_parser("verify-collect", help="read the verdicts into the backlog")
+    vcol.add_argument("dir", type=Path)
+    down = sub.add_parser("down", help="stop the detached polygons of a run")
+    down.add_argument("dir", type=Path)
+    run.add_argument("--tester-effort", help="claude --effort for the testers")
+    verify.add_argument("--tester-effort", help="claude --effort for the verifier")
+    allc = sub.add_parser("claude", help="run + coordinate + verify on Claude Code alone (no API keys)")
+    allc.add_argument("--roles", nargs="+", default=["all"], help="default: all six")
+    allc.add_argument("--tester-model", default="haiku")
+    allc.add_argument("--verifier-model", default="sonnet")
+    allc.add_argument("--max-turns", type=int, default=60)
+    allc.add_argument("--max-calls", type=int, default=80)
+    allc.add_argument("--timeout", type=float, default=3600.0, help="seconds for all testers")
+    allc.add_argument("--out", type=Path)
     args = ap.parse_args(argv)
     args.polygon = polygon_args
-    return {"run": cmd_run, "coordinate": cmd_coordinate, "verify": cmd_verify}[args.cmd](args)
+    if args.cmd == "claude":
+        return cmd_claude(args)
+    commands = {"run": cmd_run, "coordinate": cmd_coordinate, "verify": cmd_verify, "up": cmd_up,
+                "pairs": cmd_pairs, "verify-up": cmd_verify_up, "verify-collect": cmd_verify_collect,
+                "down": cmd_down}  # fmt: skip
+    return commands[args.cmd](args)
+
+
+def cmd_claude(args: argparse.Namespace) -> int:
+    from sim import claude_bridge  # noqa: PLC0415
+
+    if not claude_bridge.available():
+        raise SystemExit("the `claude` CLI is not on PATH")
+    args.polygon = [*CLAUDE_POLYGON, *args.polygon]  # later flags win in argparse
+    args.role_models, args.tester_effort = CLAUDE_ROLE_MODELS, None
+    cmd_run(args)
+    args.claude, args.no_model = True, False
+    cmd_coordinate(args)
+    args.tester_model, args.tester_effort = args.verifier_model, "medium"
+    args.timeout = 900.0
+    cmd_verify(args)
+    print(json.dumps({"backlog": str(args.dir / "backlog.md")}))
+    return 0
 
 
 if __name__ == "__main__":

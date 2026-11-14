@@ -34,3 +34,27 @@ def test_groups_keep_the_worst_severity_and_all_roles():
     assert [e["severity"] for e in backlog] == ["critical", "major"]
     assert backlog[0]["reported_by"] == ["chaos", "intruder"] and backlog[0]["duplicates"] == 1
     assert "| QA-" in render(backlog)
+
+
+def test_the_lead_judges_pairs_and_verdicts_update_the_backlog(tmp_path):
+    import json
+    from argparse import Namespace
+
+    from sim.qa.run import apply_verdicts, cmd_coordinate, load_findings
+
+    for role, items in {"chaos": [finding("manager wake returns 500")],
+                        "newcomer": [finding("manager wake gives 500 error", severity="minor"),
+                                     finding("bad", reproduced_by_me=False)]}.items():  # fmt: skip
+        (tmp_path / role).mkdir()
+        (tmp_path / role / "findings.json").write_text(json.dumps(items))
+    items, rejected = load_findings(tmp_path)
+    assert len(items) == 2 and len(rejected) == 1
+    cmd_coordinate(Namespace(dir=tmp_path, same="[[0, 1]]", no_model=False, url="", model=""))
+    backlog = json.loads((tmp_path / "backlog.json").read_text())["backlog"]
+    assert len(backlog) == 1 and backlog[0]["reported_by"] == ["chaos", "newcomer"]
+    verdict = tmp_path / "verify" / "QA-001" / "verdict.json"
+    assert apply_verdicts(tmp_path)["candidate"] == 1  # no verdict yet: stays a candidate
+    verdict.parent.mkdir(parents=True)
+    verdict.write_text(json.dumps({"reproduced": True, "evidence": "HTTP 500"}))
+    assert apply_verdicts(tmp_path) == {"confirmed": 1, "not_reproduced": 0, "candidate": 0}
+    assert "confirmed" in (tmp_path / "backlog.md").read_text()

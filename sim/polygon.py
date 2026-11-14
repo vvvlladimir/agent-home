@@ -6,6 +6,7 @@ testing agents alike; every run is isolated (free ports, its own data dir), so m
     python -m sim.polygon run --scenario window_while_heating --speed 10
     python -m sim.polygon run --scenario all --room-llm openai --orchestrator anthropic
     python -m sim.polygon serve            # same house, stays up; prints the URLs as JSON
+    python -m sim.polygon run --scenario all --room-llm claude --orchestrator claude   # no keys (D30)
 
 Model backends default to the fakes. `--room-llm` / `--orchestrator` route through the sim gateways
 to a real Jetson or cloud API; keys come from ANTHROPIC_API_KEY / OPENAI_API_KEY /
@@ -65,10 +66,13 @@ def sim_config(args: argparse.Namespace) -> SimConfig:
     if args.room_llm:
         room["backend"] = args.room_llm
     if args.room_model:
-        field = {"openai": "openai_model", "anthropic": "anthropic_model", "compatible": "compatible_model"}
+        field = {"openai": "openai_model", "anthropic": "anthropic_model", "compatible": "compatible_model",
+                 "claude": "claude_model"}  # fmt: skip
         if args.room_llm not in field:
-            raise SetupError("--room-model needs --room-llm openai, anthropic or compatible")
+            raise SetupError("--room-model needs --room-llm openai, anthropic, compatible or claude")
         room[field[args.room_llm]] = args.room_model
+    if args.room_effort:
+        room["claude_effort"] = args.room_effort
     if args.compatible_url:
         room["compatible_base_url"] = args.compatible_url
     update: dict = {"room": room, "house": {"preset": args.house}, "backfill_days": args.backfill_days}
@@ -76,6 +80,12 @@ def sim_config(args: argparse.Namespace) -> SimConfig:
         update["jetson"] = {"host": args.jetson_host}
     if args.orchestrator in ("anthropic", "openai"):
         update[args.orchestrator] = {"backend": "real", "model_override": args.orchestrator_model or ""}
+    elif args.orchestrator == "claude":  # the add-on talks to its Claude provider; `claude -p` answers
+        update["anthropic"] = {
+            "backend": "claude",
+            "claude_model": args.orchestrator_model or "sonnet",
+            "claude_effort": args.orchestrator_effort,
+        }
     try:
         cfg.update(update)
     except ValueError as err:
@@ -89,6 +99,8 @@ def preflight(cfg: SimConfig) -> list[dict]:
     if cfg.room.backend != "fake":
         targets.append(cfg.room.backend)
     targets += [n for n in ("anthropic", "openai") if getattr(cfg, n).backend == "real" and n not in targets]
+    if cfg.anthropic.backend == "claude" and "claude" not in targets:
+        targets.append("claude")
     results = []
     for t in targets:
         key = {
@@ -135,10 +147,20 @@ def wait_ready(app: App, timeout: float = 60) -> dict:
     raise SetupError(f"add-on not connected to the fake HA after {timeout:.0f} s: {last}")
 
 
-def seed_agents(app: App, agents: list[dict], live: bool) -> list[str]:
+SLOW_LIMITS = {"timeout_s": 300}  # `claude -p` turns take seconds each, not the Jetson's ~1 s
+SLOW_SETTINGS = {"llm_timeout_s": 300, "llm_stale_after_s": 900}
+
+
+def seed_agents(app: App, agents: list[dict], live: bool, slow: bool = False) -> list[str]:
     have = {a["id"] for a in app.get("/api/agents")}
+    if slow:
+        r = app.send("PUT", "/api/settings", SLOW_SETTINGS)
+        if r.status_code >= 300:
+            raise SetupError(f"settings: {r.status_code} {r.text[:200]}")
     for spec in agents:
         body = {**spec, "mode": "live" if live else spec.get("mode", "shadow")}
+        if slow:
+            body["limits"] = {**(spec.get("limits") or {}), **SLOW_LIMITS}
         method, path = ("PUT", f"/api/agents/{spec['id']}") if spec["id"] in have else ("POST", "/api/agents")
         r = app.send(method, path, body)
         if r.status_code >= 300:
@@ -306,8 +328,15 @@ def _common(ap: argparse.ArgumentParser) -> None:
     llm.add_argument(
         "--no-pace", action="store_true", help="cloud room model at full speed, not Jetson speed"
     )
-    llm.add_argument("--orchestrator", choices=("auto", "local", "anthropic", "openai"), default="auto")
+    llm.add_argument(
+        "--orchestrator",
+        choices=("auto", "local", "anthropic", "openai", "claude"),
+        default="auto",
+        help="claude = the add-on's Claude provider answered by `claude -p`, no API key (D30)",
+    )
     llm.add_argument("--orchestrator-model", help="override the model the orchestrator asks for")
+    llm.add_argument("--orchestrator-effort", default="medium", help="effort for --orchestrator claude")
+    llm.add_argument("--room-effort", help="effort for --room-llm claude (default low)")
 
 
 def _prepare(args: argparse.Namespace) -> tuple[dict, SimConfig, list[dict], Path]:
@@ -323,12 +352,13 @@ def _prepare(args: argparse.Namespace) -> tuple[dict, SimConfig, list[dict], Pat
 def _start(
     args: argparse.Namespace, spec: dict, cfg: SimConfig, checks: list[dict], data_dir: Path
 ) -> tuple[Stack, App, dict]:
-    env = {"AH_ORCHESTRATOR_PROVIDER": args.orchestrator, "AH_LOG_LEVEL": "warning"}
+    provider = "anthropic" if args.orchestrator == "claude" else args.orchestrator
+    env = {"AH_ORCHESTRATOR_PROVIDER": provider, "AH_LOG_LEVEL": "warning"}
     stack = boot(Ports.pick(args.port_base), data_dir, cfg, rate=args.rate, speed=args.speed, env_extra=env)
     try:
         app = App(stack)
         wait_ready(app)
-        agents = seed_agents(app, spec.get("agents") or [], args.live)
+        agents = seed_agents(app, spec.get("agents") or [], args.live, slow=cfg.room.backend == "claude")
     except BaseException:
         stack.stop()
         raise
@@ -345,6 +375,7 @@ def _start(
                 "openai": cfg.room.openai_model,
                 "anthropic": cfg.room.anthropic_model,
                 "compatible": cfg.room.compatible_model,
+                "claude": f"{cfg.room.claude_model}/{cfg.room.claude_effort}",
             }.get(cfg.room.backend),
             "orchestrator": args.orchestrator,
             "anthropic": cfg.anthropic.backend,

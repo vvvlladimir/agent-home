@@ -1,7 +1,8 @@
 """The ports the add-on talks to in `make sim`, switchable from the sim panel at runtime.
 
     :8080  room-agent LLM (llama-server API)  → fake | real Jetson | OpenAI | Claude | OpenAI-compatible
-    :8081  Claude API for the orchestrator    → fake | api.anthropic.com
+                                                | claude -p (sim/claude_bridge.py, no key)
+    :8081  Claude API for the orchestrator    → fake | api.anthropic.com | claude -p
     :8082  OpenAI API for the orchestrator    → fake | api.openai.com
     :9100  Jetson metrics + profile switch    → fake | real Jetson
 
@@ -27,6 +28,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from sim import claude_bridge
 from sim.fake_jetson import JetsonSim
 from sim.fake_llm import _chunks
 from sim.sim_config import SimConfig
@@ -381,6 +383,7 @@ class Gateways:
             "openai": r.openai_model,
             "anthropic": r.anthropic_model,
             "compatible": r.compatible_model,
+            "claude": r.claude_model,
         }.get(r.backend, r.backend)
 
     async def _cloud_chat(self, request: Request, backend: str, started: float) -> Response:
@@ -411,7 +414,7 @@ class Gateways:
         key_name = {"openai": "openai_api_key", "anthropic": "anthropic_api_key"}.get(
             backend, "compatible_api_key"
         )
-        key = self.cfg.secret(key_name)
+        key = "claude-cli" if backend == "claude" else self.cfg.secret(key_name)
         if not key:
             return _llama_error(401, f"sim panel: no {key_name} saved", "authentication_error")
         if room.single_slot and room.pace:
@@ -424,7 +427,11 @@ class Gateways:
         model = self._room_model()
         t0 = time.monotonic()
         try:
-            if backend == "anthropic":
+            if backend == "claude":
+                msg, finish, n_in, n_out = await asyncio.to_thread(
+                    claude_bridge.chat_completion, body, room.claude_model, room.claude_effort
+                )
+            elif backend == "anthropic":
                 resp = await self.sdk("anthropic", key, self.upstream["anthropic"]).messages.create(
                     model=model, **to_anthropic(body)
                 )
@@ -538,6 +545,8 @@ class Gateways:
                 )
                 return self._cloud_error(name, status, "sim panel: injected failure")
             body = await request.body()
+            if c.backend == "claude":
+                return await self._claude_messages(name, path, body, started)
             if c.backend == "fake":
                 base, headers = (
                     self.internal[name],
@@ -582,6 +591,30 @@ class Gateways:
             return Response(raw, status_code=resp.status_code, headers=dict(resp.headers))
 
         return app
+
+    async def _claude_messages(self, name: str, path: str, body: bytes, started: float) -> Response:
+        """The orchestrator's Messages API call answered by `claude -p` (D30)."""
+        c = getattr(self.cfg, name)
+        if name != "anthropic" or path.strip("/") != "v1/messages":
+            return self._cloud_error(name, 404, f"sim gateway (claude): /{path} is not served")
+        try:
+            data = json.loads(body)
+            resp = await asyncio.to_thread(claude_bridge.messages, data, c.claude_model, c.claude_effort)
+        except (ValueError, claude_bridge.BridgeError) as err:
+            self.log.add(gateway=name, backend="claude", path=path, model=c.claude_model, status=529,
+                         ms=round((time.monotonic() - started) * 1000), note=type(err).__name__)  # fmt: skip
+            return self._cloud_error(name, 529, f"sim gateway (claude): {str(err)[:240]}")
+        self.log.add(
+            gateway=name,
+            backend="claude",
+            path=path,
+            model=resp["model"],
+            status=200,
+            ms=round((time.monotonic() - started) * 1000),
+            tokens_in=resp["usage"]["input_tokens"],
+            tokens_out=resp["usage"]["output_tokens"],
+        )
+        return JSONResponse(resp)
 
     @staticmethod
     def _cloud_error(name: str, status: int, message: str) -> JSONResponse:

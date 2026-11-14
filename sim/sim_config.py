@@ -15,8 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-ROOM_BACKENDS = ("fake", "jetson", "openai", "anthropic", "compatible")
-CLOUD_BACKENDS = ("fake", "real")
+ROOM_BACKENDS = ("fake", "jetson", "openai", "anthropic", "compatible", "claude")
+CLOUD_BACKENDS = ("fake", "real", "claude")  # claude = `claude -p` (sim/claude_bridge.py)
 METRICS_SOURCES = ("auto", "fake", "jetson")
 _SECTIONS = ("room", "jetson", "anthropic", "openai", "house", "backfill_days")
 SECRET_KEYS = ("anthropic_api_key", "openai_api_key", "compatible_api_key", "jetson_token")
@@ -29,6 +29,8 @@ class RoomLLM:
     anthropic_model: str = "claude-haiku-5-5"
     compatible_base_url: str = "https://api.deepinfra.com/v1/openai"
     compatible_model: str = "Qwen/Qwen3.5-4B"  # check the provider's catalogue for the exact id
+    claude_model: str = "haiku"  # backend "claude": `claude -p --model`, no API key (D30)
+    claude_effort: str = "low"
     pace: bool = True  # slow cloud answers down to the Jetson's measured speed (D23)
     prefill_tps: float = 515.0
     decode_tps: float = 16.0
@@ -54,6 +56,8 @@ class Jetson:
 class Cloud:
     backend: str = "fake"  # real = forward to the provider with the key from the panel
     model_override: str = ""  # empty = the model the add-on asked for
+    claude_model: str = "sonnet"  # backend "claude" (Anthropic gateway only): `claude -p` (D30)
+    claude_effort: str = "medium"
 
 
 @dataclass
@@ -148,6 +152,11 @@ class SimConfig:
                 raise ValueError(f"cloud backend must be one of {CLOUD_BACKENDS}")
         if self.jetson.host and not re.fullmatch(r"[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:]+\]", self.jetson.host):
             raise ValueError("jetson.host: an IP address or a hostname, no scheme or port")
+        efforts = ("low", "medium", "high", "xhigh", "max")
+        if self.room.claude_effort not in efforts or self.anthropic.claude_effort not in efforts:
+            raise ValueError(f"claude_effort must be one of {efforts}")
+        if self.openai.backend == "claude":
+            raise ValueError("the claude backend serves the Anthropic gateway only")
         if not re.fullmatch(r"https?://\S+", self.room.compatible_base_url):
             raise ValueError("room.compatible_base_url must start with http:// or https://")
         if not (0 < self.room.prefill_tps and 0 < self.room.decode_tps and 512 <= self.room.n_ctx <= 262144):

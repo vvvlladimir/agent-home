@@ -201,7 +201,19 @@ async def check(cfg: SimConfig, target: str) -> dict:
                     f"profile {(m.get('llama') or {}).get('active_profile')}"
                 )
                 ok = health.status_code == 200 and metrics.status_code == 200
+            elif target == "claude":
+                from sim import claude_bridge  # noqa: PLC0415
+
+                if not claude_bridge.available():
+                    return {"ok": False, "detail": "the `claude` CLI is not on PATH"}
+                try:
+                    out = await asyncio.to_thread(claude_bridge.ask, "Is 2 + 2 equal to 4?")
+                except claude_bridge.BridgeError as err:
+                    return {"ok": False, "detail": str(err)[:200]}
+                ok, detail = out.get("same") is True, f"claude -p answered {out}"
             elif target == "anthropic":
+                if not cfg.secret("anthropic_api_key"):
+                    return {"ok": False, "detail": "no anthropic API key saved"}
                 r = await c.get(
                     "https://api.anthropic.com/v1/models",
                     headers={"x-api-key": cfg.secret("anthropic_api_key"), "anthropic-version": "2023-06-01"},
@@ -214,6 +226,8 @@ async def check(cfg: SimConfig, target: str) -> dict:
                     else cfg.room.compatible_base_url.rstrip("/")
                 )
                 key = cfg.secret(f"{target}_api_key")
+                if not key:
+                    return {"ok": False, "detail": f"no {target} API key saved"}
                 r = await c.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
                 ok, detail = r.status_code == 200, f"GET {base}/models → {r.status_code}"
                 if ok and target == "compatible":

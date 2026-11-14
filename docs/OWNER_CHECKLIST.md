@@ -283,6 +283,16 @@ Everything else in the panel is tested in CI. These paths need your network or y
 
 Note anything odd in `owner-reports/sim-panel.md`.
 
+## AI testers on Claude Code alone (about 1 hour, no API keys)
+
+1. claude.ai/code → New session on `agent-home`, model Opus, and type `/polygon-claude`
+   (optionally "roles all" or a list). Expected: it reports `models: claude`, spawns one
+   subagent per role, then verifiers, and ends with the confirmed bugs and the backlog path.
+2. Commit the copied `owner-reports/qa/<date>-claude.md`.
+   `[UNVERIFIED-ON-HW]` in the cloud environment: `make install` reaches PyPI, the background
+   polygons stay up while subagents run, and a nested `claude -p` is logged in (else the report
+   says `models: fake`). Checked on a Mac only.
+
 ## AI testers on the polygon (about 1 hour, costs API tokens)
 
 Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_COMPATIBLE_API_KEY`

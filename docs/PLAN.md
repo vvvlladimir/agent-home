@@ -137,4 +137,9 @@ steps are written down in `OWNER_CHECKLIST.md`.
       → `tests/integration/test_m5_council.py::test_metrics_match_the_known_outcomes_of_a_played_history`
 - [x] GUI: Accuracy card on Overview (house score, lower bound, precision, coverage, share,
       weak automations, manager status, "Ask the house manager") → `OverviewPage.vue`
+- [x] Claude-only polygon: `claude` backend for room agents and orchestrator, `sim.qa claude`,
+      `make polygon-claude` / `make qa-claude`, skill `/polygon-claude` (lead session, testers and
+      verifiers as subagents `.claude/agents/qa-*.md`, `sim.qa up/pairs/verify-up/down`) → `sim/claude_bridge.py`,
+      `tests/unit/test_claude_bridge.py`, D30
 - [ ] **Owner:** first `python -m sim.qa run` with three roles and real keys (OWNER_CHECKLIST → AI testers)
+- [ ] **Owner:** one `/polygon-claude` in a claude.ai/code cloud session; commit the backlog

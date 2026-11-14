@@ -1,4 +1,4 @@
-.PHONY: help install lint contracts test test-realha sim polygon addon-lint shellcheck analyze-report gui gui-check ci
+.PHONY: help install lint contracts test test-realha sim polygon polygon-claude qa-claude addon-lint shellcheck analyze-report gui gui-check ci
 VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PORT ?= 8099
@@ -29,6 +29,12 @@ sim: ## the app in a simulated home (:8100) + the sim panel (:8090) to steer the
 
 polygon: ## headless scenario runs with invariant checks; ARGS="--room-llm openai" for a real model
 	$(PY) -m sim.polygon run --scenario $(or $(SCENARIO),all) $(ARGS)
+
+polygon-claude: ## all scenarios with every model as `claude -p` (no API keys, D30)
+	$(PY) -m sim.polygon run --scenario $(or $(SCENARIO),all) --room-llm claude --orchestrator claude --no-pace $(ARGS)
+
+qa-claude: ## AI testers + coordinator + verifier, all on Claude Code (no API keys, ~1 h, D30)
+	$(PY) -m sim.qa claude $(ARGS)
 
 addon-lint: ## static checks of the add-on packaging (CI also runs the app linter + hadolint)
 	$(PY) tools/addon_lint.py agent_house

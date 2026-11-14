@@ -91,6 +91,41 @@ python -m sim.qa coordinate .agent-logs/qa/<stamp>
 python -m sim.qa verify .agent-logs/qa/<stamp>
 ```
 
+### 4a. Claude-only polygon: one lead session, testers as subagents (D30)
+
+Run from one Claude Code session (claude.ai/code cloud or local, e.g. Opus): `/polygon-claude`.
+That session is the **lead**: it starts the polygons in the background, spawns the testers and
+verifiers as its **subagents**, judges duplicates itself and reports the confirmed bugs. No API
+keys, no Jetson.
+
+| Role | Who | Model / effort |
+|---|---|---|
+| Lead + coordinator | the session you start | yours (e.g. Opus) |
+| Testers `newcomer`, `migrator`, `fussy_tenant`, `manager_boss` | subagent `qa-tester` | haiku / low |
+| Testers `intruder`, `chaos` | subagent `qa-attacker` | sonnet / medium |
+| Verifier, one per candidate | subagent `qa-verifier` | sonnet / medium |
+| Room agents (stand-in for the Jetson's 4B) | `claude -p` behind the llama-server API | haiku / low |
+| Orchestrator + house manager | `claude -p` behind the Messages API | sonnet / medium |
+
+The add-on's own models cannot be subagents: the add-on calls them over HTTP and waits, and a
+subagent is only started by its lead. So the sim gateway answers each call with one headless
+`claude -p` turn (no tools; `sim/claude_bridge.py`). If `claude -p` does not work in the
+environment, `sim.qa up` falls back to the fake models (`"models": "fake"`): code paths are still
+tested, model behaviour is not.
+
+Steps the skill runs: `make polygon-claude` → `python -m sim.qa up --roles …` → subagents →
+`sim.qa pairs` → lead judges → `sim.qa coordinate --same …` → `sim.qa verify-up` → verifier
+subagents → `sim.qa verify-collect` → `sim.qa down` → `owner-reports/qa/<date>-claude.md`.
+Without a lead (a terminal only): `make qa-claude` runs the same loop with headless `claude -p`
+testers.
+
+What it is good for: bugs in the add-on (API, policy, shadow, drafts, migration, manager). What it
+is not: a measure of the Jetson model. Tool calls go through structured output, not native
+function calling, and Haiku is stronger than Qwen3.5-4B. Each model call is 3–8 s, so agent and
+request timeouts are raised to 300 s in this mode; at most `AH_SIM_CLAUDE_PARALLEL` (4) calls run
+at once per polygon. It all counts against the account's Claude usage (a Pro window can run out
+with six roles), not `daily_budget_eur`.
+
 ## 5. Metrics: one number for the whole program, done properly
 
 Source: the logbook changes HA records with their cause (`core/insights.py`). Every automated
