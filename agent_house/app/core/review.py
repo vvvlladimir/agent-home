@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from .insights import _targets
 from .lifecycle import action_entities
 from .llm import Priority
+from .metrics import is_weak
 from .orchestrator import OrchestratorError
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class Review:
         self.store, self.feed, self.orch, self.insights = store, feed, orchestrator, insights
         self.council, self.rt, self.settings, self.lifecycle = council, agents_rt, settings, lifecycle
         self.running = False
+        self.metrics = None  # core/metrics.py, wired by the app factory
 
     def due(self, now: datetime) -> bool:
         at = getattr(self.settings, "daily_review_at", "") or ""
@@ -69,7 +71,8 @@ class Review:
             except Exception as err:  # noqa: BLE001 - no history is no reason to skip the review
                 log.warning("history scan failed: %s", err)
                 scan = {"findings": [], "feedback": [], "error": str(err)[:200]}
-            digest = self.digest(now, scan)
+            accuracy = await self._accuracy(now)
+            digest = self.digest(now, scan) + accuracy
             try:
                 text, run_id = await self.orch.summarize(digest)
             except OrchestratorError as err:
@@ -95,6 +98,24 @@ class Review:
             return result
         finally:
             self.running = False
+
+    async def _accuracy(self, now: datetime) -> str:
+        """The accuracy metrics (D28): one line for the digest, and a snapshot for the trend."""
+        if self.metrics is None:
+            return ""
+        try:
+            result = await self.metrics.compute()
+        except Exception as err:  # noqa: BLE001 - the logbook may be unreachable
+            log.info("metrics unavailable: %s", err)
+            return ""
+        self.metrics.snapshot(now.date().isoformat(), result)
+        p = result["program"]
+        lines = [f"\nAccuracy (7 days): score {p['score']} (lower bound {p['score_low']}), "
+                 f"precision {p['precision']['value']}, coverage {p['coverage']['value']}, "
+                 f"house share {p['house_share']['value']}"]  # fmt: skip
+        weak = [a for a in result["automations"] if is_weak(a)]
+        lines += [f"Weak: {a['ha_id']} f1 {a['f1']} ({', '.join(a['examples'][:2])})" for a in weak[:5]]
+        return "\n".join(lines)
 
     def _undo_findings(self, item: dict) -> list[dict]:
         found = self.insights.get(f"undo:{item['ha_id']}:v{item.get('version')}")

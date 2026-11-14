@@ -27,7 +27,7 @@ async function save() {
   const body: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(form.value)) {
     if (k === 'daily_review_at') body[k] = v.trim(); // '' = no daily review
-    else if (k === 'auto_house_mode') body[k] = v === 'true';
+    else if (k === 'auto_house_mode' || k === 'manager_enabled') body[k] = v === 'true';
     else body[k] = v === '' ? null : TEXT.includes(k) ? v.trim() : Number(v);
   }
   error.value = '';
@@ -115,6 +115,15 @@ onActivated(load);
             </div>
             <div class="fields">
               <label class="field"><span>{{ t('Night window') }}</span><input v-model="form.night_window" type="text" class="mono" placeholder="23:00-06:00" /></label>
+            </div>
+            <div class="row">
+              <label class="field check"><input type="checkbox" :checked="form.manager_enabled === 'true'"
+                @change="form.manager_enabled = ($event.target as HTMLInputElement).checked ? 'true' : 'false'" /> <span>{{ t('House manager') }}</span></label>
+              <Info :tip="t('Between reviews the orchestrator checks the house (lights on with nobody home, failed room runs, weak automations) and acts on entities no room agent owns. The model is called only when the check finds something. Its actions follow the orchestrator mode.')" />
+            </div>
+            <div class="fields">
+              <label class="field"><span>{{ t('Check every (min, 0 = off)') }}</span><input v-model="form.manager_sweep_min" type="number" min="0" max="1440" /></label>
+              <label class="field"><span>{{ t('Wakes per hour') }}</span><input v-model="form.manager_max_wakes_per_hour" type="number" min="0" max="30" /></label>
             </div>
             <div class="row"><button class="btn primary" type="submit">{{ t('Save') }}</button><p v-if="error" class="error">{{ error }}</p></div>
           </form>

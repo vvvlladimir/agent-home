@@ -57,7 +57,12 @@ WAKES = (
     ("house_mode", "the house mode changes: rooms get a task (away, night)"),
     ("person", "a person comes or goes (only with auto_house_mode): the mode is re-evaluated"),
     ("daily_review", "the daily review time: scan, digest, drafts"),
-    ("escalation", "a room escalates: forwarded to the owner of an entity it names, else to the review"),
+    (
+        "escalation",
+        "a room escalates: forwarded to the owner of an entity it names, else to the "
+        "house manager (manager_enabled) or the review",
+    ),
+    ("manager_sweep", "every manager_sweep_min: the manager's prefilter; the model only if it finds work"),
 )
 WAKES_KEY = "orchestrator_wakes"
 MODE_TASKS = {
@@ -211,7 +216,7 @@ class Council:
         self.clock = clock
         self.board = Board(store, feed, clock)
         self.ownership = Ownership(agents, ha)
-        self.rt = self.actuator = self.gate = self.review = None
+        self.rt = self.actuator = self.gate = self.review = self.manager = None
         self._asks: dict[str, deque[float]] = {}
         self._requested: str | None = None  # last mode asked for, so shadow mode does not repeat it
         self._task: asyncio.Task | None = None
@@ -224,10 +229,15 @@ class Council:
         if agent_id != ORCHESTRATOR:
             return None
         mode = getattr(self.settings, "orchestrator_mode", "shadow")
-        return AgentConfig(
+        config = AgentConfig(
             id=ORCHESTRATOR, name="Orchestrator", room="", mode="live" if mode == "live" else "shadow",
             entities=[MODE_ENTITY], entities_mode="only", max_entities=1,
         )  # fmt: skip
+        if self.manager is None or not self.manager.enabled:
+            return config
+        # D27: with the house manager on, also the entities no room agent owns (switchable domains).
+        # model_copy skips the 25-entity cap meant for room prompts; policy still checks each call.
+        return config.model_copy(update={"entities": sorted(self.manager.scope())})
 
     # --- lifecycle ---------------------------------------------------------------------------
     async def start(self) -> None:
@@ -253,6 +263,8 @@ class Council:
         await self.evaluate_mode("time", now)
         if self.review is not None:
             await self.review.maybe_run(now)
+        if self.manager is not None:
+            await self.manager.tick()
 
     # --- house mode --------------------------------------------------------------------------
     @property
@@ -416,6 +428,9 @@ class Council:
         target = recipient or ORCHESTRATOR
         self.board.post(agent_id, summary, kind="escalation", target=target, run_id=run_id, ttl_s=6 * 3600)
         if recipient is None:
+            if self.manager is not None and self.manager.enabled:
+                self.manager.on_escalation(agent_id, summary)
+                return {"status": "on_board", "note": f"for the house manager ({note})"}
             return {"status": "on_board", "note": f"kept for the daily review ({note})"}
         if self.assign_task(recipient, summary, asked_by=agent_id) is None:
             self._asks[agent_id].pop()  # nothing was forwarded: the hourly slot is not used up
@@ -444,6 +459,8 @@ class Council:
         active = {
             "person": bool(getattr(self.settings, "auto_house_mode", False)),
             "daily_review": bool(getattr(self.settings, "daily_review_at", "") or ""),
+            "manager_sweep": bool(getattr(self.settings, "manager_enabled", False))
+            and int(getattr(self.settings, "manager_sweep_min", 0) or 0) > 0,
         }
         return [
             {"id": wake, "rule": rule, "active": active.get(wake, True), "last": fired.get(wake)}

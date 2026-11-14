@@ -240,7 +240,7 @@ async def test_escalations_without_another_owner_stay_for_the_review_and_are_bou
 async def test_the_orchestrators_wake_rules_are_listed_with_their_last_firing(tmp_path):
     s = stack(tmp_path, auto_house_mode=True)
     wakes = {w["id"]: w for w in s.council.status()["orchestrator_wakes"]}
-    assert list(wakes) == ["house_mode", "person", "daily_review", "escalation"]
+    assert list(wakes) == ["house_mode", "person", "daily_review", "escalation", "manager_sweep"]
     assert all(w["last"] is None and w["rule"] for w in wakes.values()) and wakes["person"]["active"]
     s.council.on_state(MODE_ENTITY, {"state": "home"}, {"state": "night"})
     s.council.on_state("person.owner", {"state": "home"}, {"state": "not_home"})

@@ -28,6 +28,8 @@ from .core.gate import EventGate
 from .core.insights import Insights
 from .core.lifecycle import Lifecycle
 from .core.llm import LLMManager
+from .core.manager import Manager
+from .core.metrics import Metrics
 from .core.migration import Migration
 from .core.monitor import JetsonMonitor
 from .core.orchestrator import Orchestrator
@@ -64,6 +66,8 @@ class Context:
     council: Council
     insights: Insights
     review: Review
+    metrics: Metrics
+    manager: Manager
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -144,6 +148,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     council.rt, council.actuator, council.gate = agents_rt, actuator, gate
     insights = Insights(store, feed, ha, lifecycle, runtime)
     council.review = Review(store, feed, orchestrator, insights, council, agents_rt, runtime, lifecycle)
+    metrics = council.review.metrics = Metrics(store, insights, lifecycle)
+    council.manager = Manager(orchestrator, council, actuator, metrics, runtime)
     ctx = Context(
         settings=settings,
         store=store,
@@ -164,6 +170,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         council=council,
         insights=insights,
         review=council.review,
+        metrics=metrics,
+        manager=council.manager,
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -211,6 +219,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             helper_sync.cancel()
             await ctx.council.stop()
+            await ctx.manager.stop()
             await ctx.gate.stop()
             await ctx.orchestrator.stop()
             await ctx.agents_rt.stop()

@@ -123,3 +123,16 @@ steps are written down in `OWNER_CHECKLIST.md`.
       → `sim/polygon.py`, `sim/polygon.yaml`, `tests/integration/test_polygon.py`, RUNBOOK → Polygon
 - [ ] **Owner:** point the panel at the real Jetson and at the cloud APIs once (OWNER_CHECKLIST → Sim panel)
 - [ ] **Owner:** one `make polygon ARGS="--room-llm openai"` (or `jetson`) run with a real key
+
+## House manager, accuracy metrics, AI testers — `docs/POLYGON.md`
+
+- [x] House manager: prefilter sweep, escalations, manual wake, scope = unowned switchables,
+      shadow by `orchestrator_mode`, caps, proposals for new automations and changes to ours
+      → `core/manager.py`, `GET /api/manager`, `POST /api/manager/wake`, Settings, D27
+- [x] Accuracy metrics per automation and agent, house score with Wilson intervals, daily trend
+      → `core/metrics.py`, `GET /api/metrics`, review digest, D28
+- [x] AI testers: personas, brief, finding format, launcher, coordinator, verification
+      → `sim/qa/`, `tests/unit/test_sim_qa.py`, D29
+- [ ] Polygon check: `/api/metrics` against the sim's ground-truth causes
+- [ ] GUI: metrics and manager status on Overview (API exists; Settings has the switches)
+- [ ] **Owner:** first `python -m sim.qa run` with three roles and real keys (OWNER_CHECKLIST → AI testers)

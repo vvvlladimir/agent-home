@@ -502,6 +502,36 @@ paths:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Finding"}}}}
         "404": {$ref: "#/components/responses/Error"}
 
+  /api/manager:
+    get:
+      tags: [council]
+      operationId: getManager
+      x-milestone: M5
+      summary: The house manager (D27) - settings, wakes in the last hour, what the prefilter sees now
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/ManagerStatus"}}}}
+  /api/manager/wake:
+    post:
+      tags: [council]
+      operationId: wakeManager
+      x-milestone: M5
+      summary: Wake the house manager now (capped per hour; refused with the kill switch engaged)
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {reason: {type: string, maxLength: 500}}}}}
+      responses:
+        "202": {description: started or queued, content: {application/json: {schema: {type: object, required: [status], properties: {status: {type: string, enum: [started, queued]}}}}}}
+        "409": {$ref: "#/components/responses/Error"}
+  /api/metrics:
+    get:
+      tags: [council]
+      operationId: getMetrics
+      x-milestone: M5
+      summary: Accuracy of each automation of ours and each room agent, and the house score (D28; no model)
+      parameters: [{name: days, in: query, schema: {type: integer, minimum: 1, maximum: 30, default: 7}}]
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Metrics"}}}}
+        "502": {$ref: "#/components/responses/Error"}
+
   /api/chat:
     post:
       tags: [chat]
@@ -997,7 +1027,7 @@ components:
             type: object
             required: [id, rule, active, last]
             properties:
-              id: {type: string, enum: [house_mode, person, daily_review, escalation]}
+              id: {type: string, enum: [house_mode, person, daily_review, escalation, manager_sweep]}
               rule: {type: string}
               active: {type: boolean, description: "false: the rule is switched off (auto_house_mode off, no daily_review_at)"}
               last: {type: [number, "null"], description: epoch seconds of the last time it fired}
@@ -1008,6 +1038,77 @@ components:
             running: {type: boolean}
             last: {type: [object, "null"]}
         last_scan: {type: [object, "null"]}
+    ManagerStatus:
+      type: object
+      required: [enabled, mode, anomalies, owned, weak]
+      properties:
+        enabled: {type: boolean}
+        mode: {type: string, enum: [shadow, live]}
+        sweep_min: {type: integer}
+        max_wakes_per_hour: {type: integer}
+        wakes_last_hour: {type: integer}
+        running: {type: boolean}
+        last_run: {type: [number, "null"]}
+        anomalies: {type: array, items: {type: string}, description: "what the deterministic prefilter would wake the model for"}
+        owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them)"}
+        weak: {type: array, items: {type: object, properties: {ha_id: {type: string}, title: {type: [string, "null"]}}}}
+        checked: {type: string}
+    Rate:
+      type: object
+      description: "A proportion with its 95 % Wilson interval; value/low/high are null below min_n outcomes"
+      required: [value, low, high, n]
+      properties:
+        value: {type: [number, "null"]}
+        low: {type: [number, "null"]}
+        high: {type: [number, "null"]}
+        n: {type: integer}
+    Metrics:
+      type: object
+      required: [days, min_n, automations, agents, program]
+      properties:
+        days: {type: integer}
+        min_n: {type: integer}
+        undo_window_s: {type: number}
+        automations:
+          type: array
+          items:
+            type: object
+            required: [ha_id, kept, undone, unobserved, missed, precision, coverage, f1]
+            properties:
+              ha_id: {type: string}
+              title: {type: [string, "null"]}
+              version: {type: [integer, "null"]}
+              kept: {type: integer}
+              undone: {type: integer}
+              unobserved: {type: integer}
+              missed: {type: integer}
+              precision: {$ref: "#/components/schemas/Rate"}
+              coverage: {$ref: "#/components/schemas/Rate"}
+              f1: {type: [number, "null"]}
+              examples: {type: array, items: {type: string}}
+        agents:
+          type: array
+          items:
+            type: object
+            required: [agent_id, kept, undone, precision]
+            properties:
+              agent_id: {type: string}
+              kept: {type: integer}
+              undone: {type: integer}
+              unobserved: {type: integer}
+              precision: {$ref: "#/components/schemas/Rate"}
+              examples: {type: array, items: {type: string}}
+        program:
+          type: object
+          required: [precision, coverage, score, score_low, house_share, counts]
+          properties:
+            precision: {$ref: "#/components/schemas/Rate"}
+            coverage: {$ref: "#/components/schemas/Rate"}
+            score: {type: [number, "null"], description: "F1 of the pooled precision and coverage"}
+            score_low: {type: [number, "null"], description: "F1 of the two Wilson lower bounds (conservative)"}
+            house_share: {$ref: "#/components/schemas/Rate"}
+            counts: {type: object, additionalProperties: {type: integer}}
+        history: {type: array, items: {type: object}, description: "one row per daily review, last 90 days"}
     Finding:
       type: object
       required: [id, kind, status, title, request, data, created, updated]

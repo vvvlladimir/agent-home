@@ -124,3 +124,21 @@ def test_daily_review_reports_to_the_inbox(app, llm_sim):
     assert review["summary"].startswith("Calm day")
     inbox = httpx.get(f"{base}/api/inbox").json()
     assert any(i["agent_id"] == "orchestrator" and "Daily review" in i["summary"] for i in inbox)
+
+
+def test_manager_and_metrics_endpoints_follow_the_contract(app):
+    base = app.base
+    status = httpx.get(f"{base}/api/manager").json()
+    validate(status, "/api/manager")
+    assert status["enabled"] is False and status["mode"] == "shadow"
+    assert httpx.put(f"{base}/api/settings", json={"manager_enabled": True, "manager_sweep_min": 0}).status_code == 200
+    assert httpx.get(f"{base}/api/manager").json()["enabled"] is True
+    woken = httpx.post(f"{base}/api/manager/wake", json={"reason": "tester"})
+    assert woken.status_code == 202 and woken.json()["status"] in ("started", "queued")
+    wait_for(lambda: any("manual: tester" in (r.get("wake_reason") or "")
+                         for r in httpx.get(f"{base}/api/runs", params={"agent": "orchestrator"}).json()), 20)  # fmt: skip
+    metrics = httpx.get(f"{base}/api/metrics", params={"days": 3}).json()
+    validate(metrics, "/api/metrics")
+    assert metrics["days"] == 3 and metrics["program"]["score"] is None  # nothing deployed yet
+    assert httpx.put(f"{base}/api/kill-switch", json={"engaged": True}).status_code == 200
+    assert httpx.post(f"{base}/api/manager/wake", json={}).status_code == 409

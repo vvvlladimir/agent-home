@@ -283,6 +283,21 @@ Everything else in the panel is tested in CI. These paths need your network or y
 
 Note anything odd in `owner-reports/sim-panel.md`.
 
+## AI testers on the polygon (about 1 hour, costs API tokens)
+
+Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_COMPATIBLE_API_KEY`
+(DeepInfra, room agents and coordinator). Details: `docs/POLYGON.md`.
+
+1. `python -m sim.qa run --roles newcomer migrator fussy_tenant -- --orchestrator openai
+   --orchestrator-model gpt-6.1-terra --room-llm compatible --room-model Qwen/Qwen3.5-4B
+   --compatible-url https://api.deepinfra.com/v1/openai --no-pace --backfill-days 14`.
+   Expected: three URLs, then `{"out": ...}` when the testers finish.
+2. `python -m sim.qa coordinate <out>`, then `python -m sim.qa verify <out>`.
+   Expected: `<out>/backlog.md` with `confirmed` items first.
+3. Check the OpenAI spend for the run in the add-on's Requests tab and on the DeepInfra dashboard.
+4. Commit `backlog.md` to `owner-reports/qa/<date>.md`.
+   `[UNVERIFIED-ON-HW]` the same roles with `--room-llm jetson --jetson-host <ip>` and one role only.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.

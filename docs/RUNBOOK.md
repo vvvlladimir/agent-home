@@ -150,6 +150,8 @@ touches a real backend.
 
 ### Polygon: headless runs with checks
 
+AI testers that use the add-on like an owner, and the accuracy metrics: `docs/POLYGON.md`.
+
 `make polygon` (or `python -m sim.polygon run --scenario all`) boots the same stack without a
 browser, on free ports and in its own data dir under `.agent-logs/polygon/<stamp>/`. For every
 scenario it builds a fresh house and add-on, seeds the agents from `sim/polygon.yaml`, plays the

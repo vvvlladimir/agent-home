@@ -110,3 +110,35 @@ async def dismiss_finding(finding_id: str, request: Request):
     if ctx.insights.get(finding_id) is None:
         return _error("not_found", f"no finding {finding_id!r}")
     return ctx.insights.set_status(finding_id, "dismissed")
+
+
+# --- D27 house manager, D28 accuracy metrics --------------------------------------------------
+@router.get("/manager")
+async def get_manager(request: Request):
+    return request.app.state.ctx.manager.status()
+
+
+@router.post("/manager/wake")
+async def wake_manager(request: Request):
+    """Wake the house manager now (owner or tester). Works with manager_enabled off too, but then
+    it may only assign tasks, propose and report: the entities it owns join its scope only when on."""
+    ctx = request.app.state.ctx
+    try:
+        body = await request.json()
+    except ValueError:
+        body = {}
+    reason = str((body or {}).get("reason") or "woken by hand").strip()[:500] or "woken by hand"
+    result = ctx.manager.request(f"manual: {reason}", force=True)
+    if result["status"] == "refused":
+        code = "kill_switch" if "kill" in result["detail"] else "conflict"
+        return _error(code, result["detail"])
+    return JSONResponse(result, status_code=202)
+
+
+@router.get("/metrics")
+async def get_metrics(request: Request, days: int = 7):
+    ctx = request.app.state.ctx
+    try:
+        return await ctx.metrics.compute(max(1, min(int(days), 30)))
+    except HAError as err:
+        return _error("ha_error", f"the logbook is unavailable: {err}"[:300])
