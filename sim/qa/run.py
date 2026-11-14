@@ -332,9 +332,15 @@ def cmd_coordinate(args: argparse.Namespace) -> int:
 
 
 def verify_prompt(entry: dict, meta: dict, work: Path) -> str:
+    restored = (
+        "This polygon was restored from the tester's snapshot, taken right before the finding: its "
+        "proposals, runs, inbox, history and house time are as the tester saw them, and the models "
+        "answer from a recording first. Check the state first, then replay only the last step(s). "
+        if meta.get("restored_from") else ""
+    )  # fmt: skip
     return (
         f"Agent House add-on API: {meta['urls']['app']} ; house panel: {meta['urls']['panel']} "
-        "(writes need header X-Sim-Panel: 1). Replay these steps with curl, adapting ids and "
+        f"(writes need header X-Sim-Panel: 1). {restored}Replay these steps with curl, adapting ids and "
         f"ports to this instance: {json.dumps(entry['steps'])}. Expected: {entry['expected']}. "
         f"Reported: {entry['actual']}. Write {work}/verdict.json as "
         '{"reproduced": true|false, "evidence": "quoted response"} and nothing else.'
@@ -428,14 +434,34 @@ def cmd_verify_up(args: argparse.Namespace) -> int:
         if entry["status"] != "candidate":
             continue
         work = args.dir / "verify" / entry["id"]
-        proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon], detached=True)
+        snap = entry.get("snapshot")
+        restore = ["--restore", snap] if snap and Path(snap, "snapshot.json").exists() else []
+        proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon, *restore], detached=True)
         _remember(args.dir, proc)
-        for role in entry.get("reported_by") or []:
+        meta["restored_from"] = restore[1] if restore else None
+        for role in [] if restore else entry.get("reported_by") or []:  # a snapshot already has the seed
             meta.setdefault("seeded", []).extend(seed(meta, roles.get(role, {})))
-        (work / "prompt.md").write_text(verify_prompt(entry, meta, work))
+        (work / "prompt.md").write_text(verify_prompt(_on_this_polygon(entry, args.dir, meta), meta, work))
         listing[entry["id"]] = {"prompt": str(work / "prompt.md"), "severity": entry["severity"]}
     print(json.dumps(listing, indent=2))
     return 0
+
+
+def _on_this_polygon(entry: dict, out: Path, meta: dict) -> dict:
+    """The tester's steps with the tester's polygon URLs swapped for this one's (ports differ)."""
+    steps = json.dumps(entry.get("steps") or [])
+    for role in entry.get("reported_by") or []:
+        f = out / role / "polygon.json"
+        if not f.exists():
+            continue
+        old = json.loads(f.read_text())["urls"]
+        for name in ("app", "panel"):
+            steps = steps.replace(old[name].rstrip("/"), meta["urls"][name].rstrip("/"))
+        for name, port in (old.get("ports") or {}).items():
+            new = (meta["urls"].get("ports") or {}).get(name)
+            if new:
+                steps = steps.replace(f"127.0.0.1:{port}", f"127.0.0.1:{new}")
+    return {**entry, "steps": json.loads(steps)}
 
 
 def cmd_verify_collect(args: argparse.Namespace) -> int:

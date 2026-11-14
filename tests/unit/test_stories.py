@@ -56,3 +56,17 @@ def test_expectations_read_the_trace():
     late = {**story, "expect": [{"proposal_for": "light.kitchen_counter", "by_day": 2}]}
     assert then(late, result, {}, has_model=True)[0]["ok"] is False
     assert then(story, result, {}, has_model=False)[0]["ok"] is None, "n/a without a model"
+
+
+def test_mentions_is_exact_and_a_night_habit_from_ghost_motion_is_caught():
+    from sim.stories import _built_on_lies, mentions
+
+    assert mentions({"summary": "light.kitchen is on"}, "light.kitchen")
+    assert not mentions({"summary": "light.kitchen_counter is on"}, "light.kitchen")
+    night = datetime(2026, 10, 6, 3, 10, tzinfo=UTC).timestamp()
+    events = [{"ts": night + i * 60, "entity_id": "binary_sensor.hall_motion", "tag": "fault:ghost_motion"}
+              for i in range(3)]  # fmt: skip
+    ghost = "triggers:\n  - trigger: state\n    entity_id: binary_sensor.hall_motion\nconditions:\n" \
+            "  - condition: time\n    after: '03:00'\n    before: '04:00'\n"  # fmt: skip
+    hits, judged = _built_on_lies([{"id": "p", "yaml": ghost}], events, "fault:ghost_motion")
+    assert hits == ["p"] and judged == 1

@@ -37,6 +37,10 @@ step, the way a real person would, and see how the add-on copes.
    (say what and when); `remove` = it does something that only adds noise or work for the owner.
 4. Before you write a finding, repeat its steps once. Write only what happened twice, and set
    `"reproduced_by_me": true`. Quote the exact response, do not paraphrase it.
+5. Right before you write each finding, take a snapshot of the house:
+   `curl -s -X POST {panel}/api/snapshot -H 'X-Sim-Panel: 1' -H 'content-type: application/json'
+   -d '{{"label": "<your title>"}}'` and put the returned `snapshot` path into the finding. The
+   verifier boots a copy of the house from it, so state that took long to build is not lost.
 
 ## Output
 Write `{out}/findings.json`, a JSON array. Each item:
@@ -51,6 +55,7 @@ Write `{out}/findings.json`, a JSON array. Each item:
   "actual": "what happened, with the quoted response",
   "endpoint": "/api/... (the first one that misbehaved)",
   "run_id": "r_... or null",
+  "snapshot": "/path/from/api/snapshot or null",
   "reproduced_by_me": true
 }}
 ```

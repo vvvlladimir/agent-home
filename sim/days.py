@@ -113,7 +113,15 @@ def first_midnight() -> object:
     return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def play_days(stack, events: list[Event], start: float, days: int, progress=None, on_checkpoint=None) -> dict:
+def play_days(
+    stack,
+    events: list[Event],
+    start: float,
+    days: int,
+    progress=None,
+    on_checkpoint=None,
+    snapshots: bool = True,
+) -> dict:
     """Play `events` (sorted) from house time `start` (a local midnight) for `days` days, and on to
     the next morning so the last day's review runs; return what happened, as `polygon.check` reads.
     `on_checkpoint(ts)` runs after each settled checkpoint: the simulated owner (sim/stories.py)."""
@@ -131,6 +139,7 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
     next_check = start
     until = start + days * 86400 + 6 * 3600  # the morning after: the last day's review at 04:30
     last_day = None
+    taken: list[str] = []
     feed: dict[int, dict] = {}  # the add-on keeps the last 1000 feed rows; a month has more
 
     def keep_feed() -> None:
@@ -148,6 +157,8 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
                 drv.settle()
             if next_check % 3600 == 0:
                 keep_feed()
+            if snapshots and _is_midnight(next_check):  # a day to restore from (sim/snapshot.py)
+                taken.append(stack.sim.take_snapshot(f"day {clock.local().date()}")["snapshot"])
             next_check += step
         clock.travel_to(ev.ts)
         if not drv.apply(ev):
@@ -190,6 +201,7 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
         "skipped_missing_entity": skipped,
         "unseen_by_addon": unseen,
         "stuck": stuck,
+        "snapshots": taken,
         "timed_out": bool(stuck),
         "runs": runs,
         "actions": actions,
@@ -205,6 +217,11 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
         "llm_requests_total": gw.total - seq0,
         "entities": stack.on_ha(lambda: sorted(ha.states)),
     }
+
+
+def _is_midnight(ts: float) -> bool:
+    t = clock.local().fromtimestamp(ts).astimezone()
+    return t.hour == 0 and t.minute == 0
 
 
 def _all_runs(ctx, t0: float) -> list[dict]:

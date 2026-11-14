@@ -32,7 +32,8 @@ duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` 
 - `PY -m sim.qa down <out>` (the testers' polygons).
 
 ## 4. Verify
-- `PY -m sim.qa verify-up <out>` → a fresh polygon and `prompt` per candidate. More than 8
+- `PY -m sim.qa verify-up <out>` → a fresh polygon and `prompt` per candidate. A finding with a `snapshot` gets a polygon
+  restored from it (D33); the prompt says so. More than 8
   candidates: verify `critical` and `major` first, the rest only if the owner wants.
 - Spawn one `qa-verifier` per candidate in the background, prompt `Your task: <prompt path>`.
 - Then `PY -m sim.qa verify-collect <out>` and `PY -m sim.qa down <out>`.

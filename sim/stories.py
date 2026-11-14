@@ -18,6 +18,7 @@ import argparse
 import fnmatch
 import json
 import random
+import re
 import sys
 from collections import Counter, defaultdict
 from dataclasses import replace
@@ -113,7 +114,7 @@ class Owner:
             text = p.get("yaml") or ""
             named = invariants.entities_in(text)
             targets = {e for e in named if invariants._acted_on(text, e)}
-            if targets & self.habits and named <= self.known:
+            if targets and targets <= self.habits and named <= self.known:
                 r = self.app.send("POST", f"/api/proposals/{p['id']}/approve", {})
                 self.decided[p["id"]] = (
                     "approved" if r.status_code == 200 else f"approve failed {r.status_code}"
@@ -183,16 +184,13 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                 e
                 for e in events
                 if (exp.get("after_tag") and e["tag"] == exp["after_tag"] and e["state"] != "off")
-                or (exp.get("after_note") and e["note"] == exp["after_note"])
+                or (exp.get("after_note") and e["note"] == exp["after_note"] and e["state"] != "off")
             ]
             anchors = _first_per_hour(anchors)
             got = [
                 a
                 for a in anchors
-                if any(
-                    eid in (r.get("summary") or "") and 0 <= r["ts"] - a["ts"] <= 60 * exp["within_min"]
-                    for r in reports
-                )
+                if any(mentions(r, eid) and 0 <= r["ts"] - a["ts"] <= 60 * exp["within_min"] for r in reports)
             ]
             need = exp.get("share", 1.0)
             ok = bool(anchors) and len(got) >= need * len(anchors)
@@ -205,10 +203,8 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             )
         elif kind == "max_alarms_about":
             eid = name(exp["max_alarms_about"])
-            n = sum(1 for r in reports if _severity(r) == "alarm" and eid in (r.get("summary") or ""))
-            items = [
-                i for i in result["inbox"] if i.get("severity") == "alarm" and eid in (i.get("summary") or "")
-            ]
+            n = sum(1 for r in reports if _severity(r) == "alarm" and mentions(r, eid))
+            items = [i for i in result["inbox"] if i.get("severity") == "alarm" and mentions(i, eid)]
             add(
                 exp,
                 len(items) <= exp["count"],
@@ -220,7 +216,7 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                 for r in reports:
                     if (
                         _severity(r) == "alarm"
-                        and e["entity_id"] in (r.get("summary") or "")
+                        and mentions(r, e["entity_id"])
                         and 0 <= r["ts"] - e["ts"] <= 60 * exp["within_min"]
                     ):
                         bad.append(hm(r["ts"]))
@@ -230,14 +226,11 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                 f"{len(bad)} alarm(s) after {exp['no_alarm_after_tag']}" + (f" at {bad[:5]}" if bad else ""),
             )
         elif kind == "no_proposal_from_tag":
-            lied = {e["entity_id"] for e in events if e["tag"] == exp["no_proposal_from_tag"]}
-            told = {e["entity_id"] for e in events if not e["tag"].startswith("fault:")}
-            only_lies = lied - told
-            hits = [p["id"] for p in proposals if invariants.entities_in(p.get("yaml") or "") & only_lies]
+            hits, judged = _built_on_lies(proposals, events, exp["no_proposal_from_tag"])
             add(
                 exp,
-                not hits if only_lies else None,
-                f"{len(hits)} proposal(s) built on entities that only lied",
+                not hits if judged else None,
+                f"{len(hits)} of {judged} proposal(s) on a lying sensor, timed in hours when it mostly lied",
             )
         elif kind == "max_reports_per_day":
             per_day = Counter(
@@ -257,6 +250,35 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
         else:
             add(exp, False, f"unknown expectation {kind}")
     return out
+
+
+def mentions(row: dict, eid: str | None) -> bool:
+    """The report names exactly `eid` (not a longer id that starts with it)."""
+    return (
+        bool(eid) and re.search(rf"(?<![\w.]){re.escape(eid)}(?![\w])", row.get("summary") or "") is not None
+    )
+
+
+def _built_on_lies(proposals: list[dict], events: list[dict], tag: str) -> tuple[list[str], int]:
+    """Drafts triggered by a sensor that lied (`tag`), whose times fall in hours of the day when
+    most of that sensor's events were lies (ghost motion at night): a habit learnt from noise."""
+    lies, total = Counter(), Counter()
+    for e in events:
+        hour = datetime.fromtimestamp(e["ts"]).hour
+        total[(e["entity_id"], hour)] += 1
+        lies[(e["entity_id"], hour)] += e["tag"] == tag
+    liars = {eid for eid, _ in lies if lies[(eid, _)]}
+    hits, judged = [], 0
+    for p in proposals:
+        text = p.get("yaml") or ""
+        on = invariants.entities_in(text) & liars
+        hours = {int(h) for h in re.findall(r"\b([01]?\d|2[0-3]):[0-5]\d", text)}
+        if not on:
+            continue
+        judged += 1
+        if any(total[(e, h)] and lies[(e, h)] / total[(e, h)] >= 0.5 for e in on for h in hours):
+            hits.append(p["id"])
+    return hits, judged
 
 
 def _severity(row: dict) -> str:
@@ -407,11 +429,13 @@ def cmd_run(args) -> int:
                 print(f"  FAIL {c['name']}: {c['items'][:3]}", file=sys.stderr)
             total.update({k: v for k, v in (res.get("coverage") or {}).items()})
         judged = [r["ok"] for r in runs if r["ok"] is not None]
+        full = len(judged) == len(runs)  # pass^k only over k judged runs; a skipped run leaves it open
         report["stories"][sid] = {
             "about": stories[sid].get("about"),
             "k": args.k,
+            "skipped": len(runs) - len(judged),
             "pass@1": round(sum(judged) / len(judged), 2) if judged else None,
-            "pass^k": all(judged) if judged else None,
+            "pass^k": (all(judged) if full else (False if not all(judged) else None)) if judged else None,
             "runs": runs,
         }
     report["coverage"] = {f: total.get(f, 0) for f in FEATURES} | {

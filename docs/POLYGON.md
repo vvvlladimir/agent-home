@@ -166,6 +166,19 @@ reached (daily review, drafts, deploys, rejections, manager, alarms, gate drops,
 how often each kind of sensor lie woke an agent. Features no run reached are listed: that is the
 next story to write. With the fake models, expectations that need a draft are `n/a`.
 
+## 4d. Snapshots: verify by restoring, not by replaying
+
+A snapshot (`sim/snapshot.py`) is a folder with the add-on's data (SQLite copied with the backup
+API), the whole fake HA (states, history, logbook, registries, automations), the house time and the
+models' answers so far (`sim/cassette.py`: every gateway POST keyed by path and body with times,
+dates, epoch stamps and run ids blanked). `python -m sim.polygon serve --restore <folder>` boots a
+fresh polygon in exactly that state; the restored gateways answer from the recording first, in order,
+and only then ask the model. Snapshots are taken by `POST <panel>/api/snapshot {"label": ...}`
+(testers do it right before each finding; the path goes into the finding), and by `sim/days.py`
+at every house midnight. `sim.qa verify-up` boots the verifier's polygon from the finding's snapshot
+and rewrites the tester's URLs and ports to the fresh polygon, so a draft, eight undos or a review
+that took hours of house time is there when the verifier looks.
+
 ## 5. Metrics: one number for the whole program, done properly
 
 Source: the logbook changes HA records with their cause (`core/insights.py`). Every automated

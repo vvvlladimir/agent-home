@@ -354,11 +354,16 @@ def _start(
 ) -> tuple[Stack, App, dict]:
     provider = "anthropic" if args.orchestrator == "claude" else args.orchestrator
     env = {"AH_ORCHESTRATOR_PROVIDER": provider, "AH_LOG_LEVEL": "warning"}
-    stack = boot(Ports.pick(args.port_base), data_dir, cfg, rate=args.rate, speed=args.speed, env_extra=env)
+    restore = getattr(args, "restore", None)
+    stack = boot(Ports.pick(args.port_base), data_dir, cfg, rate=args.rate, speed=args.speed, env_extra=env,
+                 restore=restore)  # fmt: skip
     try:
         app = App(stack)
         wait_ready(app)
-        agents = seed_agents(app, spec.get("agents") or [], args.live, slow=cfg.room.backend == "claude")
+        agents = (  # a restored polygon keeps its own agents, settings and mode
+            [a["id"] for a in app.get("/api/agents")] if restore
+            else seed_agents(app, spec.get("agents") or [], args.live, slow=cfg.room.backend == "claude")
+        )  # fmt: skip
     except BaseException:
         stack.stop()
         raise
@@ -515,7 +520,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--out", type=Path, help="report path (default <out-dir>/report.json)")
     run.add_argument("--shared", action="store_true", help="one house for all scenarios (state carries over)")
     _common(run)
-    _common(sub.add_parser("serve", help="boot the polygon and keep it up; prints the URLs"))
+    serve = sub.add_parser("serve", help="boot the polygon and keep it up; prints the URLs")
+    serve.add_argument("--restore", type=Path, help="a snapshot folder (sim/snapshot.py) to boot from")
+    _common(serve)
     days = sub.add_parser("days", help="live N days of a household in house time, then check")
     days.add_argument("--days", type=int, default=7)
     days.add_argument("--seed", type=int, default=7)

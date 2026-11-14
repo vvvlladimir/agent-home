@@ -56,6 +56,8 @@ class Sim:
         self.ha, self.llm, self.jetson, self.cfg, self.gw = ha, llm, jetson, cfg, gateways
         self.app_url = app_url
         self.life: Life | None = None
+        self.cassette = None  # sim/cassette.py, set by sim/run.py
+        self.take_snapshot = None  # label -> dict, set by sim/run.py (sim/snapshot.py)
         self.built: house_gen.Built | None = None
         self.backfilled: dict = {}
 
@@ -345,6 +347,13 @@ def create_app(sim: Sim, port: int) -> FastAPI:
             raise HTTPException(404, f"no entity {entity_id}")
         await sim.on_ha(lambda: sim.ha.remove_state(entity_id))
         return {"removed": entity_id}
+
+    # -- snapshots (sim/snapshot.py): the whole polygon, to restore for a verifier
+    @app.post("/api/snapshot")
+    def snapshot(body: dict | None = None):
+        if sim.take_snapshot is None:
+            raise HTTPException(503, "snapshots need the polygon's stack (sim/run.py)")
+        return sim.take_snapshot(str((body or {}).get("label") or "snapshot")[:80])
 
     # -- scenarios
     @app.post("/api/scenario/{name}")

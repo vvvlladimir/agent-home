@@ -23,7 +23,18 @@ from typing import Any
 
 import uvicorn
 
-from sim import control, fake_anthropic, fake_ha, fake_ingress, fake_jetson, fake_llm, fake_openai, house_gen
+from sim import (
+    control,
+    fake_anthropic,
+    fake_ha,
+    fake_ingress,
+    fake_jetson,
+    fake_llm,
+    fake_openai,
+    house_gen,
+    snapshot,
+)
+from sim.cassette import Cassette
 from sim.gateways import Gateways
 from sim.life import Life
 from sim.server import ServerThread
@@ -135,9 +146,13 @@ def boot(
     speed: float = 1.0,
     serve_addon: bool = True,
     env_extra: dict[str, str] | None = None,
+    restore: Path | None = None,
 ) -> Stack:
-    """Start the fakes, the gateways, the panel and (unless `serve_addon` is off) the add-on."""
+    """Start the fakes, the gateways, the panel and (unless `serve_addon` is off) the add-on.
+    `restore`: a snapshot folder (sim/snapshot.py) to boot from instead of a fresh house."""
     sys.path.insert(0, str(ROOT / "agent_house"))
+    if restore is not None:
+        snapshot.prepare(restore, data_dir)
     ha = fake_ha.HAState.default()
     llm = fake_llm.LLMSim()
     jetson = fake_jetson.JetsonSim(llm)
@@ -157,10 +172,13 @@ def boot(
         }
         gw = Gateways(cfg, jetson, {k: s.url for k, s in fakes.items()})
         sim = control.Sim(ha, llm, jetson, cfg, gw, app_url=f"http://127.0.0.1:{ports.ingress}/")
+        sim.cassette = tape = Cassette()  # the models' answers, for snapshots (sim/cassette.py)
+        if restore is not None:
+            tape.load(restore / "cassette.json")
         start(fake_ha.create_app(ha), ports.ha)
-        start(gw.llm_app(), ports.llm)
-        start(gw.cloud_app("anthropic"), ports.anthropic)
-        start(gw.cloud_app("openai"), ports.openai)
+        start(tape.wrap(gw.llm_app()), ports.llm)
+        start(tape.wrap(gw.cloud_app("anthropic")), ports.anthropic)
+        start(tape.wrap(gw.cloud_app("openai")), ports.openai)
         start(gw.metrics_app(), ports.metrics)
         start(fake_ingress.create_app(f"http://127.0.0.1:{ports.addon}", INGRESS_TOKEN), ports.ingress)
         start(control.create_app(sim, ports.panel), ports.panel)
@@ -168,7 +186,9 @@ def boot(
         async def grow() -> dict:  # on the fake HA's loop, before the add-on connects
             sim.life = Life(ha)
             sim.life.rate, sim.life.speed = rate, speed
-            result = sim.rebuild(sim.spec(), cfg.backfill_days)
+            result = sim.rebuild(sim.spec(), 0 if restore is not None else cfg.backfill_days)
+            if restore is not None:
+                snapshot.restore_ha(ha, restore)
             sim.life.start()
             return result
 
@@ -176,6 +196,7 @@ def boot(
         house = asyncio.run_coroutine_threadsafe(grow(), ha.loop).result(timeout=60)
         env = {**addon_env(ports, data_dir), **(env_extra or {})}
         stack = Stack(ports, data_dir, cfg, sim, ha, llm, house, env, started)
+        sim.take_snapshot = lambda label: snapshot.take(stack, snapshot.next_folder(stack, label), label)
         if serve_addon:
             from app.config import load_settings  # noqa: PLC0415  (needs agent_house on the path)
             from app.main import create_app  # noqa: PLC0415
