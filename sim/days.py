@@ -113,9 +113,10 @@ def first_midnight() -> object:
     return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def play_days(stack, events: list[Event], start: float, days: int, progress=None) -> dict:
+def play_days(stack, events: list[Event], start: float, days: int, progress=None, on_checkpoint=None) -> dict:
     """Play `events` (sorted) from house time `start` (a local midnight) for `days` days, and on to
-    the next morning so the last day's review runs; return what happened, as `polygon.check` reads."""
+    the next morning so the last day's review runs; return what happened, as `polygon.check` reads.
+    `on_checkpoint(ts)` runs after each settled checkpoint: the simulated owner (sim/stories.py)."""
     drv = Driver(stack)
     ha = stack.ha
     t0 = clock.time()
@@ -143,6 +144,8 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
             drv.checkpoint()
             if not drv.settle():
                 stuck.append({"ts": next_check, "at": "checkpoint"})
+            if on_checkpoint is not None and on_checkpoint(next_check):
+                drv.settle()
             if next_check % 3600 == 0:
                 keep_feed()
             next_check += step
@@ -164,6 +167,8 @@ def play_days(stack, events: list[Event], start: float, days: int, progress=None
         drv.checkpoint()
         if not drv.settle():
             stuck.append({"ts": next_check, "at": "checkpoint"})
+        if on_checkpoint is not None and on_checkpoint(next_check):
+            drv.settle()
         next_check += step
     keep_feed()
     t1 = clock.time()

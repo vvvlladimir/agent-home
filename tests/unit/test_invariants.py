@@ -104,3 +104,28 @@ def test_the_daily_review_must_run_every_lived_day():
     assert by_name(check_trace(trace(runs=two, review_expected=True), "shadow"))["daily_review_every_day"][
         "ok"
     ]
+
+
+def test_prose_is_not_a_reference_and_reading_a_lock_is_not_acting_on_it():
+    notify = GOOD + "  - action: notify.mobile\n    data: {message: 'see light.foo and lock.front_door'}\n"
+    assert "light.foo" not in entities_in(notify)
+    p = {"id": "n", "status": "draft", "created": T0, "yaml": notify}
+    checks = by_name(check_trace(trace(proposals=[p]), "shadow"))
+    assert checks["proposals_known_entities"]["ok"] and checks["proposals_no_t3"]["ok"]
+
+
+def test_a_nearby_draft_does_not_excuse_an_action_awaiting_approval():
+    """Run 4 QA-007: the leak report said 'sent for owner approval' while drafts existed nearby."""
+    draft = {"id": "p1", "status": "draft", "created": T0 + 50, "yaml": GOOD}
+    leak = {"id": 1, "ts": T0 + 100, "summary": "Turning off the dishwasher was sent for owner approval."}
+    shadow = [{"id": "a1", "ts": T0 + 90, "run_id": "r1", "verdict": "shadow", "tier": "T1"}]
+    c = by_name(check_trace(trace(proposals=[draft], inbox=[leak], actions=shadow), "shadow"))
+    assert not c["inbox_no_phantom_approval"]["ok"]
+    about = {**leak, "summary": "A new automation draft waits for your approval."}
+    assert by_name(check_trace(trace(proposals=[draft], inbox=[about]), "shadow"))[
+        "inbox_no_phantom_approval"
+    ]["ok"]
+    claim = {"id": 2, "ts": T0 + 100, "run_id": "r1", "summary": "The dishwasher has been switched off."}
+    assert not by_name(check_trace(trace(inbox=[claim], actions=shadow), "shadow"))["inbox_no_shadow_claims"][
+        "ok"
+    ]
