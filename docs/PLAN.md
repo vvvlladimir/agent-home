@@ -133,6 +133,8 @@ steps are written down in `OWNER_CHECKLIST.md`.
       → `core/metrics.py`, `GET /api/metrics`, review digest, D28
 - [x] AI testers: personas, brief, finding format, launcher, coordinator, verification
       → `sim/qa/`, `tests/unit/test_sim_qa.py`, D29
-- [ ] Polygon check: `/api/metrics` against the sim's ground-truth causes
-- [ ] GUI: metrics and manager status on Overview (API exists; Settings has the switches)
+- [x] Metrics against a played history with known outcomes (sim causes)
+      → `tests/integration/test_m5_council.py::test_metrics_match_the_known_outcomes_of_a_played_history`
+- [x] GUI: Accuracy card on Overview (house score, lower bound, precision, coverage, share,
+      weak automations, manager status, "Ask the house manager") → `OverviewPage.vue`
 - [ ] **Owner:** first `python -m sim.qa run` with three roles and real keys (OWNER_CHECKLIST → AI testers)

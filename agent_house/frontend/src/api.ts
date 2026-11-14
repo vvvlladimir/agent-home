@@ -5,6 +5,8 @@ import type { components } from './api-types';
 type S = components['schemas'];
 export type Status = S['Status'];
 export type Area = S['Area'];
+export type ManagerStatus = S['ManagerStatus'];
+export type Metrics = S['Metrics'];
 export type Entity = S['Entity'];
 export type FeedItem = S['FeedItem'];
 // OpenAPI only points at contracts/schemas/agent_config.schema.json for this one, so it is written out here.

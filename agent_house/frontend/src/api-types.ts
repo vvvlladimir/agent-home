@@ -726,6 +726,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/manager": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The house manager (D27) - settings, wakes in the last hour, what the prefilter sees now */
+        get: operations["getManager"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/manager/wake": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Wake the house manager now (capped per hour; refused with the kill switch engaged) */
+        post: operations["wakeManager"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accuracy of each automation of ours and each room agent, and the house score (D28; no model) */
+        get: operations["getMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chat": {
         parameters: {
             query?: never;
@@ -1185,7 +1236,7 @@ export interface components {
             /** @description The fixed rules that wake the orchestrator, with the last time each fired. */
             orchestrator_wakes: {
                 /** @enum {string} */
-                id: "house_mode" | "person" | "daily_review" | "escalation";
+                id: "house_mode" | "person" | "daily_review" | "escalation" | "manager_sweep";
                 rule: string;
                 /** @description false: the rule is switched off (auto_house_mode off, no daily_review_at) */
                 active: boolean;
@@ -1198,6 +1249,72 @@ export interface components {
                 last?: Record<string, never> | null;
             };
             last_scan?: Record<string, never> | null;
+        };
+        ManagerStatus: {
+            enabled: boolean;
+            /** @enum {string} */
+            mode: "shadow" | "live";
+            sweep_min?: number;
+            max_wakes_per_hour?: number;
+            wakes_last_hour?: number;
+            running?: boolean;
+            last_run?: number | null;
+            /** @description what the deterministic prefilter would wake the model for */
+            anomalies: string[];
+            /** @description entities the manager may actuate (no room agent owns them) */
+            owned: string[];
+            weak: {
+                ha_id?: string;
+                title?: string | null;
+            }[];
+            checked?: string;
+        };
+        /** @description A proportion with its 95 % Wilson interval; value/low/high are null below min_n outcomes */
+        Rate: {
+            value: number | null;
+            low: number | null;
+            high: number | null;
+            n: number;
+        };
+        Metrics: {
+            days: number;
+            min_n: number;
+            undo_window_s?: number;
+            automations: {
+                ha_id: string;
+                title?: string | null;
+                version?: number | null;
+                kept: number;
+                undone: number;
+                unobserved: number;
+                missed: number;
+                precision: components["schemas"]["Rate"];
+                coverage: components["schemas"]["Rate"];
+                f1: number | null;
+                examples?: string[];
+            }[];
+            agents: {
+                agent_id: string;
+                kept: number;
+                undone: number;
+                unobserved?: number;
+                precision: components["schemas"]["Rate"];
+                examples?: string[];
+            }[];
+            program: {
+                precision: components["schemas"]["Rate"];
+                coverage: components["schemas"]["Rate"];
+                /** @description F1 of the pooled precision and coverage */
+                score: number | null;
+                /** @description F1 of the two Wilson lower bounds (conservative) */
+                score_low: number | null;
+                house_share: components["schemas"]["Rate"];
+                counts: {
+                    [key: string]: number;
+                };
+            };
+            /** @description one row per daily review, last 90 days */
+            history?: Record<string, never>[];
         };
         Finding: {
             /** @description stable key, e.g. habit:<entity>:<state>:<trigger>:<state> */
@@ -2474,6 +2591,79 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
+        };
+    };
+    getManager: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagerStatus"];
+                };
+            };
+        };
+    };
+    wakeManager: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description started or queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "started" | "queued";
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+        };
+    };
+    getMetrics: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Metrics"];
+                };
+            };
+            502: components["responses"]["Error"];
         };
     };
     chat: {

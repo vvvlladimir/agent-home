@@ -1,7 +1,7 @@
 <!-- Overview: decisions waiting (T2 approvals, drafts, findings), rooms, and what the agents did today. -->
 <script setup lang="ts">
 import { computed, onActivated, ref } from 'vue';
-import { api, type Area, type FeedItem, type Finding, type Proposal } from '../api';
+import { api, type Area, type FeedItem, type Finding, type ManagerStatus, type Metrics, type Proposal } from '../api';
 import AskCard from '../components/AskCard.vue';
 import Chips from '../components/Chips.vue';
 import Icon from '../components/Icon.vue';
@@ -13,7 +13,24 @@ import { actionTip, actionTitle, agentName, areaName, callTitle, findingKind, VE
 import { go } from '../router';
 import { decide, killed, loadAgents, loadAsks, nav, state, t, toast, withBusy } from '../store';
 
-onActivated(() => { loadAsks(); loadAgents(); });
+onActivated(() => { loadAsks(); loadAgents(); loadHealth(); });
+
+// ── accuracy (D28) and the house manager (D27) ──
+const metrics = ref<Metrics | null>(null);
+const manager = ref<ManagerStatus | null>(null);
+async function loadHealth() {
+  try { manager.value = await api.get<ManagerStatus>('api/manager'); } catch { manager.value = null; }
+  try { metrics.value = await api.get<Metrics>('api/metrics'); } catch { metrics.value = null; }
+}
+const pct = (v?: number | null) => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
+// same rule as core/metrics.is_weak: a point estimate (with enough data) under 0.6
+const low = (v?: number | null) => v !== null && v !== undefined && v < 0.6;
+const weakAutos = computed(() => (metrics.value?.automations || []).filter((a) => low(a.precision.value) || low(a.coverage.value)).slice(0, 5));
+async function wakeManager() {
+  const done = await withBusy('manager', () => api.post('api/manager/wake', { reason: 'from the overview' }), true);
+  if (done !== undefined) toast(t('The house manager is looking.'));
+  loadHealth();
+}
 
 const newFindings = computed(() => state.findings.filter((f) => f.status === 'new' || f.status === 'failed'));
 const askCount = computed(() => state.pending.length + state.drafts.length + newFindings.value.length);
@@ -127,6 +144,23 @@ const shown = computed(() => today.value.filter((x) => !filter.value || group(x.
           </div>
           <p v-if="!state.areas.length" class="empty">{{ state.status?.ha?.connected ? t('Home Assistant has no areas yet.') : t('Waiting for Home Assistant…') }}</p>
         </div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="sec-h"><h2>{{ t('Accuracy') }} <Info :tip="t('Last 7 days. Kept = not undone by hand within 10 minutes; missed = you did by hand what one of our automations does. Score = F1 of precision and coverage; the lower bound is the cautious number. Empty until there are 5 outcomes.')" /></h2>
+        <button v-if="manager" class="btn quiet sm" :disabled="killed()" @click="wakeManager">{{ t('Ask the house manager') }}</button></div>
+      <div class="card stack">
+        <dl class="kv">
+          <dt>{{ t('House score') }}</dt><dd>{{ pct(metrics?.program.score) }} <span class="faint">({{ t('at least') }} {{ pct(metrics?.program.score_low) }})</span></dd>
+          <dt>{{ t('Precision') }}</dt><dd>{{ pct(metrics?.program.precision.value) }} <span class="faint">n={{ metrics?.program.precision.n ?? 0 }}</span></dd>
+          <dt>{{ t('Coverage') }}</dt><dd>{{ pct(metrics?.program.coverage.value) }} <span class="faint">n={{ metrics?.program.coverage.n ?? 0 }}</span></dd>
+          <dt>{{ t('Automated share') }}</dt><dd>{{ pct(metrics?.program.house_share.value) }}</dd>
+          <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span></dd>
+        </dl>
+        <ul v-if="weakAutos.length" class="feed">
+          <li v-for="a in weakAutos" :key="a.ha_id"><i class="mk warn" /><span class="msg">{{ a.title || a.ha_id }} · F1 {{ pct(a.f1) }} <span class="where">{{ a.examples?.[0] }}</span></span></li>
+        </ul>
       </div>
     </div>
 

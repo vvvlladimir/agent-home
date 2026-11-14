@@ -142,3 +142,29 @@ def test_manager_and_metrics_endpoints_follow_the_contract(app):
     assert metrics["days"] == 3 and metrics["program"]["score"] is None  # nothing deployed yet
     assert httpx.put(f"{base}/api/kill-switch", json={"engaged": True}).status_code == 200
     assert httpx.post(f"{base}/api/manager/wake", json={}).status_code == 409
+
+
+def test_metrics_match_the_known_outcomes_of_a_played_history(app, ha_state):
+    """Ground truth from the sim. Five rounds: ours switches the lamp on; in rounds 1 and 3 the owner
+    switches it off by hand (undone), otherwise ours switches it off again (both changes kept).
+    A run that changes nothing leaves no logbook entry and is no outcome."""
+    base = app.base
+    created = httpx.post(f"{base}/api/proposals", json={"yaml": OURS_YAML}).json()
+    assert httpx.post(f"{base}/api/proposals/{created['id']}/approve").json()["status"] == "deployed"
+    entity = "automation.bedroom_lamp_at_dusk"
+    wait_for(lambda: entity in ha_state.states)
+    time.sleep(0.05)
+    for index in range(5):
+        ha_state.run_automation(entity, [("light.bedroom_lamp", "on")])
+        if index in (1, 3):
+            ha_state.user_change("light.bedroom_lamp", "off")
+        else:
+            ha_state.run_automation(entity, [("light.bedroom_lamp", "off")])
+        time.sleep(0.01)
+    metrics = httpx.get(f"{base}/api/metrics", params={"days": 1}).json()
+    validate(metrics, "/api/metrics")
+    [item] = metrics["automations"]
+    assert (item["kept"], item["undone"], item["unobserved"]) == (6, 2, 0), item
+    assert item["precision"]["value"] == round(6 / 8, 3)
+    assert item["precision"]["low"] < item["precision"]["value"] < item["precision"]["high"]
+    assert metrics["program"]["counts"]["kept"] == 6 and metrics["program"]["counts"]["undone"] == 2

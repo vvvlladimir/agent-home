@@ -124,8 +124,14 @@ the user's override is the negative signal:
 Limits, stated so nobody over-reads the number: an undo after 10 min is not seen; a "missed"
 manual change may be a one-off the owner would not want automated (coverage is pessimistic);
 presence is only `person.*`; changes made by our automations before the current version are not
-counted. Validation: the polygon knows the true cause of every change, so a planned check compares
-`/api/metrics` with the sim's ground truth (PLAN, open item).
+counted; a run that changes nothing (the lamp was already on) leaves no logbook entry and is no
+outcome. Validation: an integration test plays a history with known causes through the simulated HA
+and checks `/api/metrics` returns exactly those counts (`test_metrics_match_the_known_outcomes_of_a_played_history`).
+
+House manager scope, checked: the kill switch helper is `protected` (never actuated by anyone);
+locks, alarms and covers stay under policy tiers (T3 never); `input_boolean` helpers without an
+area fall into its scope, in shadow until `orchestrator_mode: live`. Give such helpers an area or
+a deny in the policy if the manager must not touch them.
 
 ## 6. Sources
 
