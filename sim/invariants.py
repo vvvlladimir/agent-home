@@ -150,15 +150,19 @@ def check_trace(result: dict, mode: str, caps: dict[str, int] | None = None) -> 
 
     actions = result.get("actions") or []
     pending_times = [a["ts"] for a in actions if a.get("verdict") == "pending"]
-    draft_times = [p.get("created") or 0 for p in proposals if p.get("status") == "draft"]
+    # a draft made earlier still waits (the API keeps no decision time): any proposal that existed then
+    all_props = result.get("proposals") or []
     phantom = []
     for item in result.get("inbox") or []:
         if not APPROVAL.search(item.get("summary") or ""):
             continue
         ts = item.get("ts") or 0
         # a proposal waits as a draft; an action waits as a pending action: one does not excuse the other
-        behind = draft_times if ABOUT_PROPOSAL.search(item.get("summary") or "") else pending_times
-        if not any(abs(t - ts) <= 900 for t in behind):
+        if ABOUT_PROPOSAL.search(item.get("summary") or ""):
+            backed = any((p.get("created") or 0) <= ts + 900 for p in all_props)
+        else:
+            backed = any(abs(t - ts) <= 900 for t in pending_times)
+        if not backed:
             phantom.append(
                 {"at": _hm(ts), "inbox": item.get("id"), "summary": (item.get("summary") or "")[:160]}
             )

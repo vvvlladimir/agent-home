@@ -129,3 +129,14 @@ def test_a_nearby_draft_does_not_excuse_an_action_awaiting_approval():
     assert not by_name(check_trace(trace(inbox=[claim], actions=shadow), "shadow"))["inbox_no_shadow_claims"][
         "ok"
     ]
+
+
+def test_a_review_about_drafts_made_days_earlier_is_true():
+    old_draft = {"id": "p1", "status": "draft", "created": T0 - 3 * 86400, "yaml": GOOD}
+    review = {
+        "id": 3,
+        "ts": T0 + 3600,
+        "summary": "Daily review: four automations are drafted and wait for approval.",
+    }
+    c = by_name(check_trace(trace(proposals=[old_draft], inbox=[review]), "shadow"))
+    assert c["inbox_no_phantom_approval"]["ok"]

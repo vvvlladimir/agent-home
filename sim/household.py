@@ -201,9 +201,10 @@ def _door(add, t: datetime, rng: random.Random) -> None:
 
 
 def _trip(days: int, c: Chaos, rng: random.Random) -> set[int]:
-    if not c.trip_days or days < c.trip_days + 4:
+    last = days - c.trip_days - 1  # home again before the plan ends
+    if not c.trip_days or last < 1:
         return set()
-    first = rng.randint(days // 2, days - c.trip_days - 1)
+    first = rng.randint(min(days // 2, last), last)
     return set(range(first, first + c.trip_days))
 
 
