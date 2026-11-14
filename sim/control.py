@@ -292,6 +292,8 @@ def create_app(sim: Sim, port: int) -> FastAPI:
         def apply():
             if "rate" in data:
                 life.rate = max(0.0, min(float(data["rate"]), 50.0))
+            if "speed" in data:
+                life.speed = max(0.1, min(float(data["speed"]), 100.0))
             if "run_automations" in data:
                 life.run_automations = bool(data["run_automations"])
             if storm := data.get("storm"):

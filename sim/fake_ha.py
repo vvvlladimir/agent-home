@@ -206,7 +206,10 @@ class HAState:
             asyncio.run_coroutine_threadsafe(_close(), self.loop)
 
     # ---- services -------------------------------------------------------------------------
-    def call_service(self, domain: str, service: str, data: dict, context: dict | None = None) -> list[dict]:
+    def call_service(
+        self, domain: str, service: str, data: dict, context: dict | None = None, via: str = "sim"
+    ) -> list[dict]:
+        """`via="api"`: the add-on called it over REST or WebSocket; "sim": the house itself."""
         data = dict(data)
         ids = data.get("entity_id") or []
         ids = [ids] if isinstance(ids, str) else list(ids)
@@ -280,7 +283,9 @@ class HAState:
                 upd(eid, service.replace("alarm_", "armed_") if "arm_" in service else "disarmed")
         else:
             raise HAError(400, "Service not found.")
-        self.service_calls.append({"domain": domain, "service": service, "data": data, "ts": time.time()})
+        self.service_calls.append(
+            {"domain": domain, "service": service, "data": data, "ts": time.time(), "via": via}
+        )
         return changed
 
     # ---- automations ----------------------------------------------------------------------
@@ -584,7 +589,7 @@ def create_app(state: HAState | None = None) -> FastAPI:
     @r.post("/services/{domain}/{service}")
     async def service(domain: str, service: str, request: Request):
         body = await _json(request)
-        return ha.call_service(domain, service, body if isinstance(body, dict) else {})
+        return ha.call_service(domain, service, body if isinstance(body, dict) else {}, via="api")
 
     async def history(request: Request, timestamp: str | None = None):
         q = request.query_params
@@ -717,7 +722,7 @@ async def _handle(ha: HAState, conn: _Conn, msg: dict) -> None:
             "context_service": msg.get("service"),
         }
         try:
-            ha.call_service(msg.get("domain", ""), msg.get("service", ""), data, context=context)
+            ha.call_service(msg.get("domain", ""), msg.get("service", ""), data, context=context, via="api")
             ok({"context": context, "response": None})
         except HAError:
             fail("service_not_found", f"Service {msg.get('domain')}.{msg.get('service')} not found.")

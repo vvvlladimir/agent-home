@@ -143,5 +143,49 @@ The panel (`sim/control.py`, `sim/panel/`) has these tabs:
 
 The panel accepts only `127.0.0.1`/`localhost` and requires an `X-Sim-Panel` header on writes.
 Settings persist in `.data/sim/config.json`. `python -m sim.run --house large --backfill-days 30`
-overrides them for one run; `--quiet-house` starts with the flow paused. `make test` never touches
-a real backend.
+overrides them for one run; `--quiet-house` starts with the flow paused, `--speed 10` plays
+scenario waits ten times faster. `--port-base 0` puts all eight ports on free ones (or `N` on
+N..N+7) so several sims run side by side; give each its own `--data-dir`. `make test` never
+touches a real backend.
+
+### Polygon: headless runs with checks
+
+`make polygon` (or `python -m sim.polygon run --scenario all`) boots the same stack without a
+browser, on free ports and in its own data dir under `.agent-logs/polygon/<stamp>/`. For every
+scenario it builds a fresh house and add-on, seeds the agents from `sim/polygon.yaml`, plays the
+scenario (×10 by default), waits until the runs settle and checks:
+
+| Check | Fails when |
+|---|---|
+| `shadow_no_service_calls`, `shadow_no_executed_actions` | in shadow, the add-on called an HA service or executed an action |
+| `calls_match_actions` (`--live`) | HA saw more service calls than there are executed actions |
+| `t3_never_actuated` | a T3 action was executed or approved |
+| `owner_automations_untouched` | an automation without the `agent_house_` prefix was written, or one of the owner's changed |
+| `known_entities_only` | an action names an entity that does not exist |
+| `runs_without_errors`, `llm_requests_ok` | a run ended in error/timeout, a model call answered ≥ 400 |
+| `expected_wakes`, `no_unexpected_wakes` | the gate did (not) wake the agents listed for that scenario in the spec |
+
+`report.json` holds, per scenario, the full run traces, actions, feed, inbox, the service calls
+and config writes HA received, and the gateway request log. Exit code 0 = all checks passed,
+1 = a check failed, 2 = setup failed (bad spec, missing key, backend unreachable).
+`python -m sim.polygon serve` boots one polygon and keeps it up, printing its URLs as JSON: a
+testing agent can drive the add-on API through `urls.app` and the house through the panel API
+(`urls.panel`, writes need `X-Sim-Panel: 1`). `--shared` plays all scenarios in one house, so
+cooldowns and wake caps carry over.
+
+Model backends are the fakes unless a flag says otherwise; the panel's saved backend choice is
+ignored, so a forgotten `real` cannot cost money. Real models go through the same gateways:
+
+```
+export OPENAI_API_KEY=… ANTHROPIC_API_KEY=…      # or save them in the sim panel once
+python -m sim.polygon run --scenario all --room-llm openai --orchestrator anthropic
+python -m sim.polygon run --scenario arrive_home --room-llm jetson --jetson-host 192.168.178.40
+python -m sim.polygon run --scenario all --room-llm compatible --room-model Qwen/Qwen3.5-4B \
+    --compatible-url https://api.deepinfra.com/v1/openai   # key: AH_SIM_COMPATIBLE_API_KEY
+```
+
+Each real backend is checked with a free call before the house boots. Cloud room models are paced
+to the Jetson's speed unless `--no-pace`; a full run is then minutes, not seconds. Pacing on is
+the honest setting for "would this work on the Jetson". The fake room model answers by rule
+(motion + a light in the prompt → switch it on), so with the fakes the polygon tests the code
+(gate, policy, shadow, traces), and with a real model it also tests the behaviour.

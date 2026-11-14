@@ -118,4 +118,8 @@ steps are written down in `OWNER_CHECKLIST.md`.
       with Jetson pacing and context limit; orchestrator Claude and OpenAI fake or real; keys only in
       the sim → `sim/gateways.py`, `sim/sim_config.py`, D26
 - [x] Sim panel on :8090 (no build, localhost only) → `sim/control.py`, `sim/panel/`, RUNBOOK → Simulator
+- [x] Polygon: headless scenario runs on free ports with a fresh house per scenario, scenario
+      speed-up, invariant checks, JSON report and exit code; real backends by flag with a preflight
+      → `sim/polygon.py`, `sim/polygon.yaml`, `tests/integration/test_polygon.py`, RUNBOOK → Polygon
 - [ ] **Owner:** point the panel at the real Jetson and at the cloud APIs once (OWNER_CHECKLIST → Sim panel)
+- [ ] **Owner:** one `make polygon ARGS="--room-llm openai"` (or `jetson`) run with a real key

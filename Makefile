@@ -1,4 +1,4 @@
-.PHONY: help install lint contracts test test-realha sim addon-lint shellcheck analyze-report gui gui-check ci
+.PHONY: help install lint contracts test test-realha sim polygon addon-lint shellcheck analyze-report gui gui-check ci
 VENV ?= .venv
 PY ?= $(VENV)/bin/python
 PORT ?= 8099
@@ -26,6 +26,9 @@ test-realha: ## opt-in: test the HA client against a real headless Home Assistan
 
 sim: ## the app in a simulated home (:8100) + the sim panel (:8090) to steer the house and the model backends
 	$(PY) -m sim.run --port $(PORT)
+
+polygon: ## headless scenario runs with invariant checks; ARGS="--room-llm openai" for a real model
+	$(PY) -m sim.polygon run --scenario $(or $(SCENARIO),all) $(ARGS)
 
 addon-lint: ## static checks of the add-on packaging (CI also runs the app linter + hadolint)
 	$(PY) tools/addon_lint.py agent_house

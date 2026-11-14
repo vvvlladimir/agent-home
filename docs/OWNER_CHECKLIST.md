@@ -274,6 +274,13 @@ Everything else in the panel is tested in CI. These paths need your network or y
    field if it is not. `[UNVERIFIED-ON-HW]` the model id and the provider's tool calling for this
    model.
 
+5. Polygon with a real model (costs cents with a cloud key): `export OPENAI_API_KEY=…`, then
+   `make polygon ARGS="--room-llm openai"` (or `--room-llm jetson --jetson-host <ip>`). Expected:
+   `{"ok": true, …}`, and in `report.json` the `llm_requests` rows show the real backend. A failing
+   `expected_wakes` / `no_unexpected_wakes` is a spec or gate issue. A failing safety check
+   (`shadow_*`, `t3_*`, `owner_*`) is a bug: report it with the report file.
+   `[UNVERIFIED-ON-HW]` real-model runs fitting the per-run timeout when paced to Jetson speed.
+
 Note anything odd in `owner-reports/sim-panel.md`.
 
 ## Unverified facts to watch for (from RESEARCH.md)

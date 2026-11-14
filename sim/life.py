@@ -55,6 +55,7 @@ class Life:
         self.ha = ha
         self.rng = random.Random(seed)
         self.rate = 1.0
+        self.speed = 1.0  # scenario waits are divided by this (the polygon runs them faster)
         self.storm_until = 0.0
         self.storm_factor = 1.0
         self.run_automations = True
@@ -99,6 +100,7 @@ class Life:
             "automation_runs": self.automation_runs,
             "run_automations": self.run_automations,
             "scenario": self.scenario_name,
+            "speed": self.speed,
         }
 
     def start(self) -> None:
@@ -371,12 +373,15 @@ class Life:
         try:
             for st in steps:
                 if st.get("wait"):
-                    await asyncio.sleep(float(st["wait"]))
+                    await asyncio.sleep(float(st["wait"]) / max(self.speed, 0.01))
                     continue
                 self.apply(st)
         finally:
             if self.scenario_name == name:
                 self.scenario_name = None
+
+    def scenario_running(self) -> bool:
+        return bool(self._scenario and not self._scenario.done())
 
     def apply(self, st: dict) -> None:
         """One step: {"entity": .., "state": .., "cause": user|physical|automation, "attributes": {..}},
