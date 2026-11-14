@@ -29,7 +29,9 @@ class ServerThread:
         sock.bind((self.host, self.port))
         sock.listen(128)
         self.port = sock.getsockname()[1]
-        cfg = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="warning")
+        cfg = uvicorn.Config(
+            self.app, host=self.host, port=self.port, log_level="warning", timeout_graceful_shutdown=2
+        )
         self._server = uvicorn.Server(cfg)
         self._thread = threading.Thread(target=self._server.run, kwargs={"sockets": [sock]}, daemon=True)
         self._thread.start()

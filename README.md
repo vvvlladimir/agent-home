@@ -60,8 +60,12 @@ make ci
 make sim
 ```
 
-`make sim` starts a fake Home Assistant, fake llama-server, fake Anthropic API and fake Jetson
-metrics, then the app behind a fake ingress proxy, and prints the URL to open.
+`make sim` starts the app inside a simulated home: a fake Home Assistant with a realistic, messy
+house (Zigbee2MQTT, router trackers, junk entities, 14 days of history), and fake llama-server,
+Claude, OpenAI and Jetson metrics. Open the add-on at `http://127.0.0.1:8100/`. The **sim panel** at
+`http://127.0.0.1:8090/` controls the house size, the event flow, scenarios and faults. It also
+switches the model ports to a real Jetson by IP or to the real OpenAI and Claude APIs
+([RUNBOOK → Simulator](docs/RUNBOOK.md#simulator)).
 
 | Path | What |
 |---|---|

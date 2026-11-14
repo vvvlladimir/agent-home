@@ -107,3 +107,15 @@ steps are written down in `OWNER_CHECKLIST.md`.
       → `Council.status().orchestrator_wakes`, `Orchestrator.providers(task)`, D21, D23
 - [x] RUNBOOK, README screenshots, `v0.1.0` → `docs/RUNBOOK.md`, `docs/img/v010-*.png`, tag `v0.1.0`
 - [ ] **Owner:** council, daily review and feedback on the real HA (OWNER_CHECKLIST M5 council, v0.1.0)
+
+## Sim panel — a home to test against without hardware
+
+- [x] House generator: Zigbee2MQTT + router + HA housekeeping + junk, presets, deterministic seed,
+      rebuild like an integration reload → `sim/house_gen.py`
+- [x] Life: streaming sensors, rate / pause / storm, the owner's state-trigger automations,
+      backfilled history and logbook, scenarios → `sim/life.py`, `sim/scenarios.py`
+- [x] Model gateways: room agents on fake / real Jetson by IP / OpenAI-compatible / OpenAI / Claude
+      with Jetson pacing and context limit; orchestrator Claude and OpenAI fake or real; keys only in
+      the sim → `sim/gateways.py`, `sim/sim_config.py`, D26
+- [x] Sim panel on :8090 (no build, localhost only) → `sim/control.py`, `sim/panel/`, RUNBOOK → Simulator
+- [ ] **Owner:** point the panel at the real Jetson and at the cloud APIs once (OWNER_CHECKLIST → Sim panel)

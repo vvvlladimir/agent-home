@@ -24,7 +24,7 @@ test: ## hermetic unit + integration tests (simulators in-process)
 test-realha: ## opt-in: test the HA client against a real headless Home Assistant Core
 	$(PY) -m pytest -m realha tests/integration
 
-sim: ## fake HA + fake LLM + fake Anthropic + fake Jetson metrics + the app behind a fake ingress
+sim: ## the app in a simulated home (:8100) + the sim panel (:8090) to steer the house and the model backends
 	$(PY) -m sim.run --port $(PORT)
 
 addon-lint: ## static checks of the add-on packaging (CI also runs the app linter + hadolint)

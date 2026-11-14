@@ -88,6 +88,10 @@ class HAState:
         self.logbook_rows: list[dict] = []  # what GET /api/logbook answers (M5 insights)
         self._origins: dict[str, dict] = {}  # context id → the logbook's context_* fields
         self._fail, self._fail_status = 0, 500
+        self.generated: set[str] = set()  # entities sim/house_gen.py added on top of the base house
+        self.latency = 0.0  # seconds added to every REST call (the sim panel's "slow HA")
+        self.quiet = False  # True while the sim backfills history: no events reach the app
+        self.listeners: list = []  # fn(entity_id, old, new), e.g. the sim's automation runner
         if self._populate_on_reset:
             self._populate()
 
@@ -130,6 +134,9 @@ class HAState:
             })  # fmt: skip
         self.states[entity_id] = new
         self.fire_event("state_changed", {"entity_id": entity_id, "old_state": old, "new_state": new})
+        if not self.quiet:
+            for listener in list(self.listeners):
+                listener(entity_id, old, new)
         return new
 
     # ---- causes, as the logbook reports them (M5 insights) ---------------------------------
@@ -168,6 +175,8 @@ class HAState:
             self.fire_event("state_changed", {"entity_id": entity_id, "old_state": old, "new_state": None})
 
     def fire_event(self, event_type: str, data: dict | None = None) -> None:
+        if self.quiet:
+            return
         ev = {
             "event_type": event_type,
             "data": data or {},
@@ -539,6 +548,8 @@ def create_app(state: HAState | None = None) -> FastAPI:
     async def guard(request: Request) -> None:
         if request.headers.get("authorization") != f"Bearer {ha.token}":
             raise HAError(401, "Unauthorized")
+        if ha.latency:
+            await asyncio.sleep(ha.latency)
         if ha._fail > 0:
             ha._fail -= 1
             raise HAError(ha._fail_status, "Simulated failure")

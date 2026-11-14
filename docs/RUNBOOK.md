@@ -91,3 +91,57 @@ migration, switch them back on there too (Migration shows which ones).
 
 Settings → General → **Download bundle** (no tokens or keys) → `owner-reports/diagnostics/`.
 Traces you disagree with: Activity → Runs → *Copy as test case* → `owner-reports/<milestone>/`.
+
+## Simulator
+
+`make sim` runs the real add-on inside a simulated home on your computer: no HA, Pi or Jetson needed.
+
+| URL | What |
+|---|---|
+| `http://127.0.0.1:8100/` | the add-on GUI, behind a fake ingress like in HA |
+| `http://127.0.0.1:8090/` | the **sim panel**: steer the house, the event flow, faults and the model backends |
+
+The panel (`sim/control.py`, `sim/panel/`) has these tabs:
+
+- **House**: size presets (`minimal` 30 entities, `realistic` ~330, `large` ~1300) built from
+  Zigbee2MQTT devices (Aqara, IKEA, Tuya, Heiman), a router with its client trackers, and HA's own
+  housekeeping entities. Junk is included: unrenamed `0x…` devices, `_2` duplicates left behind
+  after re-pairing, orphaned `restored` entities, disabled diagnostics, dead batteries. The same
+  seed always builds the same house. A rebuild sends `state_changed` and registry events the way
+  an integration reload does.
+- **Flow & events**: rate (pause … ×10), a 30-second storm, the owner's state-trigger automations
+  on or off, and history: 7, 14 or 30 days of routines written into history and the logbook
+  without waiting. Live changes are listed with their cause: *user*, *physical*, *automation* or
+  *agent_house*.
+- **Entities**: search, filter to unavailable, unknown or orphaned entities, set a state with a
+  cause, remove an entity.
+- **Scenarios**: arrive home, leave home, evening, night, window open while heating, smoke, water
+  leak, Zigbee outage, router reboot, presence flapping.
+- **Faults**: HA (WebSocket drop, restart, 500s, slow REST), the room-agent LLM (errors, latency;
+  for the fake: loading, garbage, hang, broken tool-call JSON), Claude and OpenAI errors (429, 529,
+  500), fake Jetson metrics (overheating, out of RAM).
+- **Models & keys**: what serves each model port. The add-on always talks to the same local
+  gateways; the panel switches them while the sim runs, without a restart:
+
+  | Port | Fake by default | Can switch to |
+  |---|---|---|
+  | `:8080` room agents (llama-server API) | scripted fake | the real Jetson by IP · an OpenAI-compatible API (for example DeepInfra running Qwen3.5-4B, the Jetson's model) · OpenAI · Claude |
+  | `:8081` orchestrator, Claude | fake | `api.anthropic.com` |
+  | `:8082` orchestrator, OpenAI | fake | `api.openai.com` |
+  | `:9100` Jetson metrics | fake | the real Jetson (*auto* follows the room backend) |
+
+  With a cloud backend, *Pace* slows answers to the Jetson's measured speed (515 tok/s prompt, 16
+  tok/s generation, D23). It also serves one request at a time (`-np 1`) and rejects prompts that
+  would not fit 8192 tokens, the same error llama-server returns. Keys are stored in
+  `.data/sim/secrets.json` (mode 600, gitignored). Only the gateways use them: the add-on keeps its
+  `sk-ant-sim` placeholders, and the panel shows the last four characters of a key at most.
+  **Test** buttons call free endpoints (model lists, `/health`). The add-on's daily budget still
+  limits real orchestrator calls. Room-agent calls through a cloud backend are not counted against
+  that budget, so watch the **Requests** tab.
+- **Requests**: every model call through the gateways: backend, model, status, latency, tokens.
+  Bodies and keys are not logged.
+
+The panel accepts only `127.0.0.1`/`localhost` and requires an `X-Sim-Panel` header on writes.
+Settings persist in `.data/sim/config.json`. `python -m sim.run --house large --backfill-days 30`
+overrides them for one run; `--quiet-house` starts with the flow paused. `make test` never touches
+a real backend.

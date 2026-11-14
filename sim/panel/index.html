@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent House · sim panel</title>
+  <link rel="stylesheet" href="static/panel.css">
+</head>
+<body>
+<header>
+  <h1>Agent House <span>sim panel</span></h1>
+  <a id="app-link" href="#" target="_blank" rel="noopener">Open the add-on ↗</a>
+  <div id="status" class="pills"></div>
+</header>
+<nav id="tabs">
+  <button data-tab="house" class="on">House</button>
+  <button data-tab="flow">Flow &amp; events</button>
+  <button data-tab="entities">Entities</button>
+  <button data-tab="scenarios">Scenarios</button>
+  <button data-tab="faults">Faults</button>
+  <button data-tab="models">Models &amp; keys</button>
+  <button data-tab="requests">Requests</button>
+</nav>
+<main>
+  <section id="tab-house" class="tab on">
+    <div class="grid2">
+      <form id="house-form" class="card">
+        <h2>Build the house</h2>
+        <label>Preset <select name="preset"></select></label>
+        <label>Zigbee2MQTT devices <input name="zigbee_devices" type="number" min="0" max="400"></label>
+        <label>Router clients (device trackers) <input name="router_clients" type="number" min="0" max="250"></label>
+        <label>Junk, % of devices <input name="junk_percent" type="range" min="0" max="80"><output></output></label>
+        <label class="row"><input name="core_extras" type="checkbox"> HA housekeeping entities (sun, updates, backup, weather…)</label>
+        <label>Seed <input name="seed" type="number"></label>
+        <label>History to write, days <input name="backfill_days" type="number" min="0" max="30"></label>
+        <p class="hint">Rebuilding replaces generated entities and fires the registry events real HA fires when an integration reloads. The base house (rooms, lights, climate, the two owner automations) stays.</p>
+        <button type="submit" class="primary">Rebuild</button>
+      </form>
+      <div class="card">
+        <h2>What the add-on sees</h2>
+        <div id="house-summary"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-flow" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>Event flow</h2>
+        <label>Rate <input id="rate" type="range" min="0" max="10" step="0.25"><output id="rate-out"></output></label>
+        <div class="buttons">
+          <button data-rate="0">Pause</button><button data-rate="1">Normal</button><button data-rate="5">×5</button>
+          <button id="storm">Storm 30 s (×20)</button>
+        </div>
+        <label class="row"><input id="run-automations" type="checkbox"> Run the owner's state-trigger automations</label>
+        <div id="flow-stats" class="kv"></div>
+        <h3>History</h3>
+        <div class="buttons"><button data-backfill="7">Write 7 days</button><button data-backfill="14">Write 14 days</button><button data-backfill="30">Write 30 days</button></div>
+        <p class="hint">Writes the owner's routines (wake-up, leaving, evening, bedtime) into history and the logbook without sending events to the add-on.</p>
+      </div>
+      <div class="card">
+        <h2>Live state changes</h2>
+        <table class="mini"><thead><tr><th>time</th><th>entity</th><th>change</th><th>cause</th></tr></thead><tbody id="events"></tbody></table>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-entities" class="tab">
+    <div class="card">
+      <div class="toolbar">
+        <input id="ent-q" placeholder="search entity id or name">
+        <select id="ent-domain"><option value="">all domains</option></select>
+        <label class="row"><input id="ent-junk" type="checkbox"> only unavailable / unknown / orphaned</label>
+        <span id="ent-count" class="muted"></span>
+      </div>
+      <table><thead><tr><th>entity</th><th>state</th><th>area</th><th>platform</th><th>set state</th></tr></thead><tbody id="entities"></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-scenarios" class="tab">
+    <div class="card">
+      <h2>Scenarios</h2>
+      <p class="hint">Causes are set the way HA reports them: <b>user</b> (HA UI), <b>physical</b> (switch / sensor), <b>automation</b>. One scenario runs at a time.</p>
+      <div id="scenarios" class="cards"></div>
+      <button id="scenario-stop">Stop the running scenario</button>
+    </div>
+  </section>
+
+  <section id="tab-faults" class="tab">
+    <div class="grid2">
+      <div class="card">
+        <h2>Home Assistant</h2>
+        <div class="buttons">
+          <button data-fault='{"target":"ha","ws_drop":true}'>Drop WebSocket</button>
+          <button data-fault='{"target":"ha","restart":true,"seconds":10}'>Restart HA (10 s)</button>
+          <button data-fault='{"target":"ha","fail_next":3,"status":500}'>Next 3 REST calls → 500</button>
+          <button data-fault='{"target":"ha","fail_next":0}'>Clear</button>
+        </div>
+        <label>REST latency, s <input id="ha-latency" type="number" min="0" max="60" step="0.5"></label>
+      </div>
+      <div class="card">
+        <h2>Room-agent LLM (any backend)</h2>
+        <div class="buttons">
+          <button data-fault='{"target":"llm","fail_next":3,"status":503}'>Next 3 → 503</button>
+          <button data-fault='{"target":"llm","fail_next":1,"status":400}'>Next → 400</button>
+          <button data-fault='{"target":"llm","fail_next":0,"latency_s":0}'>Clear</button>
+        </div>
+        <label>Extra latency, s <input id="llm-latency" type="number" min="0" max="300" step="1"></label>
+        <h3>Fake llama-server only</h3>
+        <div class="buttons">
+          <button data-fault='{"target":"fake_llm","loading":true}'>Loading model</button>
+          <button data-fault='{"target":"fake_llm","loading":false}'>Loaded</button>
+          <button data-fault='{"target":"fake_llm","script":[{"garbage":true}]}'>Next answer garbage</button>
+          <button data-fault='{"target":"fake_llm","script":[{"hang":200}]}'>Next answer hangs</button>
+          <button data-fault='{"target":"fake_llm","script":[{"raw_arguments":"{broken json"}]}'>Next tool call broken JSON</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Claude / OpenAI (orchestrator)</h2>
+        <div class="buttons">
+          <button data-fault='{"target":"anthropic","fail_next":2,"status":529}'>Claude: next 2 → 529 overloaded</button>
+          <button data-fault='{"target":"anthropic","fail_next":1,"status":429}'>Claude: next → 429</button>
+          <button data-fault='{"target":"openai","fail_next":2,"status":500}'>OpenAI: next 2 → 500</button>
+          <button data-fault='{"target":"anthropic","fail_next":0,"latency_s":0}'>Clear Claude</button>
+          <button data-fault='{"target":"openai","fail_next":0,"latency_s":0}'>Clear OpenAI</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Fake Jetson metrics</h2>
+        <form id="jetson-form" class="kvform"></form>
+        <div class="buttons">
+          <button data-fault='{"target":"jetson","temp_tj_c":96,"throttled":true}'>Overheat + throttle</button>
+          <button data-fault='{"target":"jetson","ram_used_mb":7400,"swap_used_mb":2900}'>Out of RAM</button>
+          <button data-fault='{"target":"jetson","temp_tj_c":53,"throttled":false,"ram_used_mb":4600,"swap_used_mb":0}'>Normal</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-models" class="tab">
+    <div class="grid2">
+      <form id="room-form" class="card">
+        <h2>Room agents (the Jetson's job)</h2>
+        <label>Backend
+          <select name="backend">
+            <option value="fake">fake llama-server (scripted, free)</option>
+            <option value="jetson">real Jetson by IP</option>
+            <option value="compatible">OpenAI-compatible API (e.g. DeepInfra Qwen3.5-4B, same model as the Jetson)</option>
+            <option value="openai">OpenAI API</option>
+            <option value="anthropic">Claude API</option>
+          </select>
+        </label>
+        <label>OpenAI model <input name="openai_model"></label>
+        <label>Claude model <input name="anthropic_model"></label>
+        <label>OpenAI-compatible base URL <input name="compatible_base_url"></label>
+        <label>OpenAI-compatible model <input name="compatible_model"></label>
+        <fieldset>
+          <legend>Behave like the Jetson (cloud backends)</legend>
+          <label class="row"><input name="pace" type="checkbox"> Pace answers to the Jetson's speed</label>
+          <label>Prompt processing, tokens/s <input name="prefill_tps" type="number" step="1"></label>
+          <label>Generation, tokens/s <input name="decode_tps" type="number" step="0.5"></label>
+          <label>Context, tokens <input name="n_ctx" type="number" step="512"></label>
+          <label class="row"><input name="single_slot" type="checkbox"> One request at a time (-np 1)</label>
+        </fieldset>
+        <button type="submit" class="primary">Save</button>
+      </form>
+      <div>
+        <form id="jetson-real-form" class="card">
+          <h2>Real Jetson</h2>
+          <label>IP or hostname <input name="host" placeholder="192.168.178.40"></label>
+          <label>llama-server port <input name="llm_port" type="number"></label>
+          <label>Metrics port <input name="metrics_port" type="number"></label>
+          <label>Metrics source
+            <select name="metrics">
+              <option value="auto">auto (real when room agents use the Jetson)</option>
+              <option value="fake">fake</option><option value="jetson">real Jetson</option>
+            </select>
+          </label>
+          <div class="buttons"><button type="submit" class="primary">Save</button><button type="button" data-check="jetson">Test</button></div>
+        </form>
+        <form id="cloud-form" class="card">
+          <h2>Orchestrator (Claude / OpenAI)</h2>
+          <label>Claude <select name="anthropic"><option value="fake">fake</option><option value="real">real API</option></select></label>
+          <label>Claude model override <input name="anthropic_model" placeholder="empty = what the add-on asks for (claude-haiku-5-5)"></label>
+          <label>OpenAI <select name="openai"><option value="fake">fake</option><option value="real">real API</option></select></label>
+          <label>OpenAI model override <input name="openai_model" placeholder="empty = what the add-on asks for"></label>
+          <p class="hint">The add-on's daily budget (€1 by default) still applies to real calls. Its prices table knows the current Claude and GPT-6 models.</p>
+          <button type="submit" class="primary">Save</button>
+        </form>
+        <form id="keys-form" class="card">
+          <h2>Keys</h2>
+          <p class="hint">Kept in <code>.data/sim/secrets.json</code> (mode 600, gitignored). Only the sim gateways use them; the add-on never sees them. Leave a field empty to keep the saved key; type <code>-</code> to delete it.</p>
+          <label>Claude API key <span class="saved" data-saved="anthropic_api_key"></span><input name="anthropic_api_key" type="password" autocomplete="off"></label>
+          <label>OpenAI API key <span class="saved" data-saved="openai_api_key"></span><input name="openai_api_key" type="password" autocomplete="off"></label>
+          <label>OpenAI-compatible API key <span class="saved" data-saved="compatible_api_key"></span><input name="compatible_api_key" type="password" autocomplete="off"></label>
+          <label>Jetson token (llama-server --api-key and metrics) <span class="saved" data-saved="jetson_token"></span><input name="jetson_token" type="password" autocomplete="off"></label>
+          <div class="buttons">
+            <button type="submit" class="primary">Save keys</button>
+            <button type="button" data-check="anthropic">Test Claude</button>
+            <button type="button" data-check="openai">Test OpenAI</button>
+            <button type="button" data-check="compatible">Test compatible</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-requests" class="tab">
+    <div class="card">
+      <h2>Model requests through the gateways</h2>
+      <table><thead><tr><th>time</th><th>gateway</th><th>backend</th><th>model</th><th>status</th><th>ms</th><th>tokens in/out</th><th>note</th></tr></thead><tbody id="requests"></tbody></table>
+    </div>
+  </section>
+</main>
+<div id="toast"></div>
+<script src="static/panel.js"></script>
+</body>
+</html>

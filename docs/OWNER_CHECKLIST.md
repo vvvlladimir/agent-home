@@ -256,6 +256,26 @@ Update to 0.1.0, keep the global mode on **Shadow**.
 2. Update the add-on to 0.1.0 from the repository, take an HA backup first (RUNBOOK → Upgrades).
 3. Go through RUNBOOK → *Going from Shadow to Live* for one room only.
 
+## Sim panel: real backends (optional, about 15 minutes)
+
+Everything else in the panel is tested in CI. These paths need your network or your keys:
+
+1. `make sim`, open `http://127.0.0.1:8090/` → **Models & keys**. Enter the Jetson's IP and its
+   token (`/etc/agent-house/token` on the Jetson), Save, **Test**. Expected: `/health 200, metrics
+   200, profile qwen35-4b-balanced`. `[UNVERIFIED-ON-HW]` the Mac reaching the Jetson on ports
+   8080 and 9100.
+2. Room agents → backend *real Jetson*. Run the scenario **arrive home**. In **Requests**, the
+   `llm` rows should show `jetson` with real latencies (warm wake around 6–7 s, D23).
+3. Optional, costs cents: save a Claude key, set the orchestrator's Claude to *real API*, and ask
+   the add-on's chat for one draft. The **Requests** tab shows the model and tokens.
+   `[UNVERIFIED-ON-HW]` the gateway's passthrough with a real key.
+4. Optional: save a DeepInfra key and set room agents to *OpenAI-compatible*. Press **Test
+   compatible** to check that `Qwen/Qwen3.5-4B` is listed under that exact id, then fix the model
+   field if it is not. `[UNVERIFIED-ON-HW]` the model id and the provider's tool calling for this
+   model.
+
+Note anything odd in `owner-reports/sim-panel.md`.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.
