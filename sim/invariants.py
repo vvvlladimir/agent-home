@@ -136,7 +136,13 @@ def check_trace(result: dict, mode: str, caps: dict[str, int] | None = None) -> 
                     "missing": missing,
                 }
             )
-    out.append(_check("proposals_known_entities", unknown, "every proposal that passed the add-on's checks names only entities HA has"))
+    out.append(
+        _check(
+            "proposals_known_entities",
+            unknown,
+            "every proposal that passed the add-on's checks names only entities HA has",
+        )
+    )
 
     t3 = []
     for p in proposals:
