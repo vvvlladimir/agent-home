@@ -39,7 +39,7 @@ class Event:
     ts: float  # house time, epoch seconds
     entity_id: str = field(compare=False)
     state: str = field(compare=False)
-    cause: str = field(compare=False)  # user (app/UI) | physical (sensor, wall switch)
+    cause: str = field(compare=False)  # user (app/UI) | physical (sensor, wall switch) | automation:<id>
     tag: str = field(compare=False)  # routine | human | fault:<kind>
     note: str = field(compare=False, default="")
 

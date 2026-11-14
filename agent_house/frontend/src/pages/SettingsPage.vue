@@ -23,7 +23,7 @@ async function load() {
 }
 async function save() {
   // '' = "use the default" (null); text fields stay text; everything else is a number
-  const TEXT = ['kill_switch_entity', 'orchestrator_mode', 'night_window'];
+  const TEXT = ['kill_switch_entity', 'orchestrator_mode', 'night_window', 'automation_users'];
   const body: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(form.value)) {
     if (k === 'daily_review_at') body[k] = v.trim(); // '' = no daily review
@@ -63,6 +63,7 @@ const FIELDS: { key: string; label: string; type?: string; min?: number; max?: n
   { key: 'daily_review_at', label: 'Daily review at', type: 'text', placeholder: '04:30' },
   { key: 'habit_days', label: 'Habits: days of history', min: 3, max: 30 },
   { key: 'habit_min_repeats', label: 'Habits: min. days', min: 3, max: 50 },
+  { key: 'automation_users', label: 'Habits: HA users that are programs', type: 'text', placeholder: 'Node-RED, appdaemon' },
 ];
 const options = computed(() => Object.entries((settings.value?.options || {}) as Record<string, unknown>));
 onActivated(load);

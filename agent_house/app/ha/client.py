@@ -46,6 +46,7 @@ READ_COMMANDS = frozenset(
         "config/area_registry/list",
         "config/device_registry/list",
         "config/entity_registry/list",
+        "config/auth/list",  # who is a person and who is a program (core/insights.py); needs admin
         "validate_config",
     }
 )

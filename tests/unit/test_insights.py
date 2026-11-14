@@ -94,3 +94,45 @@ def test_two_automations_fighting_over_one_entity_is_one_conflict():
 
 def test_change_manual_flag():
     assert Change(0, "light.x", "on", "physical").manual and not Change(0, "light.x", "on", "agent").manual
+
+
+def test_a_program_user_is_an_automation_not_the_owners_hand():
+    """Node-RED and the like call services with a user token: without this they look like the
+    owner and their flows become 'habits' that get drafted a second time."""
+    programs = {"nr1": "Node-RED"}
+    assert classify({"context_user_id": "nr1"}, "addon", programs) == ("automation", "user:Node-RED")
+    assert classify({"context_user_id": "owner"}, "addon", programs) == ("user", None)
+    [change] = changes_from_logbook([entry(at(0, 7, 0), "light.desk", "on", context_user_id="nr1")], None, [],
+                                    programs)  # fmt: skip
+    assert not change.manual and change.ref == "user:Node-RED"
+
+
+async def test_program_users_come_from_the_user_list_and_the_setting():
+    from types import SimpleNamespace
+
+    from app.core.insights import Insights
+
+    class HA:
+        users = [
+            {"id": "a" * 32, "name": "Node-RED"}, {"id": "b" * 32, "name": "Owner"},
+            {"id": "c" * 32, "name": "Grafana bot"}, {"id": "d" * 32, "name": "AppDaemon"},
+            {"id": "e" * 32, "name": "Home Assistant Cloud"},
+        ]  # fmt: skip
+
+        async def command(self, type_):
+            assert type_ == "config/auth/list"
+            return self.users
+
+    found = await Insights(None, None, HA(), None, SimpleNamespace(automation_users="grafana bot, " + "f" * 32)).programs(
+        own="d" * 32
+    )  # fmt: skip
+    assert found == {"a" * 32: "Node-RED", "c" * 32: "Grafana bot", "f" * 32: "f" * 32}
+
+    class NoAdmin:
+        async def command(self, type_):
+            raise RuntimeError("unauthorized")
+
+    found = await Insights(
+        None, None, NoAdmin(), None, SimpleNamespace(automation_users="Node-RED")
+    ).programs()
+    assert found == {}  # a name needs the user list; ids from the setting still count

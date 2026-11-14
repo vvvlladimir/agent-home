@@ -207,6 +207,15 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    sensor or time and the count; **Draft** one: a proposal appears with `Evidence:` in its rationale.
    Note in `owner-reports/m5/README.md` which habits were real and which were noise (the thresholds
    `habit_days` / `habit_min_repeats` are in Settings).
+   **Programs and your own automations** (`[UNVERIFIED-ON-HW]`): if you use Node-RED, AppDaemon or
+   pyscript, switch a light from one of them and look at that logbook row: note which
+   `context_user_id` it has and the name of that user under **HA Settings → People → Users**.
+   Users named like Node-RED, AppDaemon or pyscript are recognised on their own only if HA lists
+   its users to the add-on's token (`config/auth/list` needs an admin token); otherwise enter the
+   user id in **Settings → Habits: HA users that are programs**. Then **Scan** again: the device
+   must not show up as your habit, and a device your own automation mostly runs is counted under
+   "the owner's own automation already does it". After **Your automations → Import**, a draft
+   that acts on an entity one of yours also acts on names it in the `policy` check.
 9. **New GUI** (`[UNVERIFIED-ON-HW]`: tested only in Chromium against `make sim`). Open the panel in
    the HA sidebar on a computer and in the Companion app on the phone. Check: the six tabs scroll on
    the phone; hovering (computer) or tapping the ⓘ buttons (phone) shows a tooltip that is not cut

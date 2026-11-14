@@ -80,6 +80,11 @@ steps are written down in `OWNER_CHECKLIST.md`.
       regularities (workday/weekend times, signals with precision), one finding per device, the
       orchestrator writes one automation with the variations; first look right after install
       → `core/habits.py`, `Review.first_look`, `ScanResult.habits`, D31
+- [x] Habits and what is already automated: weekdays wait for a day of the other kind; program
+      users (Node-RED …) are no hand; the owner's automations count per state (covered → no
+      dossier, partial → the rest only); drafts note overlapping originals; stories
+      `schedule_fits`, `owner_automation_covers_part` → `core/habits.py`, `core/insights.py`,
+      `Lifecycle.owners_acting_on`, D34
 - [x] GUI redesign: six tabs, overview with decisions / rooms / today, tooltips instead of help text, Vue 3 → `agent_house/frontend/`, D24, D25
 - [x] Daily house review: the orchestrator once a day reads agent reports, the inbox and a history
       summary; proposes new automations, fixes for weak ones, and settles conflicts between rooms

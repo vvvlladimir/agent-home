@@ -90,9 +90,25 @@ def test_a_workdays_only_habit_says_so_and_a_short_scan_does_not_guess():
     assert "Mon–Fri about 06:4" in habits.summary(dossier)
 
     monday_to_friday = [c for c in workdays if c.ts < at(5, 0, 0)]  # never saw a weekend
-    [dossier], _ = build(monday_to_friday)
+    dossiers, funnel = build(monday_to_friday)
+    assert dossiers == [] and funnel["waiting_for_weekdays"] == ["light.kitchen"]
+
+
+def test_weekdays_wait_until_a_day_of_the_other_kind_has_passed():
+    """Stories run 2026-11-14 #2: three episodes Mon–Wed became `weekday: [mon, tue, wed]`. The
+    days are known once a weekend day passed without the habit (or with it), not before."""
+    monday_to_wednesday = [c for c in kitchen() if c.ts < at(3, 0, 0)]
+    for today in (3, 5):  # Thursday, Saturday: no weekend day is over yet
+        dossiers, funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=today)).date())
+        assert dossiers == [] and funnel["waiting_for_weekdays"] == ["light.kitchen"]
+    [dossier], funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=6)).date())  # Sunday
     on = next(s for s in dossier["states"] if s["state"] == "on")
-    assert [t["days"] for t in on["time"]] == ["every day"]
+    assert [t["days"] for t in on["time"]] == ["Mon–Fri"] and funnel["waiting_for_weekdays"] == []
+
+
+def test_the_prompt_takes_weekdays_from_the_time_lines_only():
+    [dossier], _ = build(kitchen())
+    assert "never from the weekdays of the samples" in habits.request(dossier)
 
 
 def test_the_house_mode_helper_is_offered_only_when_the_house_has_it():
@@ -155,3 +171,51 @@ def test_an_irregular_device_is_relevant_but_no_dossier():
     times = [(0, 3, 10), (1, 14, 0), (2, 22, 40), (3, 9, 15), (4, 18, 5), (5, 1, 0)]
     dossiers, funnel = build([hand(at(d, h, m), "light.random", "on") for d, h, m in times])
     assert dossiers == [] and funnel["relevant"] == 1 and funnel["irregular"] == 1
+
+
+def auto(ts: float, entity_id: str, state: str, ref: str = "automation.kitchen_off") -> Change:
+    return Change(ts, entity_id, state, "automation", ref)
+
+
+def test_what_the_owners_automation_already_does_is_counted_not_drafted_again():
+    """The owner switches the kitchen light on by hand; their own automation switches it off. The
+    'off' is the automation's, not a habit: the dossier says so and asks for the rest only."""
+    changes = []
+    for c in kitchen():
+        changes.append(c if c.state == "on" else auto(c.ts, c.entity_id, "off"))
+    [dossier], funnel = build(changes)
+    assert [s["state"] for s in dossier["states"]] == ["on"]
+    [b] = dossier["by_owner"]
+    assert (
+        b["state"] == "off"
+        and b["count"] == 10
+        and b["by"] == ["automation.kitchen_off"]
+        and b["share"] == 1.0
+    )
+    text = habits.request(dossier)
+    assert "Already automated → off: 10 times by the owner's automation.kitchen_off" in text
+    assert "Do not repeat it" in text
+    assert "already automated → off 10× by automation.kitchen_off" in habits.summary(dossier)
+    assert funnel["covered_by_owner"] == []
+
+
+def test_a_device_the_owners_automation_mostly_runs_is_left_out_as_covered():
+    """Node-RED (a program user, see insights.classify) does the on and off on 17 of 20 days; the
+    owner did it by hand on the other three: covered, no draft. At 7 of 10 it is a partial cover:
+    a dossier that names the automation."""
+    changes = []
+    for c in kitchen(20):
+        day = int((c.ts - BASE.timestamp()) // 86400)
+        changes.append(c if day in {0, 7, 14} else auto(c.ts, c.entity_id, c.state, "user:Node-RED"))
+    dossiers, funnel = build(changes, days=20)
+    assert dossiers == []
+    assert funnel["covered_by_owner"] == [{"entity_id": "light.kitchen", "by": ["user:Node-RED"]}]
+    assert funnel["left_out"]["the owner's own automation already does it"] == 1
+
+    changes = []
+    for c in kitchen():
+        day = int((c.ts - BASE.timestamp()) // 86400)
+        changes.append(c if day in {0, 4, 8} else auto(c.ts, c.entity_id, c.state, "user:Node-RED"))
+    [dossier], funnel = build(changes)
+    assert {b["state"]: b["share"] for b in dossier["by_owner"]} == {"on": 0.7, "off": 0.7}
+    assert funnel["covered_by_owner"] == []

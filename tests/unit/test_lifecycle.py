@@ -132,11 +132,14 @@ async def test_the_policy_scan_blocks(lc, step, why):
 async def test_entities_in_triggers_and_conditions_must_exist(lc):
     """Stories run 2026-11-14, bug 1: a state condition on a missing helper is false in HA, so the
     automation would never run, and every check was green."""
-    missing = GOOD + """conditions:
+    missing = (
+        GOOD
+        + """conditions:
   - condition: not
     conditions:
       - {condition: state, entity_id: input_select.agent_house_mode, state: away}
 """
+    )
     proposal = await lc.create(missing)
     assert proposal["status"] == "blocked"
     assert failed(proposal)["policy"] == "unknown to Home Assistant: input_select.agent_house_mode"
@@ -154,7 +157,9 @@ async def test_entities_in_triggers_and_conditions_must_exist(lc):
 
     lc.ha_stub.add("input_select.agent_house_mode", "home")
     assert (await lc.create(missing))["status"] == "draft", "once the helper exists, the draft is fine"
-    template = GOOD + "conditions:\n  - {condition: template, value_template: \"{{ is_state('a.b', 'on') }}\"}\n"
+    template = (
+        GOOD + "conditions:\n  - {condition: template, value_template: \"{{ is_state('a.b', 'on') }}\"}\n"
+    )
     assert (await lc.create(template))["status"] == "draft", "templates are not scanned"
 
 
@@ -173,6 +178,32 @@ async def test_t2_entities_are_named_for_the_owner_and_the_t3_whitelist_is_honou
     proposal = await lc.create(actions("{action: switch.turn_on, target: {entity_id: switch.room_heater}}"))
     assert proposal["status"] == "draft"
     assert "T2, approved with this automation: switch.room_heater" in proposal["checks"][2]["detail"]
+
+
+async def test_the_owners_own_automations_on_the_same_entity_are_noted_not_blocked(lc):
+    """An imported automation or Node-RED flow of the owner that names the entity is a note; one
+    that is switched off, or names a longer id that starts with it, is not."""
+    import json
+
+    for oid, source, ref, entity, enabled, config in (
+        ("auto_tv", "ha_automation", "tv_off", "automation.tv_off", 1, {"actions": [{"target": {"entity_id": "light.room_lamp"}}]}),
+        ("nr_f1", "node_red", "flow1", None, None, [{"type": "api-call-service", "entity_id": ["light.room_lamp"]}]),
+        ("auto_old", "ha_automation", "old", "automation.old", 0, {"actions": [{"target": {"entity_id": "light.room_lamp"}}]}),
+        ("auto_long", "ha_automation", "long", "automation.long", 1, {"x": "light.room_lamp_2"}),
+    ):  # fmt: skip
+        lc.store.execute(
+            "INSERT INTO originals (id, source, ref, entity_id, title, enabled, config, updated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+            (oid, source, ref, entity, oid, enabled, json.dumps(config)),
+        )
+    proposal = await lc.create(GOOD)
+    assert proposal["status"] == "draft"
+    detail = proposal["checks"][2]["detail"]
+    assert (
+        "the owner's own automations mention it too: light.room_lamp (automation.tv_off, Node-RED flow1)"
+        in detail
+    )
+    assert "automation.old" not in detail and "automation.long" not in detail
 
 
 async def test_schema_and_yaml_errors(lc):

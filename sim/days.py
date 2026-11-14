@@ -55,6 +55,10 @@ class Driver:
         ha = self.stack.ha
         if ev.entity_id not in ha.states:
             return False
+        if ev.cause.startswith("automation:"):  # the owner's own automation (stories: owner_automations)
+            ref = ev.cause.split(":", 1)[1]
+            self.stack.on_ha(lambda: ha.run_automation(ref, [(ev.entity_id, ev.state)]))
+            return True
         change = ha.user_change if ev.cause == "user" else ha.physical_change
         self.stack.on_ha(lambda: change(ev.entity_id, ev.state))
         return True

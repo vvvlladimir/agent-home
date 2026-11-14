@@ -18,6 +18,8 @@ id. The four checks run on every create, edit, approve and rollback:
 Ownership (M5 council): a draft a room agent asked for may act only on entities that agent owns
 (`owner_of`); drafts of the owner and the orchestrator may act on any entity. Other automations of
 ours that act on the same entities are named in the policy notes, so the owner sees a possible fight.
+The owner's own automations, scripts and Node-RED flows (imported on the Migration page) that name
+the same entities are named there too: a note, not a block.
 
 Supersedes (M5 council): a proposal of the owner or the orchestrator may name other automations
 of ours (`agent_house_` ids, deployed, never its own id) that it replaces. Approving it disables
@@ -219,6 +221,12 @@ class Lifecycle:
             notes.append(
                 "also acted on by " + ", ".join(f"{e} ({', '.join(ids)})" for e, ids in others.items())
             )
+        theirs = self.owners_acting_on(set(tiers))
+        if theirs:  # a note, never a block: the owner decides whether both should run
+            notes.append(
+                "the owner's own automations mention it too: "
+                + ", ".join(f"{e} ({', '.join(refs)})" for e, refs in theirs.items())
+            )
         t2 = sorted(e for e, t in tiers.items() if t == "T2")
         if t2:
             notes.append(f"T2, approved with this automation: {', '.join(t2)}")
@@ -324,6 +332,25 @@ class Lifecycle:
             return {"name": "ha_validate", "ok": False, "detail": f"{err}"[:300]}
         errors = [f"{k}: {v.get('error')}" for k, v in (result or {}).items() if not (v or {}).get("valid")]
         return {"name": "ha_validate", "ok": not errors, "detail": "; ".join(errors)[:300] or None}
+
+    def owners_acting_on(self, entities: set[str]) -> dict[str, list[str]]:
+        """entity_id → the owner's automations, scripts and Node-RED flows imported on the Migration
+        page (not switched off) whose config names it. Read-only; empty until the first import."""
+        out: dict[str, list[str]] = {}
+        if not entities:
+            return out
+        rows = self.store.query(
+            "SELECT source, ref, entity_id, config FROM originals WHERE config IS NOT NULL "
+            "AND (enabled IS NULL OR enabled=1)"
+        )
+        for row in rows:
+            label = row["entity_id"] or (
+                f"Node-RED {row['ref']}" if row["source"] == "node_red" else row["ref"]
+            )
+            for entity_id in sorted(entities):
+                if re.search(rf"(?<![\w.]){re.escape(entity_id)}(?![\w])", row["config"]):
+                    out.setdefault(entity_id, []).append(label)
+        return out
 
     def acting_on(self, entities: set[str], exclude: str | None = None) -> dict[str, list[str]]:
         """entity_id → our deployed automations (current version) whose actions name it."""

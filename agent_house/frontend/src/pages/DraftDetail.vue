@@ -93,7 +93,8 @@ const ev = () => p.value!.evidence as { would_fire: number; days: number; blocke
           <ul class="checks">
             <li v-for="c in (p.checks as { name: string; ok: boolean; detail?: string }[])" :key="c.name">
               <i class="mk" :class="c.ok ? 'done' : 'blocked'" /><span :data-tip="c.detail || ''">{{ c.name }}</span>
-              <span v-if="!c.ok" class="error small">{{ c.detail || '' }}</span></li>
+              <span v-if="!c.ok" class="error small">{{ c.detail || '' }}</span>
+              <span v-else-if="c.detail" class="muted small">{{ c.detail }}</span></li>
           </ul>
         </article>
         <article class="card stack">

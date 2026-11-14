@@ -5,17 +5,23 @@
 #   entity the house lacks is skipped, not failed.
 # habits: a person's own routine on top of the household (what the add-on should learn).
 # incidents: one-off events with a tag (what the add-on should react to, or ignore).
-# expect: checks on the lived trace; needs_model: the fakes cannot pass it (they write no drafts).
+# owner_automations: the owner's own HA automation does a household change instead of the hand
+#   (the logbook shows `automation_triggered`); `days: workdays` leaves the weekend to the hand.
+# expect: checks on the lived trace (schedule_fits: the deployed automation's time triggers and
+#   weekday condition do the habit); needs_model: the fakes cannot pass it (they write no drafts).
 stories:
   morning_counter_habit:
-    about: A workday habit becomes a proposal, and the owner can approve it.
-    days: 8
+    about: A workday habit becomes a proposal with the right days, and the owner can approve it.
+    # the days are known once a weekend passed after the habit's first workday (core/habits.py):
+    # by day 9 whatever weekday the run starts on
+    days: 10
     needs_model: true
     habits:
       - {entity: light.kitchen_counter, "on": "06:50", "off": "07:35", sd_min: 15, days: workdays}
     expect:
-      - {proposal_for: light.kitchen_counter, by_day: 7}
+      - {proposal_for: light.kitchen_counter, by_day: 9}
       - {deployed_for: light.kitchen_counter}
+      - {schedule_fits: light.kitchen_counter}
       - {max_reports_per_day: 8}
 
   evening_reading_lamp:
@@ -27,6 +33,18 @@ stories:
     expect:
       - {proposal_for: light.bedroom_lamp, by_day: 8}
       - {max_proposals_for: light.bedroom_lamp, count: 2}
+
+  owner_automation_covers_part:
+    about: >-
+      The owner's automation switches the TV off on workdays; at weekends they do it by hand. The
+      add-on may propose the rest (the evening on, the weekend off) but never a second workday off.
+    days: 10
+    needs_model: true
+    owner_automations:
+      - {ref: automation.tv_off_at_night, entity: media_player.living_room_tv, state: "off", days: workdays}
+    expect:
+      - {owner_part_not_repeated: automation.tv_off_at_night}
+      - {max_proposals_for: media_player.living_room_tv, count: 1}
 
   leak_while_out:
     about: A kitchen water leak while nobody is home reaches the owner within minutes, once.

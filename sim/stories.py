@@ -70,6 +70,16 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
                 household.Event(on.timestamp(), eid, "on", "user", "habit"),
                 household.Event(max(off, on + timedelta(minutes=5)).timestamp(), eid, "off", "user", "habit"),
             ]
+    for auto in story.get("owner_automations") or []:  # the owner's automation does it, not the hand
+        eid = resolve(auto["entity"], entities)
+        names[auto["entity"]] = eid
+        for i, e in enumerate(events):
+            day = datetime.fromtimestamp(e.ts, start.tzinfo)
+            if (
+                e.entity_id == eid and e.state == auto["state"] and e.cause == "user"
+                and (auto.get("days", "all") != "workdays" or day.weekday() < 5)
+            ):  # fmt: skip
+                events[i] = replace(e, cause=f"automation:{auto['ref']}", tag="owner_automation")
     for inc in story.get("incidents") or []:
         eid = resolve(inc["entity"], entities)
         names[inc["entity"]] = eid
@@ -157,7 +167,14 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
         if (
             story.get("needs_model")
             and not has_model
-            and kind in ("proposal_for", "deployed_for", "max_proposals_for")
+            and kind
+            in (
+                "proposal_for",
+                "deployed_for",
+                "max_proposals_for",
+                "schedule_fits",
+                "owner_part_not_repeated",
+            )
         ):
             add(exp, None, "n/a with the fake models (they write no drafts)")
             continue
@@ -174,6 +191,38 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             eid = name(exp["deployed_for"])
             hits = [p for p in proposals if eid in targets(p) and p.get("status") == "deployed"]
             add(exp, bool(hits), f"{len(hits)} deployed for {eid}")
+        elif kind == "schedule_fits":
+            eid = name(exp["schedule_fits"])
+            habit = next((h for h in story.get("habits") or [] if name(h["entity"]) == eid), None)
+            hits = [p for p in proposals if eid in targets(p) and p.get("status") == "deployed"]
+            if habit is None or not hits:
+                add(exp, None if habit else False, "no deployed automation" if habit else "no such habit")
+                continue
+            misfits = [
+                f"{p['id']}: {why}" for p in hits if (why := schedule_misfit(p.get("yaml") or "", habit))
+            ]
+            add(exp, not misfits, "; ".join(misfits) or f"{len(hits)} deployed, schedule fits the habit")
+        elif kind == "owner_part_not_repeated":
+            auto = next(a for a in story["owner_automations"] if a["ref"] == exp["owner_part_not_repeated"])
+            eid = name(auto["entity"])
+            done = [e for e in events if e["entity_id"] == eid and e["tag"] == "owner_automation"]
+            if not done:
+                add(exp, None, f"{auto['ref']} never ran")
+                continue
+            at = _circular_minute([_minute_of(e["ts"]) for e in done])
+            span = auto.get("days", "all")
+            repeats = [
+                f"{p['id']} ({days})" for p in proposals if eid in targets(p)
+                if (days := repeated_days(p.get("yaml") or "", eid, auto["state"], at, span))
+            ]  # fmt: skip
+            when = f"{auto['state']} about {at // 60:02d}:{at % 60:02d}"
+            add(
+                exp,
+                not repeats,
+                f"repeat {auto['ref']} ({when}): {'; '.join(repeats)}"
+                if repeats
+                else f"no proposal repeats {auto['ref']}",
+            )
         elif kind == "max_proposals_for":
             eid = name(exp["max_proposals_for"])
             n = sum(1 for p in proposals if eid in targets(p))
@@ -250,6 +299,104 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
         else:
             add(exp, False, f"unknown expectation {kind}")
     return out
+
+
+ALL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def schedule_misfit(text: str, habit: dict, band_min: int = 45) -> str | None:
+    """Why an automation's schedule does not do the habit (None: it does). Time triggers within
+    `band_min` of the habit's on and off times; the top-level weekday condition covers exactly the
+    habit's days (no condition = every day). Stories run 2026-11-14 #2: Mon–Fri drafted as Mon–Wed."""
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError as err:
+        return f"yaml: {err}"
+    doc = doc[0] if isinstance(doc, list) and doc else doc
+    triggers = doc.get("triggers") or doc.get("trigger") or []
+    times = []
+    for t in triggers if isinstance(triggers, list) else [triggers]:
+        if isinstance(t, dict) and (t.get("trigger") or t.get("platform")) == "time":
+            for at in t["at"] if isinstance(t.get("at"), list) else [t.get("at")]:
+                if isinstance(at, str) and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", at):
+                    h, m = at.split(":")[:2]
+                    times.append(int(h) * 60 + int(m))
+    problems = []
+    for key in ("on", "off"):
+        h, m = (int(x) for x in habit[key].split(":"))
+        if not any(abs((t - h * 60 - m + 720) % 1440 - 720) <= band_min for t in times):
+            problems.append(f"no time trigger near {habit[key]} ({key})")
+    conditions = doc.get("conditions") or doc.get("condition") or []
+    days = set(ALL_DAYS)
+    for c in conditions if isinstance(conditions, list) else [conditions]:
+        if isinstance(c, dict) and c.get("condition") == "time" and c.get("weekday"):
+            wd = c["weekday"]
+            days &= set(wd if isinstance(wd, list) else [wd])
+    want = set(ALL_DAYS[:5]) if habit.get("days", "all") == "workdays" else set(ALL_DAYS)
+    if days != want:
+        order = lambda ds: ",".join(d for d in ALL_DAYS if d in ds)  # noqa: E731
+        problems.append(f"runs on {order(days) or 'no day'}, habit is {order(want)}")
+    return "; ".join(problems) or None
+
+
+def _minute_of(ts: float) -> int:
+    moment = datetime.fromtimestamp(ts)
+    return moment.hour * 60 + moment.minute
+
+
+def _circular_minute(minutes: list[int]) -> int:
+    anchor = minutes[0]
+    offsets = sorted((m - anchor + 720) % 1440 - 720 for m in minutes)
+    return int(anchor + offsets[len(offsets) // 2]) % 1440
+
+
+def _weekdays(conditions) -> set[str]:
+    days = set(ALL_DAYS)
+    for c in conditions if isinstance(conditions, list) else [conditions]:
+        if isinstance(c, dict) and c.get("condition") == "time" and c.get("weekday"):
+            wd = c["weekday"]
+            days &= set(wd if isinstance(wd, list) else [wd])
+    return days
+
+
+def repeated_days(text: str, eid: str, state: str, at: int, days: str, band_min: int = 45) -> str:
+    """The automation's days on which it sets `eid` to `state` from a time trigger near `at`
+    that the owner's automation already covers ("" = none). Weekday conditions count at the top
+    and in the `choose` option that holds the action."""
+    try:
+        doc = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        return ""
+    doc = doc[0] if isinstance(doc, list) and doc else doc
+    triggers = doc.get("triggers") or doc.get("trigger") or []
+    near = False
+    for t in triggers if isinstance(triggers, list) else [triggers]:
+        if isinstance(t, dict) and (t.get("trigger") or t.get("platform")) == "time":
+            for value in t["at"] if isinstance(t.get("at"), list) else [t.get("at")]:
+                if isinstance(value, str) and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", value):
+                    h, m = (int(x) for x in value.split(":")[:2])
+                    near |= abs((h * 60 + m - at + 720) % 1440 - 720) <= band_min
+    if not near:
+        return ""
+    top = _weekdays(doc.get("conditions") or doc.get("condition") or [])
+    service = {"off": "turn_off", "on": "turn_on"}.get(state, state)
+    hit: set[str] = set()
+
+    def walk(steps, days: set[str]) -> None:
+        nonlocal hit
+        for step in steps if isinstance(steps, list) else [steps]:
+            if not isinstance(step, dict):
+                continue
+            for option in step.get("choose") or []:
+                walk(option.get("sequence") or [], days & _weekdays(option.get("conditions") or []))
+            walk(step.get("default") or [], days)
+            action = str(step.get("action") or step.get("service") or "")
+            if action.endswith(service) and eid in json.dumps(step):
+                hit |= days
+
+    walk(doc.get("actions") or doc.get("action") or [], top)
+    covered = set(ALL_DAYS[:5]) if days == "workdays" else set(ALL_DAYS)
+    return ",".join(d for d in ALL_DAYS if d in hit & covered)
 
 
 def mentions(row: dict, eid: str | None) -> bool:

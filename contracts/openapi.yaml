@@ -1189,6 +1189,20 @@ components:
             changed_by_hand: {type: integer}
             relevant: {type: integer}
             irregular: {type: integer, description: relevant devices whose episodes follow no regularity}
+            waiting_for_weekdays:
+              type: array
+              items: {type: string}
+              description: >-
+                regular devices seen only on workdays (or only at weekends) before a day of the
+                other kind passed; drafted once the days are known (D34)
+            covered_by_owner:
+              type: array
+              description: devices the owner's own automations, scripts or programs already run (D34)
+              items:
+                type: object
+                properties:
+                  entity_id: {type: string}
+                  by: {type: array, items: {type: string}}
             dossiers: {type: integer}
             left_out: {type: object, additionalProperties: {type: integer}, description: reason → devices}
             near:

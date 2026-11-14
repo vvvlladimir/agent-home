@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sim.stories import given, load, resolve, then
+from sim.stories import given, load, resolve, schedule_misfit, then
 
 START = datetime(2026, 10, 5, tzinfo=UTC)  # a Monday
 HOUSE = ["light.kitchen_counter", "binary_sensor.kitchen_leak_sensor_water_leak", "light.bedroom_lamp",
@@ -70,3 +70,59 @@ def test_mentions_is_exact_and_a_night_habit_from_ghost_motion_is_caught():
             "  - condition: time\n    after: '03:00'\n    before: '04:00'\n"  # fmt: skip
     hits, judged = _built_on_lies([{"id": "p", "yaml": ghost}], events, "fault:ghost_motion")
     assert hits == ["p"] and judged == 1
+
+
+def test_schedule_fits_needs_the_habits_times_and_exactly_its_days():
+    """Stories run 2026-11-14 #2: a Mon–Fri habit deployed as Mon–Wed passed every check."""
+    habit = {"on": "06:50", "off": "07:35", "days": "workdays"}
+
+    def draft(days: str, on: str = "06:51:00") -> str:
+        cond = f"conditions:\n- condition: time\n  weekday: [{days}]\n" if days else ""
+        return (f"triggers:\n- trigger: time\n  at: '{on}'\n- trigger: time\n  at: '07:36:00'\n"
+                f"{cond}actions: []\n")  # fmt: skip
+
+    assert schedule_misfit(draft("mon, tue, wed, thu, fri"), habit) is None
+    assert (
+        schedule_misfit(draft("mon, tue, wed"), habit) == "runs on mon,tue,wed, habit is mon,tue,wed,thu,fri"
+    )
+    assert "runs on mon,tue,wed,thu,fri,sat,sun" in schedule_misfit(draft(""), habit)
+    assert schedule_misfit(draft("mon, tue, wed, thu, fri", on="09:00"), habit) == (
+        "no time trigger near 06:50 (on)"
+    )
+    assert schedule_misfit(draft(""), {**habit, "days": "all"}) is None
+
+
+def test_the_owners_automation_takes_over_the_workday_tv_off():
+    story = {"days": 7, "owner_automations": [{"ref": "automation.tv_off", "entity": "media_player.living_room_tv",
+                                               "state": "off", "days": "workdays"}]}  # fmt: skip
+    events, _ = given(story, START, 1, HOUSE + ["media_player.living_room_tv"])
+    offs = [e for e in events if e.entity_id == "media_player.living_room_tv" and e.state == "off"]
+    assert offs, "the household switches the TV off"
+    for e in offs:
+        workday = datetime.fromtimestamp(e.ts, START.tzinfo).weekday() < 5
+        assert (e.cause == "automation:automation.tv_off") == workday, e
+
+
+def test_a_proposal_that_repeats_the_owners_workday_off_is_caught():
+    from sim.stories import repeated_days
+
+    def draft(off_days: str) -> str:
+        cond = f"\n          - condition: time\n            weekday: [{off_days}]" if off_days else ""
+        return f"""
+triggers:
+  - {{trigger: time, at: '20:10:00', id: 'on'}}
+  - {{trigger: time, at: '23:20:00', id: 'off'}}
+actions:
+  - choose:
+      - conditions: [{{condition: trigger, id: 'on'}}]
+        sequence: [{{action: media_player.turn_on, target: {{entity_id: media_player.tv}}}}]
+      - conditions:
+          - {{condition: trigger, id: 'off'}}{cond}
+        sequence: [{{action: media_player.turn_off, target: {{entity_id: media_player.tv}}}}]
+"""
+
+    at = 23 * 60 + 15
+    assert repeated_days(draft("sat, sun"), "media_player.tv", "off", at, "workdays") == ""
+    assert repeated_days(draft(""), "media_player.tv", "off", at, "workdays") == "mon,tue,wed,thu,fri"
+    assert repeated_days(draft("fri, sat, sun"), "media_player.tv", "off", at, "workdays") == "fri"
+    assert repeated_days(draft(""), "media_player.tv", "off", 6 * 60, "workdays") == ""  # far from it

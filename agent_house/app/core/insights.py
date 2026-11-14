@@ -8,6 +8,8 @@ what caused a change (field names [UNVERIFIED-ON-HW], docs/OWNER_CHECKLIST.md M5
   (`context_entity_id` names it); `script` likewise;
 - `context_user_id` of our own token (learned from a call_service answer) or a change that matches
   one of our executed actions → a room agent;
+- a `context_user_id` of a program (Node-RED, AppDaemon, pyscript by name, or listed in the
+  `automation_users` setting) → an automation (`user:<name>`), not the owner's hand;
 - another `context_user_id` → the owner in the UI or an app;
 - no context at all → a physical switch (or the device itself; HA cannot tell these apart).
 "Manual" = UI/app or physical.
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -44,6 +47,8 @@ ROLLBACK_RATE = 0.6
 FIGHT_S = 120.0
 FIGHT_MIN = 2
 FEEDBACK_DAYS = 7
+# HA users that are programs. Not voice assistants or HomeKit: there a person speaks or taps.
+PROGRAM_USERS = re.compile(r"node[\s_-]?red|appdaemon|pyscript", re.I)
 
 
 @dataclass(frozen=True)
@@ -69,7 +74,10 @@ def _ts(value) -> float | None:
     return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).timestamp()
 
 
-def classify(entry: dict, own_user: str | None = None) -> tuple[str, str | None]:
+def classify(
+    entry: dict, own_user: str | None = None, programs: dict | None = None
+) -> tuple[str, str | None]:
+    """(cause, ref). `programs`: HA user id → name of users that are programs (Node-RED …)."""
     event, domain = entry.get("context_event_type"), entry.get("context_domain")
     ref, user = entry.get("context_entity_id"), entry.get("context_user_id")
     if event == "automation_triggered" or domain == "automation":
@@ -78,6 +86,8 @@ def classify(entry: dict, own_user: str | None = None) -> tuple[str, str | None]
         return "script", ref
     if user and own_user and user == own_user:
         return "agent", None
+    if user and programs and user in programs:
+        return "automation", f"user:{programs[user]}"
     if user:
         return "user", None
     if event or domain or ref:
@@ -85,7 +95,9 @@ def classify(entry: dict, own_user: str | None = None) -> tuple[str, str | None]
     return "physical", None
 
 
-def changes_from_logbook(entries: list[dict], own_user: str | None, actions: list[dict]) -> list[Change]:
+def changes_from_logbook(
+    entries: list[dict], own_user: str | None, actions: list[dict], programs: dict | None = None
+) -> list[Change]:
     """Logbook entries → state changes with their cause, oldest first. `actions`: our executed
     actions ({ts, agent_id, entity_id}); a change of that entity within seconds is the agent's."""
     ours = defaultdict(list)
@@ -97,7 +109,7 @@ def changes_from_logbook(entries: list[dict], own_user: str | None, actions: lis
         ts = _ts(entry.get("when"))
         if not isinstance(entity_id, str) or state is None or ts is None or str(state) in SKIP_STATES:
             continue
-        cause, ref = classify(entry, own_user)
+        cause, ref = classify(entry, own_user, programs)
         if cause in ("user", "physical"):
             match = next((a for t, a in ours.get(entity_id, []) if abs(t - ts) <= AGENT_MATCH_S), None)
             if match:
@@ -255,7 +267,27 @@ class Insights:
                 (since,),
             )
         ]
-        return changes_from_logbook(entries, getattr(self.ha, "own_user_id", None), actions)
+        own = getattr(self.ha, "own_user_id", None)
+        return changes_from_logbook(entries, own, actions, await self.programs(own))
+
+    async def programs(self, own: str | None = None) -> dict[str, str]:
+        """HA user id → name, for users that are programs: named like one (Node-RED …) in HA's user
+        list, or listed in `automation_users` by id or name. The list needs an admin token; without
+        it only ids from the setting count [UNVERIFIED-ON-HW]."""
+        listed = [x.strip() for x in (getattr(self.settings, "automation_users", None) or "").split(",")]
+        listed = [x for x in listed if x]
+        names = {x.casefold() for x in listed}
+        out = {x: x for x in listed if re.fullmatch(r"[0-9a-f]{32}", x)}
+        try:
+            users = await self.ha.command("config/auth/list")
+        except Exception as err:  # noqa: BLE001 - not an admin token, no WS, a stub: the setting alone
+            log.debug("HA user list unavailable: %s", err)
+            users = []
+        for user in users if isinstance(users, list) else []:
+            uid, name = user.get("id"), str(user.get("name") or "")
+            if uid and uid != own and (PROGRAM_USERS.search(name) or name.casefold() in names or uid in out):
+                out[uid] = name or uid
+        return out
 
     def ours(self) -> dict[str, dict]:
         """automation entity → {ha_id, version, since, title} for our deployed automations."""
@@ -280,8 +312,9 @@ class Insights:
         latest = [c for c in changes if c.ts >= recent]
         automated = {e for info in ours.values() for e in _targets(self.lifecycle, info["ha_id"])}
         policy = getattr(getattr(self.lifecycle, "safety", None), "policy", None)
+        today = (now or clock.now(UTC)).astimezone().date()
         dossiers, funnel = habits.build(changes, self.ha, days=days, min_days=min_days, policy=policy,
-                                        skip=frozenset(automated))  # fmt: skip
+                                        skip=frozenset(automated), today=today)  # fmt: skip
         found = []
         for dossier in dossiers:
             title = f"{dossier['name'] or dossier['entity_id']}: {habits.summary(dossier)}"[:200]

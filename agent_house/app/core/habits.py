@@ -19,7 +19,12 @@ A real house has ~2000 entities and most say nothing about habits. So, in order:
    weekends apart (median and spread; an episode within `TIME_BAND_MIN` of its group's median is
    "on time"); signals that preceded it, with how often the signal was followed by it
    (precision); the context shares; companions.
-4. Gate. A device qualifies when one of its target states happened on `min_days` days and at least
+4. The owner's automations. Changes made by the owner's own automations, scripts or programs
+   (Node-RED …: `core/insights.py`) are no hand, but they are counted per target state: a state
+   they do at least `COVERED_SHARE` of the time is already automated, and a device whose every
+   regular state is is left out ("covered"); otherwise the dossier says what they already do, so
+   the draft adds only what is left instead of a second automation for the same thing.
+5. Gate. A device qualifies when one of its target states happened on `min_days` days and at least
    `MIN_SUPPORT` of its episodes are explained by one regularity (on time, after the same signal
    with precision ≥ `MIN_PRECISION`, or together with the same device). The strongest
    `MAX_DOSSIERS` go on.
@@ -54,6 +59,7 @@ MIN_PRECISION = 0.3
 MIN_SIGNAL_SHARE = 0.4  # a signal worth naming preceded at least this share of the episodes
 MAX_DOSSIERS = 8
 MAX_EPISODES = 14
+COVERED_SHARE = 0.8  # of a target state's changes done by the owner's automations: already automated
 WEEKDAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
 
 
@@ -211,17 +217,44 @@ def episodes(entity_id: str, changes, ha, timeline: _Timeline) -> list[dict]:
     return out
 
 
+def automated(entity_id: str, changes) -> dict[str, list[dict]]:
+    """target state → changes the owner's automations, scripts or programs made to it, as
+    {ts, day, weekday, minute, ref} (ours never get here: their devices are skipped)."""
+    out: dict[str, list[dict]] = defaultdict(list)
+    for c in changes:
+        if c.entity_id == entity_id and c.cause in ("automation", "script") and c.state not in SKIP_STATES:
+            moment = _local(c.ts)
+            out[c.state].append({
+                "ts": c.ts, "day": moment.date().isoformat(), "weekday": moment.weekday(),
+                "minute": moment.hour * 60 + moment.minute, "ref": c.ref or c.cause,
+            })  # fmt: skip
+    return out
+
+
+def _by_owner(state: str, manual: int, done: list[dict], today: date) -> dict:
+    refs = Counter(d["ref"] for d in done)
+    times = [{k: v for k, v in t.items() if k != "on_time_ids"} for t in _time_groups(done, today)]
+    return {
+        "state": state, "count": len(done), "by": [r for r, _ in refs.most_common(3)],
+        "share": round(len(done) / (len(done) + manual), 2), "time": times,
+    }  # fmt: skip
+
+
 # --- 3. regularities -----------------------------------------------------------------------------
-def _time_groups(eps: list[dict]) -> list[dict]:
+def _time_groups(eps: list[dict], today: date) -> list[dict]:
     workdays = [e for e in eps if e["weekday"] < 5]
     weekend = [e for e in eps if e["weekday"] >= 5]
     if not workdays or not weekend:
         # one-sided (stories run 2026-11-14, bug 3: a Mon–Fri habit drafted for every day). It is a
-        # weekday habit only when the episodes span days of the other kind; else we cannot tell.
-        days = {date.fromisoformat(e["day"]) for e in eps}
-        span = [min(days) + timedelta(n) for n in range((max(days) - min(days)).days + 1)]
-        other = any(d.weekday() >= 5 for d in span) if workdays else any(d.weekday() < 5 for d in span)
-        groups = (("Mon–Fri" if workdays else "Sat–Sun", eps),) if other else (("every day", eps),)
+        # weekday habit only when a day of the other kind passed without it since the first episode
+        # (the scan's end counts, not the last episode: a Mon–Fri habit never has a Saturday between
+        # its own episodes in its first week). Until then nobody can tell, so "unknown": the dossier
+        # waits instead of the model guessing days from the samples (stories run 2026-11-14 #2:
+        # three episodes Mon–Wed became `weekday: [mon, tue, wed]`).
+        first = min(date.fromisoformat(e["day"]) for e in eps)
+        passed = [first + timedelta(n) for n in range(max((today - first).days, 0))]
+        other = any(d.weekday() >= 5 for d in passed) if workdays else any(d.weekday() < 5 for d in passed)
+        groups = (("Mon–Fri" if workdays else "Sat–Sun", eps),) if other else (("unknown", eps),)
     elif _close(workdays, weekend):
         groups = (("every day", eps),)
     else:
@@ -256,9 +289,9 @@ def _circular_median(minutes: list[int]) -> float:
     return (anchor + statistics.median(_offset(m, anchor) for m in minutes)) % 1440
 
 
-def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timeline) -> dict:
+def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timeline, today: date) -> dict:
     n = len(eps)
-    times = _time_groups(eps)
+    times = _time_groups(eps, today)
     explained_by_time = set().union(*(t.pop("on_time_ids") for t in times)) if times else set()
     signal_hits: dict[tuple[str, str], list[int]] = defaultdict(list)
     for e in eps:
@@ -295,28 +328,49 @@ def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timelin
         "sun_below": [sum(1 for s in sun if s == "below_horizon"), len(sun)] if sun else None,
         "modes": dict(modes.most_common(3)),
         "support": round(support, 2),
+        "days_known": all(t["days"] != "unknown" for t in times),
     }  # fmt: skip
 
 
 # --- 4. dossiers ---------------------------------------------------------------------------------
 def build(
-    changes, ha, *, days: int, min_days: int, policy: dict | None = None, skip=frozenset()
+    changes,
+    ha,
+    *,
+    days: int,
+    min_days: int,
+    policy: dict | None = None,
+    skip=frozenset(),
+    today: date | None = None,
 ) -> tuple[list, dict]:
-    """(dossiers that pass the gate, strongest first; the funnel incl. how many passed)."""
+    """(dossiers that pass the gate, strongest first; the funnel incl. how many passed). `today`:
+    the scan's end (default: the day after the last change); days before it are complete."""
     changes = sorted(changes, key=lambda c: c.ts)
+    if today is None:
+        today = _local(changes[-1].ts).date() + timedelta(1) if changes else date.today()
     candidates, funnel = relevant(changes, ha, min_days=min_days, policy=policy, skip=skip)
     timeline = _Timeline(changes)
-    out, weak = [], []
+    out, weak, waiting, covered = [], [], [], []
     for candidate in candidates:
         entity_id = candidate["entity_id"]
         eps = episodes(entity_id, changes, ha, timeline)
         by_state: dict[str, list[dict]] = defaultdict(list)
         for e in eps:
             by_state[e["state"]].append(e)
-        states = [regularities(entity_id, s, group, timeline) for s, group in by_state.items()]
+        theirs = automated(entity_id, changes)
+        by_owner = {s: _by_owner(s, len(by_state.get(s, [])), done, today) for s, done in theirs.items()}
+        states = [regularities(entity_id, s, group, timeline, today) for s, group in by_state.items()]
         qualified = [s for s in states if s["days"] >= min_days and s["support"] >= MIN_SUPPORT]
         if not qualified:
             weak.append(entity_id)
+            continue
+        left = [s for s in qualified if by_owner.get(s["state"], {}).get("share", 0) < COVERED_SHARE]
+        if not left:
+            refs = sorted({r for s in qualified for r in by_owner[s["state"]]["by"]})
+            covered.append({"entity_id": entity_id, "by": refs})
+            continue
+        if not all(s["days_known"] for s in left):
+            waiting.append(entity_id)
             continue
         strength = max(s["support"] * s["days"] for s in qualified)
         out.append({
@@ -326,9 +380,14 @@ def build(
             "count": candidate["count"], "states": sorted(states, key=lambda s: -s["count"]),
             "strength": round(strength, 2), "mode_helper": MODE_ENTITY in ha.states,
             "samples": {s: _samples(group) for s, group in by_state.items()},
+            "by_owner": sorted(by_owner.values(), key=lambda b: -b["count"]),
         })  # fmt: skip
     out.sort(key=lambda d: -d["strength"])
     funnel["irregular"] = len(weak)
+    funnel["waiting_for_weekdays"] = waiting
+    funnel["covered_by_owner"] = covered  # the owner's automations already do what the hand did
+    if covered:
+        funnel["left_out"]["the owner's own automation already does it"] = len(covered)
     funnel["dossiers"] = min(len(out), MAX_DOSSIERS)
     return out[:MAX_DOSSIERS], funnel
 
@@ -367,6 +426,8 @@ def summary(dossier: dict) -> str:
         parts.append(
             f"→ {s['state']} {s['count']}× on {s['days']} days" + (f": {'; '.join(bits)}" if bits else "")
         )
+    for b in dossier.get("by_owner") or []:
+        parts.append(f"already automated → {b['state']} {b['count']}× by {', '.join(b['by'])}")
     return " | ".join(parts)
 
 
@@ -398,6 +459,12 @@ def request(dossier: dict) -> str:
         for c in s["together"]:
             lines.append(f"  together with {c['with']}: {c['times']} of {c['of']}")
         lines.append("  samples: " + " | ".join(dossier["samples"].get(s["state"], [])))
+    for b in dossier.get("by_owner") or []:
+        when = "; ".join(f"{t['days']} median {t['at']}" for t in b["time"])
+        lines.append(
+            f"Already automated → {b['state']}: {b['count']} times by the owner's {', '.join(b['by'])} "
+            f"({when}; not counted above, {int(b['share'] * 100)}% of all changes to {b['state']})"
+        )
     # the house mode only when the house has the helper: a condition on a missing entity is false
     # (stories run 2026-11-14, bug 1); dossiers saved before the flag existed count as without it
     conditions = (
@@ -411,8 +478,17 @@ def request(dossier: dict) -> str:
         "weekends, several triggers with trigger ids and a `choose` for on and off, a condition on "
         f"{conditions} when most episodes share it). A time line for Mon–Fri or Sat–Sun alone means "
         "the habit is not seen on the other days: add `condition: time` with those `weekday:` values "
-        "(mon, tue, wed, thu, fri or sat, sun). Use a sensor trigger only when its share and "
+        "(mon, tue, wed, thu, fri or sat, sun). Take weekdays only from those time lines, never from "
+        "the weekdays of the samples; an `every day` line gets no weekday condition. Use a sensor "
+        "trigger only when its share and "
         "precision are high; else the time. Leave out what happened only once or twice. In the "
         "rationale, name the counts you relied on and what you left out."
     )
+    if dossier.get("by_owner"):
+        lines.append(
+            "The owner's own automations already do part of this (the 'Already automated' lines). "
+            "Do not repeat it: cover only what they leave to the owner's hand, with triggers or "
+            "conditions that keep both from acting at the same time. You cannot change the owner's "
+            "automations; if the hand only fills a gap in one of them, say so in the rationale."
+        )
     return "\n".join(lines)
