@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
-import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
+
+from sim import clock
 
 ALLOWED_AUTOMATION_KEYS = {
     "id",
@@ -40,7 +41,7 @@ class HAError(Exception):
 
 def _dt(ts: Any = None) -> datetime:
     if ts is None:
-        return datetime.now(UTC)
+        return clock.now(UTC)
     if isinstance(ts, datetime):
         return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
     if isinstance(ts, int | float):
@@ -284,7 +285,7 @@ class HAState:
         else:
             raise HAError(400, "Service not found.")
         self.service_calls.append(
-            {"domain": domain, "service": service, "data": data, "ts": time.time(), "via": via}
+            {"domain": domain, "service": service, "data": data, "ts": clock.time(), "via": via}
         )
         return changed
 
@@ -447,7 +448,7 @@ class HAState:
                 }
             )
             self.set_state(
-                eid, state, {"friendly_name": name, **attrs}, ts=datetime.now(UTC) - timedelta(hours=1)
+                eid, state, {"friendly_name": name, **attrs}, ts=clock.now(UTC) - timedelta(hours=1)
             )
 
         light = {"supported_color_modes": ["brightness"], "color_mode": "brightness"}
@@ -624,7 +625,7 @@ def create_app(state: HAState | None = None) -> FastAPI:
         ha.validate_automation(cfg)
         ha.put_automation(cid, cfg)
         ha.config_writes.append(
-            {"method": "POST", "id": cid, "config": ha.automations[cid], "ts": time.time()}
+            {"method": "POST", "id": cid, "config": ha.automations[cid], "ts": clock.time()}
         )
         return {"result": "ok"}
 
@@ -633,7 +634,7 @@ def create_app(state: HAState | None = None) -> FastAPI:
         if cid not in ha.automations:
             raise HAError(404, "Resource not found")
         ha.delete_automation(cid)
-        ha.config_writes.append({"method": "DELETE", "id": cid, "config": None, "ts": time.time()})
+        ha.config_writes.append({"method": "DELETE", "id": cid, "config": None, "ts": clock.time()})
         return {"result": "ok"}
 
     @r.get("/config/script/config/{object_id}")

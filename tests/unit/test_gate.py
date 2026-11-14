@@ -168,3 +168,13 @@ def test_bad_cron_expressions_are_rejected_at_save_time(expr):
 
     with pytest.raises(ConfigError):
         parse_agent({**AGENT, "wake_rules": {"cron": [{"expr": expr}]}})
+
+
+async def test_flush_settles_the_debounce_at_once(tmp_path):
+    """The simulator jumps house time past the debounce (sim/days.py): flush wakes now, once."""
+    g = Gate(tmp_path, {"events": [{"entities": [MOTION], "debounce_s": 30}]})
+    g.change(MOTION, "off", "on")
+    assert g.gate.pending() == 1 and g.wakes == []
+    assert g.gate.flush() == 1
+    assert g.gate.pending() == 0 and len(g.wakes) == 1
+    assert g.gate.flush() == 0, "nothing left to settle"

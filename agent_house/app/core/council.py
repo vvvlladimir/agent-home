@@ -36,6 +36,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from ..ha.client import MODE_HELPER, MODE_OPTIONS
+from . import clock
 from .agents import AgentConfig
 
 log = logging.getLogger(__name__)
@@ -258,7 +259,7 @@ class Council:
                 log.exception("council tick failed")
 
     async def tick(self, now: datetime | None = None) -> None:
-        now = now or datetime.now().astimezone()
+        now = now or clock.local()
         self.board.prune()
         await self.evaluate_mode("time", now)
         if self.review is not None:
@@ -289,7 +290,7 @@ class Council:
     async def evaluate_mode(self, why: str, now: datetime | None = None) -> dict | None:
         if not getattr(self.settings, "auto_house_mode", False) or self.actuator is None:
             return None
-        desired = self.desired_mode(now or datetime.now().astimezone())
+        desired = self.desired_mode(now or clock.local())
         if desired is None or desired == self.mode or desired == self._requested:
             return None
         self._requested = desired

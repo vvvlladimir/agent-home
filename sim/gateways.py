@@ -63,9 +63,15 @@ LLAMA_ONLY = (
 class RequestLog:
     def __init__(self, size: int = 300):
         self.rows: deque[dict] = deque(maxlen=size)
+        self.total = 0  # every request since boot; the rows keep only the last `size`
+        self.failed: deque[dict] = deque(maxlen=2000)  # answers >= 400, kept longer for long runs
 
     def add(self, **row: Any) -> None:
-        self.rows.append({"ts": time.time(), **row})
+        entry = {"ts": time.time(), "seq": self.total, **row}
+        self.total += 1
+        self.rows.append(entry)
+        if int(row.get("status") or 0) >= 400:
+            self.failed.append(entry)
 
     def list(self) -> list[dict]:
         return list(reversed(self.rows))

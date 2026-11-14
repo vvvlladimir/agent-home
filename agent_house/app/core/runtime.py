@@ -25,6 +25,7 @@ from datetime import datetime
 
 import yaml
 
+from . import clock
 from .actuator import new_id
 from .agents import AgentConfig, resolve_scope
 from .llm import LLMDropped, LLMError, LLMTimeout, Priority
@@ -108,7 +109,7 @@ class AgentRuntime:
         self.store.execute(
             "UPDATE runs SET status='error', error='interrupted by a restart', ended=? "
             "WHERE status IN ('queued', 'running')",
-            (time.time(),),
+            (clock.time(),),
         )
 
     async def stop(self) -> None:
@@ -130,7 +131,7 @@ class AgentRuntime:
         """entity_id → how often this agent read or used it in the last 30 days (ranks its prompt)."""
         rows = self.store.query(
             "SELECT entity_id, uses FROM entity_usage WHERE agent_id=? AND last>?",
-            (agent_id, time.time() - 30 * 86400),
+            (agent_id, clock.time() - 30 * 86400),
         )
         return {row["entity_id"]: row["uses"] for row in rows}
 
@@ -138,7 +139,7 @@ class AgentRuntime:
         self.store.execute(
             "INSERT INTO entity_usage (agent_id, entity_id, uses, last) VALUES (?, ?, 1, ?) "
             "ON CONFLICT (agent_id, entity_id) DO UPDATE SET uses=uses+1, last=excluded.last",
-            (agent_id, entity_id, time.time()),
+            (agent_id, entity_id, clock.time()),
         )
 
     def memory(self, agent_id: str) -> dict[str, str]:
@@ -154,7 +155,7 @@ class AgentRuntime:
         budget = agent.limits.context_budget_tokens
         tools_tokens = estimate_tokens(json.dumps(TOOLS))
         memory = self.memory(agent.id)
-        now = now or datetime.now().astimezone()
+        now = now or clock.local()
         while True:
             table = (
                 "\n".join(f"- {e} ({self._name(e)}) [{self._label(agent, e)}]" for e in included) or "(none)"
@@ -242,7 +243,7 @@ class AgentRuntime:
             "status": "queued",
             "wake_source": source,
             "wake_reason": reason[:500],
-            "started": time.time(),
+            "started": clock.time(),
             "shadow": bool(replay) or self.effective_mode(agent) != "live",
             "replay_of": replay["id"] if replay else None,
             "priority": priority,
@@ -293,7 +294,7 @@ class AgentRuntime:
             stale = self.settings.llm_stale_after_s if self.settings else 120.0
             while waiting:
                 following = waiting.pop(0)
-                if time.time() - following["started"] > stale and following["wake_source"] != "manual":
+                if clock.time() - following["started"] > stale and following["wake_source"] != "manual":
                     self._finish(following, "dropped", error="stale: waited too long behind another run")
                     continue
                 self._start(following)
@@ -460,7 +461,7 @@ class AgentRuntime:
 
     # --- persistence ----------------------------------------------------------------------
     def _step(self, run: dict, kind: str, data: dict, **extra) -> None:
-        step = {"idx": len(run["trace"]), "ts": time.time(), "type": kind, "data": data}
+        step = {"idx": len(run["trace"]), "ts": clock.time(), "type": kind, "data": data}
         step.update({key: extra.get(key) for key in ("latency_ms", "tokens_in", "tokens_out")})
         run["trace"].append(step)
         self.store.execute(
@@ -475,7 +476,7 @@ class AgentRuntime:
     def _finish(self, run: dict, status: str, summary: str | None = None, error: str | None = None) -> None:
         if run.get("ended"):
             return
-        run["status"], run["ended"] = status, time.time()
+        run["status"], run["ended"] = status, clock.time()
         latency = int((run["ended"] - run["started"]) * 1000)
         self.store.execute(
             "UPDATE runs SET status=?, ended=?, latency_ms=?, summary=?, error=? WHERE id=?",
@@ -503,12 +504,12 @@ class AgentRuntime:
         if same is not None:  # QA-001: one alarm per thing, kept up to date, not one per report
             self.store.execute(
                 "UPDATE inbox SET ts=?, agent_id=?, run_id=?, summary=? WHERE id=?",
-                (time.time(), agent_id, run_id, summary, same),
+                (clock.time(), agent_id, run_id, summary, same),
             )
         else:
             self.store.execute(
                 "INSERT INTO inbox (ts, agent_id, run_id, severity, summary) VALUES (?, ?, ?, ?, ?)",
-                (time.time(), agent_id, run_id, severity, summary),
+                (clock.time(), agent_id, run_id, severity, summary),
             )
         self.feed.add(
             "report",
@@ -527,7 +528,7 @@ class AgentRuntime:
         rows = self.store.query(
             "SELECT id, summary FROM inbox WHERE severity='alarm' AND status='new' AND ts>=? "
             "ORDER BY id DESC",
-            (time.time() - ALARM_MERGE_S,),
+            (clock.time() - ALARM_MERGE_S,),
         )
         return next((r["id"] for r in rows if named & set(ENTITY_ID.findall(r["summary"]))), None)
 
@@ -547,7 +548,7 @@ class AgentRuntime:
         return {**_summary(rows[0]), "trace": json.loads(rows[0]["trace"])} if rows else None
 
     def runs_today(self) -> int:
-        midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        midnight = clock.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         return self.store.query("SELECT COUNT(*) AS n FROM runs WHERE started>=?", (midnight,))[0]["n"]
 
     async def wait(self, run_id: str, timeout: float = 300.0) -> dict | None:

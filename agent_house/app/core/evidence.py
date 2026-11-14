@@ -16,8 +16,9 @@ an entity as a time, …) lets the firing through, is listed in `unsupported` an
 
 from __future__ import annotations
 
-import time
 from datetime import UTC, datetime, timedelta
+
+from . import clock
 
 MAX_SAMPLES = 20
 SKIP_STATES = frozenset({"unavailable", "unknown"})
@@ -69,7 +70,7 @@ async def firings(
 ) -> tuple[list[dict], list[str]]:
     """([{ts, trigger}] newest first, unsupported notes) for every trigger firing in the window."""
     days = max(1, min(int(days), 30))
-    end = now or datetime.now(UTC)
+    end = now or clock.now(UTC)
     start = end - timedelta(days=days)
     unsupported: list[str] = []
     samples: list[dict] = []
@@ -250,7 +251,7 @@ def fully_supported(unsupported: list[str]) -> bool:
 
 async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None) -> dict:
     days = max(1, min(int(days), 30))
-    end = now or datetime.now(UTC)
+    end = now or clock.now(UTC)
     samples, unsupported = await firings(config, ha, days, end)
     cache: dict[str, list[dict]] = {}
     start = end - timedelta(days=days)
@@ -271,5 +272,5 @@ async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None)
         "would_fire": len(passed),
         "samples": passed[:MAX_SAMPLES],
         "conditions_evaluated": not checker.notes,
-        "computed": time.time(),
+        "computed": clock.time(),
     }

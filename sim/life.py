@@ -23,6 +23,7 @@ from collections import deque
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from sim import clock
 from sim.fake_ha import HAError, HAState
 from sim.house_gen import Stream
 
@@ -170,7 +171,7 @@ class Life:
             a, b = s.states
             if eid.startswith("event."):  # an event entity's state is the time it last fired
                 attrs = {**cur["attributes"], "event_type": self.rng.choice(s.states)}
-                self.ha.set_state(eid, datetime.now(UTC).isoformat(), attrs)
+                self.ha.set_state(eid, clock.now(UTC).isoformat(), attrs)
             else:
                 self.ha.physical_change(eid, b if cur["state"] == a else a)
 
@@ -243,7 +244,7 @@ class Life:
         self.ha.fire_event("automation_triggered", {"name": automation_eid, "entity_id": automation_eid})
         cur = self.ha.states.get(automation_eid)
         if cur:
-            cur["attributes"]["last_triggered"] = datetime.now(UTC).isoformat()
+            cur["attributes"]["last_triggered"] = clock.now(UTC).isoformat()
         self.automation_runs += 1
         for act in actions if isinstance(actions, list) else [actions]:
             if not isinstance(act, dict):
@@ -266,7 +267,7 @@ class Life:
         days = max(0, min(int(days), 30))
         ha, rng = self.ha, random.Random(1234)
         keep = {e: dict(s) for e, s in ha.states.items()}
-        start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days)
+        start = clock.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days)
         ops: list[tuple[datetime, str, str, str]] = []  # (ts, cause, entity, state)
 
         def at(day: datetime, hh: float, jitter_min: float = 15) -> datetime:
@@ -330,7 +331,7 @@ class Life:
                     ops.append(
                         (day + timedelta(hours=h, minutes=rng.randint(0, 59)), "physical", eid, f"{v:.1f}")
                     )
-        ops = [o for o in ops if o[2] in ha.states and o[0] < datetime.now(UTC) - timedelta(minutes=5)]
+        ops = [o for o in ops if o[2] in ha.states and o[0] < clock.now(UTC) - timedelta(minutes=5)]
         ops.sort(key=lambda o: o[0])
         touched = {o[2] for o in ops}
         before = (start - timedelta(seconds=1)).isoformat()
@@ -348,7 +349,7 @@ class Life:
                     ha.run_automation(automation, [(eid, state)], ts=ts)
                 else:
                     ha.physical_change(eid, state, ts=ts)
-            now = datetime.now(UTC).isoformat()
+            now = clock.now(UTC).isoformat()
             for eid in touched:
                 rows = ha.history.setdefault(eid, [])
                 if ha.states[eid]["state"] != keep[eid]["state"]:  # back to the live state, reported now

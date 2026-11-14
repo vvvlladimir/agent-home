@@ -130,6 +130,22 @@ request timeouts are raised to 300 s in this mode; at most `AH_SIM_CLAUDE_PARALL
 at once per polygon. It all counts against the account's Claude usage (a Pro window can run out
 with six roles), not `daily_budget_eur`.
 
+## 4b. Living days in house time (D32)
+
+`python -m sim.polygon days --days 30 --seed 7` boots the polygon (fakes by default, shadow), plays a
+seeded household for 30 days and runs the same checks as a scenario. The add-on and the fake HA
+share one house clock (`app/core/clock.py`, offset 0 in production); the player jumps it from event
+to event, settles the wake gate's debounce, ticks the council (daily review, manager, house mode)
+every 15 house minutes and waits for every run. With the fakes a month takes about two minutes;
+with real models, as long as their calls.
+
+The household (`sim/household.py`) is not a machine: bedtime is log-normal around 23:15 with a
+spread of about 45 min and a long late tail, weekends shift by 1–2 h, and there are sick days,
+guest evenings, a trip of a few days, airing while heating and forgotten lights. Sensors lie rarely,
+in the kinds the fault literature names: ghost motion, stuck-at, spike, drift, dropout, a flapping
+tracker, a bouncing door contact. Every event carries a tag (`routine`, `human`, `fault:<kind>`),
+the ground truth for the checks. `--chaos calm` turns all of it off for comparison.
+
 ## 5. Metrics: one number for the whole program, done properly
 
 Source: the logbook changes HA records with their cause (`core/insights.py`). Every automated

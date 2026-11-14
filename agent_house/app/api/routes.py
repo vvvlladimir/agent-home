@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import __version__
 from ..config import RuntimeSettings, redact_url, save_runtime
-from ..core import profiles
+from ..core import clock, profiles
 from ..core.bench import BenchBusy
 from ..core.monitor import JetsonError
 from ..core.policy import READ_ONLY_DOMAINS, resolve_tier
@@ -35,7 +35,7 @@ def build_status(ctx) -> dict:
     kill = ctx.safety.kill
     return {
         "version": __version__,
-        "time": datetime.now(UTC).isoformat(),
+        "time": clock.now(UTC).isoformat(),
         "mode": ctx.safety.mode,
         "kill_switch": kill,
         "ha": ctx.ha.status(),
@@ -327,7 +327,7 @@ async def get_diagnostics(request: Request) -> Response:
     manifest = {
         "schema_version": 1,
         "kind": "diagnostics_bundle",
-        "created": datetime.now(UTC).isoformat(),
+        "created": clock.now(UTC).isoformat(),
         "app_version": __version__,
         "python": platform.python_version(),
         "arch": platform.machine(),

@@ -30,7 +30,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-from sim import control, house_gen
+from sim import clock, control, house_gen
 from sim.run import ROOT, Ports, Stack, boot
 from sim.scenarios import SCENARIOS
 from sim.sim_config import ROOM_BACKENDS, SimConfig
@@ -179,7 +179,7 @@ def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> di
     calls0 = stack.on_ha(lambda: len(stack.ha.service_calls))
     writes0 = stack.on_ha(lambda: len(stack.ha.config_writes))
     gw0 = {(r["ts"], r["path"]) for r in stack.sim.gw.log.list()}
-    t0 = time.time()
+    t0 = clock.time()
 
     def start():
         steps = SCENARIOS[name][1](stack.ha)
@@ -205,7 +205,7 @@ def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> di
         if time.monotonic() > deadline:
             timed_out = True
         time.sleep(0.5)
-    t1 = time.time()
+    t1 = clock.time()
 
     runs = [app.get(f"/api/runs/{r['id']}") for r in _runs_since(app, t0)]
     run_ids = {r["id"] for r in runs}
@@ -461,6 +461,44 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_days(args: argparse.Namespace) -> int:
+    """Live `--days` days of a household in house time (sim/days.py), then the same checks."""
+    from sim import days as days_mod  # noqa: PLC0415
+    from sim import household  # noqa: PLC0415
+
+    spec, cfg, checks, out_dir = _prepare(args)
+    stack, _app, meta = _start(args, spec, cfg, checks, out_dir / "data")
+    try:
+        chaos = household.Chaos.calm() if args.chaos == "calm" else household.Chaos()
+        events = household.plan(args.days, days_mod.first_midnight(), seed=args.seed, chaos=chaos)
+        print(f"polygon: {args.days} days, {household.summary(events)}", file=sys.stderr, flush=True)
+        result = days_mod.play_days(
+            stack, events, progress=lambda day, n: print(f"  {day}  {n} events", file=sys.stderr, flush=True)
+        )
+    finally:
+        stack.stop()
+    result["checks"] = check(result, meta["mode"], {})
+    result["ok"] = all(c["ok"] for c in result["checks"])
+    result.pop("entities")
+    report = {"meta": {**meta, "out_dir": str(out_dir), "days": args.days, "seed": args.seed,
+                       "chaos": args.chaos}, "scenarios": [result], "ok": result["ok"]}  # fmt: skip
+    out = args.out or out_dir / "report.json"
+    out.write_text(json.dumps(report, indent=2, default=str))
+    for c in result["checks"]:
+        mark = "ok  " if c["ok"] else "FAIL"
+        print(f"  {mark} {c['name']}: {c['detail']}" + ("" if c["ok"] else f" {c['items']}"), file=sys.stderr)
+    print(
+        f"  {result['house_days']} house days in {result['duration_s']} s: runs {len(result['runs'])}, "
+        f"actions {len(result['actions'])}, proposals {len(result['proposals'])}, "
+        f"llm requests {result['llm_requests_total']} ({len(result['llm_requests'])} failed), "
+        f"stuck {len(result['stuck'])}",
+        file=sys.stderr,
+    )
+    failed = [c["name"] for c in result["checks"] if not c["ok"]]
+    print(json.dumps({"ok": result["ok"], "report": str(out), "failed": failed}))
+    return 0 if result["ok"] else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m sim.polygon", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -473,13 +511,20 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--shared", action="store_true", help="one house for all scenarios (state carries over)")
     _common(run)
     _common(sub.add_parser("serve", help="boot the polygon and keep it up; prints the URLs"))
+    days = sub.add_parser("days", help="live N days of a household in house time, then check")
+    days.add_argument("--days", type=int, default=7)
+    days.add_argument("--seed", type=int, default=7)
+    days.add_argument("--chaos", choices=("lifelike", "calm"), default="lifelike")
+    days.add_argument("--out", type=Path, help="report path (default <out-dir>/report.json)")
+    _common(days)
+    days.set_defaults(rate=0.0, backfill_days=14)
     args = ap.parse_args(argv)
     if args.cmd == "list":
         for name, (desc, _fn) in SCENARIOS.items():
             print(f"{name:22} {desc}")
         return 0
     try:
-        return cmd_run(args) if args.cmd == "run" else cmd_serve(args)
+        return {"run": cmd_run, "serve": cmd_serve, "days": cmd_days}[args.cmd](args)
     except SetupError as err:
         print(f"polygon: setup failed: {err}", file=sys.stderr)
         return 2

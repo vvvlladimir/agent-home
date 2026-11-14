@@ -19,6 +19,7 @@ import socket
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -73,6 +74,7 @@ class Stack:
     house: dict
     env: dict[str, str]
     servers: list[ServerThread] = field(default_factory=list)
+    addon: Any = None  # the add-on's FastAPI app when served in-process (app.state.ctx: its context)
 
     @property
     def app_url(self) -> str:  # the add-on as the browser sees it, through the fake ingress
@@ -178,7 +180,8 @@ def boot(
             from app.config import load_settings  # noqa: PLC0415  (needs agent_house on the path)
             from app.main import create_app  # noqa: PLC0415
 
-            start(create_app(load_settings(env)), ports.addon)
+            stack.addon = create_app(load_settings(env))
+            start(stack.addon, ports.addon)
         return stack
     except BaseException:
         for s in reversed(started):

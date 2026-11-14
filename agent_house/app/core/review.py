@@ -26,7 +26,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from . import habits
+from . import clock, habits
 from .insights import _targets
 from .lifecycle import action_entities
 from .llm import Priority
@@ -84,7 +84,7 @@ class Review:
         finally:
             self.running = False
         funnel = scan.get("habits") or {}
-        self.store.set(FIRST_KEY, {"ts": time.time(), "drafted": len(drafted), "habits": funnel})
+        self.store.set(FIRST_KEY, {"ts": clock.time(), "drafted": len(drafted), "habits": funnel})
         text = (
             f"First look at your last {funnel.get('days', '?')} days: {funnel.get('relevant', 0)} of "
             f"{funnel.get('entities', 0)} entities are devices you switch by hand often enough, "
@@ -108,7 +108,7 @@ class Review:
         if self.orch.safety.kill_engaged:
             raise OrchestratorError("kill_switch", "the kill switch is engaged")
         self.running = True
-        now = now or datetime.now().astimezone()
+        now = now or clock.local()
         self.store.set("review_last_day", now.date().isoformat())
         self.council.wake_fired("daily_review")
         try:
@@ -139,7 +139,7 @@ class Review:
                 "scan": {k: v for k, v in scan.items() if k != "findings"},
                 "findings": len(scan.get("findings") or []),
             }
-            self.store.set("review_last", {"ts": time.time(), "summary": text[:2000], "run_id": run_id,
+            self.store.set("review_last", {"ts": clock.time(), "summary": text[:2000], "run_id": run_id,
                                            "drafted": len(drafted)})  # fmt: skip
             return result
         finally:

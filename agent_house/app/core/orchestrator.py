@@ -26,10 +26,9 @@ import asyncio
 import json
 import logging
 import math
-import time
 from dataclasses import dataclass, field
-from datetime import datetime
 
+from . import clock
 from .actuator import new_id
 from .agents import is_noise, is_room_sensor
 from .lifecycle import LifecycleError
@@ -193,7 +192,7 @@ class Budget:
 
     @staticmethod
     def day() -> str:
-        return datetime.now().astimezone().date().isoformat()
+        return clock.local().date().isoformat()
 
     def today(self) -> dict:
         row = self.store.query(
@@ -949,7 +948,7 @@ class Orchestrator:
     def house_summary(self) -> str:
         """What the orchestrator knows without asking: rooms, agents, open work. Local data only."""
         areas = ", ".join(sorted(self.ha.registry.areas)) or "none"
-        lines = [f"Time: {datetime.now().astimezone():%Y-%m-%d %H:%M (%a)}", f"Areas: {areas}"]
+        lines = [f"Time: {clock.local():%Y-%m-%d %H:%M (%a)}", f"Areas: {areas}"]
         agents = self.agents_rt.agents.list() if self.agents_rt else []
         if agents:
             lines.append(
@@ -1065,7 +1064,7 @@ class Orchestrator:
         """A room agent's idea, drafted in the background. False when too many are waiting."""
         if len(self._tasks) >= MAX_QUEUED_DRAFTS or self.safety.kill_engaged:
             return False
-        today = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        today = clock.local().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         drafted = self.store.query(
             "SELECT COUNT(*) AS n FROM runs WHERE agent_id='orchestrator' AND started>=? "
             "AND wake_reason LIKE ?",
@@ -1106,7 +1105,7 @@ class _Trace:
     def __init__(self, orch: Orchestrator, reason: str, source: str, run_id=None, origin=None) -> None:
         self.store = orch.store
         self.run_id = run_id or new_id("r")
-        self.started = time.time()
+        self.started = clock.time()
         self.trace: list[dict] = []
         self.steps = self.tokens_in = self.tokens_out = 0
         self.provider = None
@@ -1122,7 +1121,7 @@ class _Trace:
         self.trace.append(
             {
                 "idx": len(self.trace),
-                "ts": time.time(),
+                "ts": clock.time(),
                 "type": kind,
                 "data": data,
                 **{k: extra.get(k) for k in ("latency_ms", "tokens_in", "tokens_out")},
@@ -1160,7 +1159,7 @@ class _Trace:
         )
 
     def finish(self, status: str, summary: str | None = None, error: str | None = None) -> None:
-        ended = time.time()
+        ended = clock.time()
         self.store.execute(
             "UPDATE runs SET status=?, ended=?, latency_ms=?, summary=?, error=? "
             "WHERE id=? AND ended IS NULL",

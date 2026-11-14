@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -19,6 +18,7 @@ from fnmatch import fnmatchcase
 
 from croniter import croniter
 
+from . import clock as house
 from .agents import AgentConfig, EventRule
 
 log = logging.getLogger(__name__)
@@ -65,8 +65,8 @@ class EventGate:
         store,
         scope_of: Callable[[AgentConfig], set[str]],
         wake: Callable[..., object],
-        clock: Callable[[], float] = time.monotonic,
-        wall: Callable[[], float] = time.time,
+        clock: Callable[[], float] = house.monotonic,  # cooldowns, hourly caps: house time
+        wall: Callable[[], float] = house.time,
     ) -> None:
         self.agents, self.feed, self.store = agents, feed, store
         self.scope_of, self.wake, self.clock, self.wall = scope_of, wake, clock, wall
@@ -149,6 +149,18 @@ class EventGate:
         if rule.reason:
             reason += f" {rule.reason}"
         self._fire(agent, "event", reason, rule.priority, entity_id)
+
+    def flush(self) -> int:
+        """Settle every pending debounce now; the count settled. For the simulator (sim/days.py),
+        which jumps house time past the debounce instead of waiting for it in real time."""
+        keys = list(self._timers)
+        for key in keys:
+            self._timers[key].cancel()
+            self._settled(key)
+        return len(keys)
+
+    def pending(self) -> int:
+        return len(self._timers)
 
     # --- caps -----------------------------------------------------------------------------
     def _recent(self, agent_id: str) -> deque[float]:

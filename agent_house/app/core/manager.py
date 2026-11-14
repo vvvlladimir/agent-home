@@ -30,8 +30,8 @@ import logging
 import re
 import time
 from collections import deque
-from datetime import datetime
 
+from . import clock
 from .agents import NEVER_OWNED, is_noise
 from .council import MODE_ENTITY, ORCHESTRATOR
 from .insights import ACT_DOMAINS
@@ -438,5 +438,5 @@ class Manager:
                 mode=getattr(self.settings, "orchestrator_mode", "shadow"),
             ),
             "weak": [{"ha_id": w["ha_id"], "title": w.get("title")} for w in self.weak],
-            "checked": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "checked": clock.local().isoformat(timespec="seconds"),
         }

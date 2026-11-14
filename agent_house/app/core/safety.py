@@ -6,11 +6,12 @@ exactly "live" means shadow.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC
 from pathlib import Path
 
 import yaml
 
+from . import clock
 from .policy import effective_policy
 
 KILL_EVENT = "agent_house_kill_switch"
@@ -45,7 +46,7 @@ class Safety:
             "kill_switch",
             {
                 "engaged": engaged,
-                "since": datetime.now(UTC).isoformat() if engaged else None,
+                "since": clock.now(UTC).isoformat() if engaged else None,
                 "reason": (reason or f"set in {source}")[:200] if engaged else None,
             },
         )

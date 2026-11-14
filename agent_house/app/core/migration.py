@@ -17,11 +17,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 
 import yaml
 
 from ..ha.client import AUTOMATION_PREFIX, HAError
+from . import clock
 from .actuator import new_id
 from .evidence import firings, fully_supported
 from .lifecycle import normalize
@@ -267,7 +267,7 @@ class Migration:
                 "updated=excluded.updated",
                 (
                     original_id, item["source"], item["ref"], item["entity_id"], item["title"], enabled,
-                    summarize(item["config"]), config, time.time(),
+                    summarize(item["config"]), config, clock.time(),
                 ),
             )  # fmt: skip
         # Gone from HA or from the share: forget it, unless we are the one who switched it off.

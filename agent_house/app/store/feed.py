@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from collections import deque
 
+from ..core import clock
 from .db import Store
 
 EPHEMERAL_KINDS = {"state"}
@@ -26,7 +26,7 @@ class Feed:
             row["data"] = json.loads(row["data"]) if row["data"] else None
             self.items.append(row)
         # ids stay monotonic across restarts and across the persisted/ephemeral split
-        self._next_id = max(int(time.time() * 1000), (rows[0]["id"] + 1) if rows else 0)
+        self._next_id = max(int(clock.time() * 1000), (rows[0]["id"] + 1) if rows else 0)
 
     def add(
         self,
@@ -41,7 +41,7 @@ class Feed:
     ) -> dict:
         item = {
             "id": self._next_id,
-            "ts": time.time(),
+            "ts": clock.time(),
             "kind": kind,
             "level": level,
             "summary": summary[:500],

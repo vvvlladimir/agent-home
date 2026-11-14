@@ -6,9 +6,9 @@ Tool results are small JSON objects with `ok`; errors are sentences the model ca
 
 from __future__ import annotations
 
-import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, timedelta
 
+from . import clock
 from .benchkit import TOOLS as BASE_TOOLS
 from .benchkit import _tool, normalize_call
 
@@ -190,7 +190,7 @@ class ToolBox:
             return error
         hours = args.get("hours", 6)
         hours = min(48.0, max(1.0, float(hours))) if isinstance(hours, int | float) else 6.0
-        end = datetime.now(UTC)
+        end = clock.now(UTC)
         try:
             rows = await self.rt.ha.history(
                 entity_id, (end - timedelta(hours=hours)).isoformat(), end.isoformat()
@@ -346,7 +346,7 @@ class ToolBox:
         self.rt.store.execute(
             "INSERT INTO memory (agent_id, key, value, ts) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(agent_id, key) DO UPDATE SET value=excluded.value, ts=excluded.ts",
-            (self.agent.id, key, value, time.time()),
+            (self.agent.id, key, value, clock.time()),
         )
         return {"ok": True, "status": "saved"}
 

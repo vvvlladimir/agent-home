@@ -35,11 +35,11 @@ import difflib
 import json
 import logging
 import re
-import time
 
 import yaml
 
 from ..ha.client import AUTOMATION_PREFIX, HAError, guard_ours
+from . import clock
 from .actuator import new_id
 from .policy import resolve_tier
 
@@ -407,7 +407,7 @@ class Lifecycle:
         title = (title or (config or {}).get("alias") or "Untitled automation").strip()[:120]
         if ha_id is None:
             ha_id = self._new_ha_id(title)
-        now = time.time()
+        now = clock.time()
         proposal = {
             "id": new_id("p"),
             "created": now,
@@ -475,7 +475,7 @@ class Lifecycle:
                 to_yaml(config) if config is not None else text,
                 json.dumps(checks),
                 "draft" if all(c["ok"] for c in checks) else "blocked",
-                time.time(),
+                clock.time(),
                 proposal_id,
             ),
         )
@@ -491,7 +491,7 @@ class Lifecycle:
         self._open(proposal_id)
         self.store.execute(
             "UPDATE proposals SET status='rejected', note=?, updated=? WHERE id=?",
-            ((note or "")[:500] or None, time.time(), proposal_id),
+            ((note or "")[:500] or None, clock.time(), proposal_id),
         )
         self.feed.add("proposal", f"Proposal rejected: {self.get(proposal_id)['title']}")
         return self.get(proposal_id)
@@ -533,7 +533,7 @@ class Lifecycle:
         self.store.execute(
             "INSERT INTO automation_versions (ha_id, version, created, yaml, proposal_id, note) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (ha_id, version, time.time(), text, proposal_id, note),
+            (ha_id, version, clock.time(), text, proposal_id, note),
         )
         self.store.execute(
             "INSERT INTO deployed (ha_id, title, current_version, enabled, removed, origin_agent, run_id) "
@@ -551,7 +551,7 @@ class Lifecycle:
         # Claim it: a double click must not deploy twice.
         claimed = self.store.execute(
             "UPDATE proposals SET status='approved', updated=? WHERE id=? AND status='draft'",
-            (time.time(), proposal_id),
+            (clock.time(), proposal_id),
         )
         if claimed.rowcount != 1:
             raise LifecycleError("conflict", "the proposal is already being approved")
@@ -607,7 +607,7 @@ class Lifecycle:
             (proposal["ha_id"], proposal_id),
         )
         self.store.execute(
-            "UPDATE proposals SET status='deployed', updated=? WHERE id=?", (time.time(), proposal_id)
+            "UPDATE proposals SET status='deployed', updated=? WHERE id=?", (clock.time(), proposal_id)
         )
         self.feed.add(
             "deploy",

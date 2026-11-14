@@ -25,13 +25,12 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ..ha.client import AUTOMATION_PREFIX
-from . import habits
+from . import clock, habits
 from .habits import ACT_DOMAINS
 
 log = logging.getLogger(__name__)
@@ -241,7 +240,7 @@ class Insights:
         self.store, self.feed, self.ha, self.lifecycle, self.settings = store, feed, ha, lifecycle, settings
 
     async def changes(self, days: int, now: datetime | None = None) -> list[Change]:
-        end = now or datetime.now(UTC)
+        end = now or clock.now(UTC)
         entries: list[dict] = []
         for back in range(days, 0, -1):  # one request per day keeps each answer small
             start = end - timedelta(days=back)
@@ -277,7 +276,7 @@ class Insights:
         changes = await self.changes(days, now)
         area_of = self.ha.registry.area_of
         ours = self.ours()
-        recent = (now or datetime.now(UTC)).timestamp() - FEEDBACK_DAYS * 86400
+        recent = (now or clock.now(UTC)).timestamp() - FEEDBACK_DAYS * 86400
         latest = [c for c in changes if c.ts >= recent]
         automated = {e for info in ours.values() for e in _targets(self.lifecycle, info["ha_id"])}
         policy = getattr(getattr(self.lifecycle, "safety", None), "policy", None)
@@ -310,7 +309,7 @@ class Insights:
             "findings": [f for f in found if f],
             "feedback": [{k: i[k] for k in ("ha_id", "acted", "undone", "rate", "flagged")} for i in undos],
             "habits": {**funnel, "days": days, "min_days": min_days},
-            "scanned": time.time(),
+            "scanned": clock.time(),
         }
         self.store.set("insights_last_scan", {k: v for k, v in summary.items() if k != "findings"})
         self.feed.add(
@@ -322,7 +321,7 @@ class Insights:
         return summary
 
     def _save(self, key, kind, title, request, data, room, ha_id=None) -> dict:
-        now = time.time()
+        now = clock.time()
         clean = {k: v for k, v in data.items() if k != "score"}
         rows = self.store.query("SELECT status FROM findings WHERE id=?", (key,))
         if rows:
@@ -353,7 +352,7 @@ class Insights:
         sets = ", ".join(f"{k}=?" for k in ("status", *extra))
         self.store.execute(
             f"UPDATE findings SET {sets}, updated=? WHERE id=?",
-            (status, *extra.values(), time.time(), finding_id),
+            (status, *extra.values(), clock.time(), finding_id),
         )
         return self.get(finding_id)
 

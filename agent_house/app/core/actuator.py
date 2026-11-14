@@ -15,6 +15,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
+from . import clock
 from .policy import Decision, decide
 
 log = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ class ApprovalConflict(Exception):
 
 def new_id(prefix: str) -> str:
     """Sortable by creation time, so `id < before` pages through history."""
-    return f"{prefix}_{int(time.time() * 1000):011x}{secrets.token_hex(3)}"
+    return f"{prefix}_{int(clock.time() * 1000):011x}{secrets.token_hex(3)}"
 
 
 class RateWindow:
