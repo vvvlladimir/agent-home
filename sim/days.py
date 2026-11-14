@@ -99,14 +99,23 @@ class Driver:
         self.acall(lambda: self.ctx.council.tick(clock.local()))
 
 
+def quiet_addon_loops() -> None:
+    """Before the add-on boots: its council loop would tick on real time next to the player's
+    checkpoints and start a review twice. In-process only; the player ticks the council itself."""
+    from app.core import council  # noqa: PLC0415
+
+    council.TICK_S = 10**9
+
+
 def first_midnight() -> object:
     """The next local midnight in house time: day 0 of the plan."""
     now = clock.local()
     return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def play_days(stack, events: list[Event], progress=None) -> dict:
-    """Play `events` (sorted) and return what happened, in the shape `polygon.check` reads."""
+def play_days(stack, events: list[Event], start: float, days: int, progress=None) -> dict:
+    """Play `events` (sorted) from house time `start` (a local midnight) for `days` days, and on to
+    the next morning so the last day's review runs; return what happened, as `polygon.check` reads."""
     drv = Driver(stack)
     ha = stack.ha
     t0 = clock.time()
@@ -117,14 +126,25 @@ def play_days(stack, events: list[Event], progress=None) -> dict:
     owners_before = stack.on_ha(lambda: _owner_automations(ha))
     wall0, applied, skipped, unseen, stuck = time.monotonic(), 0, 0, 0, []
     step = CHECKPOINT_MIN * 60
-    next_check = (t0 // step + 1) * step
+    clock.travel_to(start)  # straight to day 0: no half day before the plan
+    next_check = start
+    until = start + days * 86400 + 6 * 3600  # the morning after: the last day's review at 04:30
     last_day = None
+    feed: dict[int, dict] = {}  # the add-on keeps the last 1000 feed rows; a month has more
+
+    def keep_feed() -> None:
+        for row in drv.call(lambda: drv.ctx.feed.recent(limit=1000)):
+            if row.get("ts", 0) >= t0:
+                feed.setdefault(row["id"], row)
+
     for ev in events:
         while next_check <= ev.ts:  # the work the real-time loops would have done meanwhile
             clock.travel_to(next_check)
             drv.checkpoint()
             if not drv.settle():
                 stuck.append({"ts": next_check, "at": "checkpoint"})
+            if next_check % 3600 == 0:
+                keep_feed()
             next_check += step
         clock.travel_to(ev.ts)
         if not drv.apply(ev):
@@ -139,9 +159,13 @@ def play_days(stack, events: list[Event], progress=None) -> dict:
         if progress and day != last_day:
             progress(day, applied)
             last_day = day
-    clock.travel_to(next_check)
-    drv.checkpoint()
-    drv.settle()
+    while next_check <= until:
+        clock.travel_to(next_check)
+        drv.checkpoint()
+        if not drv.settle():
+            stuck.append({"ts": next_check, "at": "checkpoint"})
+        next_check += step
+    keep_feed()
     t1 = clock.time()
 
     ctx = drv.ctx
@@ -155,7 +179,7 @@ def play_days(stack, events: list[Event], progress=None) -> dict:
         "events": [_row(e) for e in events],
         "started": t0,
         "ended": t1,
-        "house_days": round((t1 - t0) / 86400, 2),
+        "house_days": days,
         "duration_s": round(time.monotonic() - wall0, 1),
         "applied": applied,
         "skipped_missing_entity": skipped,
@@ -164,7 +188,9 @@ def play_days(stack, events: list[Event], progress=None) -> dict:
         "timed_out": bool(stuck),
         "runs": runs,
         "actions": actions,
-        "feed": [e for e in drv.call(lambda: ctx.feed.recent(limit=100_000)) if e.get("ts", 0) >= t0],
+        "feed": sorted(feed.values(), key=lambda e: e["id"]),
+        "caps": drv.call(lambda: {a.id: a.wake_rules.max_wakes_per_hour for a in ctx.agents.list()}),
+        "review_expected": bool(drv.call(lambda: getattr(ctx.runtime, "daily_review_at", "04:30"))),
         "inbox": [i for i in drv.call(lambda: ctx.agents_rt.inbox(limit=100_000)) if i.get("ts", 0) >= t0],
         "proposals": drv.call(lambda: ctx.lifecycle.list()),
         "ha_calls": stack.on_ha(lambda: [c for c in ha.service_calls[calls0:] if c.get("via") == "api"]),

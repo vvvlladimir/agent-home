@@ -146,6 +146,11 @@ in the kinds the fault literature names: ghost motion, stuck-at, spike, drift, d
 tracker, a bouncing door contact. Every event carries a tag (`routine`, `human`, `fault:<kind>`),
 the ground truth for the checks. `--chaos calm` turns all of it off for comparison.
 
+On top of the safety checks, `sim/invariants.py` checks the whole lived trace, each failure with the
+house time it was first seen: proposals name only entities HA has and act on no T3 entity; the inbox
+claims no approval that does not exist and, in shadow, no change that was only recorded; one open
+alarm per entity; the hourly wake cap holds in house time; the daily review ran every day.
+
 ## 5. Metrics: one number for the whole program, done properly
 
 Source: the logbook changes HA records with their cause (`core/insights.py`). Every automated

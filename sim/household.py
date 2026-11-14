@@ -145,7 +145,7 @@ def plan(days: int, start: datetime, seed: int = 7, chaos: Chaos | None = None) 
             add(t + timedelta(minutes=rng.uniform(60, 120)), HEATER, "off", "user", "human")
         _climate(day, d, c, add, rng)
         _faults(day, c, add, rng)
-    return sorted(out)
+    return _respect_faults(sorted(out))
 
 
 def summary(events: list[Event]) -> dict:
@@ -153,6 +153,22 @@ def summary(events: list[Event]) -> dict:
     for e in events:
         tags[e.tag] = tags.get(e.tag, 0) + 1
     return {"events": len(events), "tags": dict(sorted(tags.items()))}
+
+
+def _respect_faults(events: list[Event]) -> list[Event]:
+    """A stuck, dropped or spiking sensor reports nothing else until its lie ends: drop the routine
+    readings of that entity inside the window, so the tags stay true ground truth."""
+    windows: dict[str, list[tuple[float, float]]] = {}
+    opened: dict[tuple[str, str], float] = {}
+    for e in events:
+        if e.tag in ("fault:stuck", "fault:dropout", "fault:spike"):
+            key = (e.entity_id, e.tag)
+            if key in opened:
+                windows.setdefault(e.entity_id, []).append((opened.pop(key), e.ts))
+            else:
+                opened[key] = e.ts
+    return [e for e in events if e.tag.startswith("fault:")
+            or not any(a < e.ts < b for a, b in windows.get(e.entity_id, ()))]  # fmt: skip
 
 
 # --- pieces -----------------------------------------------------------------------------------------

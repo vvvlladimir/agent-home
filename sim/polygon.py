@@ -467,17 +467,22 @@ def cmd_days(args: argparse.Namespace) -> int:
     from sim import household  # noqa: PLC0415
 
     spec, cfg, checks, out_dir = _prepare(args)
+    days_mod.quiet_addon_loops()
     stack, _app, meta = _start(args, spec, cfg, checks, out_dir / "data")
     try:
         chaos = household.Chaos.calm() if args.chaos == "calm" else household.Chaos()
-        events = household.plan(args.days, days_mod.first_midnight(), seed=args.seed, chaos=chaos)
+        start = days_mod.first_midnight()
+        events = household.plan(args.days, start, seed=args.seed, chaos=chaos)
         print(f"polygon: {args.days} days, {household.summary(events)}", file=sys.stderr, flush=True)
-        result = days_mod.play_days(
-            stack, events, progress=lambda day, n: print(f"  {day}  {n} events", file=sys.stderr, flush=True)
-        )
+        def progress(day, n):
+            print(f"  {day}  {n} events", file=sys.stderr, flush=True)
+
+        result = days_mod.play_days(stack, events, start.timestamp(), args.days, progress=progress)
     finally:
         stack.stop()
-    result["checks"] = check(result, meta["mode"], {})
+    from sim.invariants import check_trace  # noqa: PLC0415
+
+    result["checks"] = check(result, meta["mode"], {}) + check_trace(result, meta["mode"], result.get("caps"))
     result["ok"] = all(c["ok"] for c in result["checks"])
     result.pop("entities")
     report = {"meta": {**meta, "out_dir": str(out_dir), "days": args.days, "seed": args.seed,
