@@ -56,7 +56,8 @@ roles:
       switch presses, repeating the same habit at least twice. Check whether the house works out by
       itself what to do: does it notice your habits and propose automations, fix or remove the
       ones that misfire, warn you about what matters (window open while heating, a leak, lights on
-      with nobody home) and keep quiet about what does not? Ask it in /api/chat what it would do for
+      with nobody home) and keep quiet about what does not? Habits are found by the daily review over
+      the backfilled history (POST /api/council/review runs it now). Ask it in /api/chat what it would do for
       you, read /api/inbox, /api/proposals, /api/manager and /api/metrics, and decide each proposal
       as you would at home. You may switch one room live after reading its shadow log, if you trust
       it. Report what to fix, what to add and what to remove from a real owner's point of view.
