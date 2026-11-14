@@ -19,9 +19,25 @@ roles:
     focus: [migration, parity, approve, reject, owner automations]
   fussy_tenant:
     traits: {patience: medium, cooperation: low, skill: medium, slips: sometimes}
+    seed:  # one of our automations is deployed before you start (sim.qa up), so there is something to undo
+      - title: Living room lamp on motion
+        rationale: polygon seed for fussy_tenant
+        yaml: |
+          alias: Living room lamp on motion
+          triggers:
+            - trigger: state
+              entity_id: binary_sensor.living_room_motion
+              to: "on"
+          actions:
+            - action: light.turn_on
+              target:
+                entity_id: light.living_room_lamp
     goal: >
-      Live in the house through the panel (cause: user). Every time an agent or one of our
-      automations changes something, undo it by hand within a minute about half the time. Then
+      Live in the house through the panel (cause: user). One of our automations is already
+      deployed (GET /api/automations): living room motion turns the living room lamp on. Set
+      binary_sensor.living_room_motion off, then on, through the panel at least eight times; each
+      time the lamp comes on, switch it off by hand (cause: user) within a minute about half the time
+      and leave it the other half. Do the same with any change an agent makes. Then
       read /api/metrics and check that precision drops, the undone changes are counted, and the
       house manager or the review proposes a change to the automation. Accept one proposal, reject one.
     focus: [metrics, undo feedback, manager proposals, change of an existing automation]

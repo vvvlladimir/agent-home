@@ -67,7 +67,9 @@ modes (false positives, over-cooperative simulated users).
 1. **Isolation.** Each role gets its own `sim.polygon serve`: own ports, data dir and house. It
    writes only into `.agent-logs/qa/<stamp>/<role>/`.
 2. **Explicit personas** (`sim/qa/roles.yaml`): goal, focus and tunable traits (patience,
-   cooperation, skill, slips). Hidden "cooperative default" users inflate success rates; the traits
+   cooperation, skill, slips). A role's optional `seed` lists owner drafts that `sim.qa up` (and
+   `verify-up` for its findings) creates and approves over the owner API before the tester starts,
+   so `fussy_tenant` has one of our automations deployed to undo. Hidden "cooperative default" users inflate success rates; the traits
    make them impatient, careless or hostile on purpose.
 3. **Black box.** A tester uses the owner's API and the panel (its "hands", `cause: user`), and
    reads `contracts/openapi.yaml`, never the source. It does not change code.

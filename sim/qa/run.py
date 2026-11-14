@@ -188,6 +188,23 @@ def tester(prompt: str, cwd: Path, model: str, max_turns: int, effort: str | Non
     return subprocess.Popen(cmd, cwd=cwd, stdout=(cwd / "session.json").open("w"), stderr=subprocess.STDOUT)
 
 
+def seed(meta: dict, spec: dict) -> list[str]:
+    """A role's `seed`: owner drafts created and approved over the owner API, so its goal has
+    something to act on (e.g. one of our automations deployed for `fussy_tenant` to undo)."""
+    import httpx
+
+    app = meta["urls"]["app"].rstrip("/")
+    deployed = []
+    for draft in spec.get("seed") or []:
+        made = httpx.post(f"{app}/api/proposals", json=draft, timeout=60)
+        made.raise_for_status()
+        done = httpx.post(f"{app}/api/proposals/{made.json()['id']}/approve", json={}, timeout=60)
+        if done.status_code != 200:
+            raise SystemExit(f"seed for {draft.get('title')!r} not deployed: {done.status_code} {done.text}")
+        deployed.append(done.json().get("ha_id"))
+    return deployed
+
+
 def brief(role: str, spec: dict, meta: dict, out: Path, max_calls: int) -> str:
     return (HERE / "brief.md").read_text().format(
         role=role, traits=json.dumps(spec["traits"]), goal=spec["goal"].strip(),
@@ -382,6 +399,7 @@ def cmd_up(args: argparse.Namespace) -> int:
         work = out / role
         proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon], detached=True)
         _remember(out, proc)
+        meta["seeded"] = seed(meta, roles[role])
         (work / "polygon.json").write_text(json.dumps(meta, indent=2, default=str))
         (work / "brief.md").write_text(brief(role, roles[role], meta, work, args.max_calls))
         listing[role] = {"brief": str(work / "brief.md"), "findings": str(work / "findings.json"),
@@ -403,6 +421,7 @@ def cmd_pairs(args: argparse.Namespace) -> int:
 def cmd_verify_up(args: argparse.Namespace) -> int:
     """A fresh detached polygon and a replay prompt per backlog candidate."""
     data = json.loads((args.dir / "backlog.json").read_text())
+    roles = yaml.safe_load((HERE / "roles.yaml").read_text())["roles"]
     _, extra = model_args(args.models)
     listing = {}
     for entry in data["backlog"]:
@@ -411,6 +430,8 @@ def cmd_verify_up(args: argparse.Namespace) -> int:
         work = args.dir / "verify" / entry["id"]
         proc, meta = start_polygon(work / "polygon", [*extra, *args.polygon], detached=True)
         _remember(args.dir, proc)
+        for role in entry.get("reported_by") or []:
+            meta.setdefault("seeded", []).extend(seed(meta, roles.get(role, {})))
         (work / "prompt.md").write_text(verify_prompt(entry, meta, work))
         listing[entry["id"]] = {"prompt": str(work / "prompt.md"), "severity": entry["severity"]}
     print(json.dumps(listing, indent=2))

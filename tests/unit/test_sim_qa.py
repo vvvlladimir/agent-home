@@ -70,3 +70,12 @@ def test_usefulness_kinds_are_valid_and_every_role_is_complete():
     roles = yaml.safe_load((HERE / "roles.yaml").read_text())["roles"]
     assert "hands_off_owner" in roles
     assert all({"traits", "goal", "focus"} <= set(spec) for spec in roles.values())
+
+
+def test_fussy_tenant_starts_with_one_of_our_automations_to_undo():
+    import yaml
+
+    from sim.qa.run import HERE
+
+    seed = yaml.safe_load((HERE / "roles.yaml").read_text())["roles"]["fussy_tenant"]["seed"]
+    assert seed and all(yaml.safe_load(draft["yaml"])["actions"] for draft in seed)
