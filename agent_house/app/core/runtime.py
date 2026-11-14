@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import math
+import re
 import time
 from datetime import datetime
 
@@ -31,6 +32,10 @@ from .policy import resolve_tier
 from .tools import READ_TOOLS, TOOL_NAMES, TOOLS, ToolBox, state_text
 
 log = logging.getLogger(__name__)
+ALARM_MERGE_S = 1800.0  # a second alarm about the same entity within this updates the first
+ENTITY_ID = re.compile(
+    r"\b(?:binary_sensor|sensor|lock|alarm_control_panel|cover|valve|siren|light|switch)\.[a-z0-9_]+\b"
+)
 
 COALESCED_SOURCES = frozenset({"event", "cron", "schedule", "poke"})
 MAX_WAITING = 4
@@ -494,10 +499,17 @@ class AgentRuntime:
     ) -> None:
         if dry:
             return
-        self.store.execute(
-            "INSERT INTO inbox (ts, agent_id, run_id, severity, summary) VALUES (?, ?, ?, ?, ?)",
-            (time.time(), agent_id, run_id, severity, summary),
-        )
+        same = self._open_alarm_about(summary) if severity == "alarm" else None
+        if same is not None:  # QA-001: one alarm per thing, kept up to date, not one per report
+            self.store.execute(
+                "UPDATE inbox SET ts=?, agent_id=?, run_id=?, summary=? WHERE id=?",
+                (time.time(), agent_id, run_id, summary, same),
+            )
+        else:
+            self.store.execute(
+                "INSERT INTO inbox (ts, agent_id, run_id, severity, summary) VALUES (?, ?, ?, ?, ?)",
+                (time.time(), agent_id, run_id, severity, summary),
+            )
         self.feed.add(
             "report",
             f"{agent_id}: {summary}"[:300],
@@ -506,6 +518,18 @@ class AgentRuntime:
             run_id=run_id,
             data={"severity": severity},
         )
+
+    def _open_alarm_about(self, summary: str) -> int | None:
+        """An unhandled alarm of the last `ALARM_MERGE_S` that names one of the same entities."""
+        named = set(ENTITY_ID.findall(summary))
+        if not named:
+            return None
+        rows = self.store.query(
+            "SELECT id, summary FROM inbox WHERE severity='alarm' AND status='new' AND ts>=? "
+            "ORDER BY id DESC",
+            (time.time() - ALARM_MERGE_S,),
+        )
+        return next((r["id"] for r in rows if named & set(ENTITY_ID.findall(r["summary"]))), None)
 
     # --- reading --------------------------------------------------------------------------
     def list_runs(self, agent=None, status=None, limit: int = 50, before: str | None = None) -> list[dict]:

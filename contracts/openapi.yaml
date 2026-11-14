@@ -100,7 +100,10 @@ paths:
       tags: [agents]
       operationId: createAgent
       x-milestone: M3
-      description: 422 when HA is connected and the room is not one of its areas or an entity is unknown to it.
+      description: >-
+        `id` and `name` may be left out: they follow from `room` (its slug, the area's name). 422 lists
+        every invalid field at once; also when HA is connected and the room is not one of its areas
+        (with the closest area id) or an entity is unknown to it. 409 when the id exists.
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
@@ -1057,7 +1060,8 @@ components:
             at: {type: [string, "null"]}
             running: {type: boolean}
             last: {type: [object, "null"]}
-        last_scan: {type: [object, "null"]}
+        last_scan: {type: [object, "null"], description: "the last history scan without its findings; `habits` is its funnel (ScanResult.habits)"}
+        first_look: {type: [object, "null"], description: "the first scan after install (D31): when, how many drafted, the habit funnel; null until it ran"}
     ManagerStatus:
       type: object
       required: [enabled, mode, anomalies, owned, weak]
@@ -1073,6 +1077,7 @@ components:
         anomalies: {type: array, items: {type: string}, description: "what the deterministic prefilter would wake the model for"}
         owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches)"}
         owned_note: {type: string, description: plain-language explanation of `owned` for the owner}
+        hint: {type: [string, "null"], description: "while off: what that means and how to turn it on"}
         weak: {type: array, items: {type: object, properties: {ha_id: {type: string}, title: {type: [string, "null"]}}}}
         checked: {type: string}
     Rate:
@@ -1141,7 +1146,7 @@ components:
       type: object
       required: [id, kind, status, title, request, data, created, updated]
       properties:
-        id: {type: string, description: "stable key, e.g. habit:<entity>:<state>:<trigger>:<state>"}
+        id: {type: string, description: "stable key, e.g. habit:<entity> (one per device), undo:<ha_id>:v<n>, conflict:<entity>:<sides>"}
         kind: {type: string, enum: [habit, undo, conflict]}
         status: {type: string, enum: [new, drafting, drafted, failed, dismissed]}
         title: {type: string}
@@ -1171,6 +1176,25 @@ components:
               rate: {type: number}
               flagged: {type: boolean}
         scanned: {type: number}
+        habits:
+          type: object
+          description: >-
+            How the habit dossiers (D31) narrowed the house down, so "no proposal" explains itself:
+            entities in HA → switchable → changed by hand → relevant → regular (dossiers).
+          properties:
+            days: {type: integer}
+            min_days: {type: integer}
+            entities: {type: integer}
+            switchable: {type: integer}
+            changed_by_hand: {type: integer}
+            relevant: {type: integer}
+            irregular: {type: integer, description: relevant devices whose episodes follow no regularity}
+            dossiers: {type: integer}
+            left_out: {type: object, additionalProperties: {type: integer}, description: reason → devices}
+            near:
+              type: array
+              description: devices changed by hand on too few days, with how many are needed
+              items: {type: object, properties: {entity_id: {type: string}, days: {type: integer}, needed: {type: integer}}}
     Original:
       type: object
       required: [id, source, title, enabled]

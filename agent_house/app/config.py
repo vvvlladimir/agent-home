@@ -133,8 +133,8 @@ class RuntimeSettings(BaseModel):
         default="23:00-07:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"
     )
     daily_review_at: str = Field(default="04:30", pattern=r"^(([01]\d|2[0-3]):[0-5]\d)?$")  # "" = off
-    habit_days: int = Field(default=14, ge=3, le=30)  # history the habit finder scans
-    habit_min_repeats: int = Field(default=5, ge=3, le=50)  # days a habit must show up on
+    habit_days: int = Field(default=10, ge=3, le=30)  # history the habit dossiers read (D31)
+    habit_min_repeats: int = Field(default=3, ge=2, le=30)  # days a habit must show up on
     # D27 house manager: the orchestrator looks after the house between reviews (core/manager.py).
     # It acts on entities no room agent owns, in shadow unless orchestrator_mode is live.
     manager_enabled: bool = False

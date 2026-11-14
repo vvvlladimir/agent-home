@@ -67,7 +67,7 @@ def test_agent_crud_follows_the_contract(base):
     listed = httpx.get(f"{base}/api/agents").json()
     validate(listed, "/api/agents")
     assert listed[0]["effective_mode"] == "shadow" and listed[0]["entity_count"] == 10
-    assert "10 in total" in listed[0]["scope"], "QA-009: the count is explained in words"
+    assert "Sees every entity of room living_room" in listed[0]["scope"], "QA-009: the count in words"
     assert httpx.get(f"{base}/api/agents/living_room").json() == created
     areas = {a["area_id"]: a["agent_id"] for a in httpx.get(f"{base}/api/areas").json()}
     assert areas["living_room"] == "living_room" and areas["kitchen"] is None
@@ -75,6 +75,15 @@ def test_agent_crud_follows_the_contract(base):
 
     updated = httpx.put(f"{base}/api/agents/living_room", json={**created, "name": "Lounge"})
     assert updated.status_code == 200 and updated.json()["name"] == "Lounge"
+    # QA-004: the room alone is enough, and every problem is named at once
+    kitchen = httpx.post(f"{base}/api/agents", json={"room": "kitchen"})
+    assert kitchen.status_code == 201 and (kitchen.json()["id"], kitchen.json()["name"]) == (
+        "kitchen",
+        "Kitchen",
+    )
+    assert httpx.delete(f"{base}/api/agents/kitchen").status_code == 204
+    both = httpx.post(f"{base}/api/agents", json={"id": "X", "mode": "yolo"}).json()["detail"]
+    assert "id:" in both and "mode:" in both and "room:" in both
     duplicate = httpx.post(f"{base}/api/agents", json=AGENT)
     assert duplicate.status_code == 409 and duplicate.json()["error"] == "conflict"
     for response in (

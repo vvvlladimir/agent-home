@@ -1,4 +1,5 @@
-"""M5 history analysis: who caused a change, habits, undone automations, automations that fight.
+"""M5 history analysis: who caused a change, undone automations, automations that fight (habits:
+test_habits.py).
 Pure functions over logbook entries shaped like HA's (field names [UNVERIFIED-ON-HW])."""
 
 from __future__ import annotations
@@ -10,9 +11,7 @@ from app.core.insights import (
     changes_from_logbook,
     classify,
     find_conflicts,
-    find_habits,
     find_undos,
-    habit_request,
 )
 
 BASE = datetime(2026, 11, 1, 0, 0).astimezone()
@@ -48,57 +47,6 @@ def test_our_actions_are_not_mistaken_for_the_owner():
         rows, None, [{"ts": at(0, 9, 0, 3), "agent_id": "office", "entity_id": "light.desk"}]
     )
     assert [(c.cause, c.ref) for c in changes] == [("agent", "office"), ("physical", None)]
-
-
-def follow_rows(days=6, extra_sensor=2) -> list[dict]:
-    rows = []
-    for day in range(days):
-        rows += [entry(at(day, 21, 0), "binary_sensor.desk_zone", "on"),
-                 entry(at(day, 21, 0, 40), "light.desk", "on"),
-                 entry(at(day, 23, 0), "binary_sensor.desk_zone", "off"),
-                 entry(at(day, 23, 1), "light.desk", "off", context_user_id="owner")]  # fmt: skip
-    for day in range(extra_sensor):  # the sensor also turns on without the lamp following
-        rows += [
-            entry(at(day, 10, 0), "binary_sensor.desk_zone", "on"),
-            entry(at(day, 10, 30), "binary_sensor.desk_zone", "off"),
-        ]
-    return rows
-
-
-def test_a_lamp_switched_on_by_hand_after_the_desk_sensor_is_a_habit():
-    changes = changes_from_logbook(follow_rows(), None, [])
-    habits = find_habits(changes, AREAS.get, days=14, min_days=5)
-    on = next(h for h in habits if h["state"] == "on")
-    assert (
-        on["kind"] == "follow" and on["trigger"] == "binary_sensor.desk_zone" and on["trigger_state"] == "on"
-    )
-    assert on["days"] == 6 and on["count"] == 6 and on["recall"] == 1.0 and on["precision"] == 0.75
-    assert on["median_delay_s"] == 40
-    title, request = habit_request(on)
-    assert "binary_sensor.desk_zone" in request and "6 times on 6 days" in request and "75%" in request
-
-
-def test_too_few_days_or_a_sensor_in_another_room_is_no_habit():
-    changes = changes_from_logbook(follow_rows(days=4), None, [])
-    assert find_habits(changes, AREAS.get, days=14, min_days=5) == []
-    elsewhere = {**AREAS, "binary_sensor.desk_zone": "hall"}
-    habits = find_habits(changes_from_logbook(follow_rows(), None, []), elsewhere.get, days=7, min_days=5)
-    assert all(h["kind"] != "follow" for h in habits)
-
-
-def test_automated_changes_are_never_habits():
-    rows = [{**r, **AUTO, "context_entity_id": "automation.owner"} if r["entity_id"] == "light.desk" else r
-            for r in follow_rows()]  # fmt: skip
-    assert find_habits(changes_from_logbook(rows, None, []), AREAS.get, days=14, min_days=5) == []
-
-
-def test_the_same_time_of_day_is_a_habit():
-    rows = [entry(at(day, 7, 5 + day * 3), "light.porch", "on", context_user_id="owner") for day in range(7)]
-    rows.append(entry(at(3, 15, 0), "light.porch", "on"))
-    habits = find_habits(changes_from_logbook(rows, None, []), AREAS.get, days=7, min_days=5)
-    assert len(habits) == 1 and habits[0]["kind"] == "time" and habits[0]["days"] == 7
-    assert habits[0]["at"].startswith("07:") and habits[0]["weekdays"] == list(range(7))
-    assert "about 07:" in habit_request(habits[0])[1]
 
 
 OURS = {

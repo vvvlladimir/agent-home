@@ -262,6 +262,7 @@ class Council:
         self.board.prune()
         await self.evaluate_mode("time", now)
         if self.review is not None:
+            self.review.maybe_first_look()
             await self.review.maybe_run(now)
         if self.manager is not None:
             await self.manager.tick()

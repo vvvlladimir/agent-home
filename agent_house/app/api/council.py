@@ -28,6 +28,7 @@ async def get_council(request: Request):
             "last": ctx.store.get("review_last"),
         },
         "last_scan": ctx.store.get("insights_last_scan"),
+        "first_look": ctx.store.get("habits_first_look"),
     }
 
 

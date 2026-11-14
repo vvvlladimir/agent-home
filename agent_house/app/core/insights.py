@@ -12,12 +12,8 @@ what caused a change (field names [UNVERIFIED-ON-HW], docs/OWNER_CHECKLIST.md M5
 - no context at all → a physical switch (or the device itself; HA cannot tell these apart).
 "Manual" = UI/app or physical.
 
-1. Habit finder: a manual change of a device (entity → state) that
-   a) follows a sensor change (binary_sensor, person, sun, house mode) within `FOLLOW_S`, on at
-      least `min_days` different days, where the sensor change was followed by it at least
-      `MIN_PRECISION` of the time and it followed the sensor at least `MIN_RECALL` of the time; or
-   b) happens at about the same time of day (a `TIME_WINDOW_MIN` window) on at least `min_days`
-      days and on at least half of the days scanned.
+1. Habits: `core/habits.py` (D31) picks the devices worth a look, builds a dossier of what the
+   owner does with each by hand and how regular it is; the regular ones become findings.
 2. Feedback: a change made by one of our `agent_house_` automations that the owner reverts by hand
    within `UNDO_S`. `UNDO_MIN` undos and a rate of `UNDO_RATE` or more → a fix is drafted; a rate of
    `ROLLBACK_RATE` or more suggests a rollback (the owner decides, nothing is rolled back here).
@@ -29,27 +25,18 @@ from __future__ import annotations
 
 import json
 import logging
-import statistics
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ..ha.client import AUTOMATION_PREFIX
+from . import habits
+from .habits import ACT_DOMAINS
 
 log = logging.getLogger(__name__)
 
-ACT_DOMAINS = frozenset(
-    {"light", "switch", "fan", "cover", "media_player", "climate", "humidifier", "input_boolean"}
-)
-TRIGGER_DOMAINS = frozenset({"binary_sensor", "person", "sun", "input_select"})
-HOUSE_WIDE = frozenset({"person", "sun", "input_select"})  # triggers for every room
 SKIP_STATES = frozenset({"unavailable", "unknown"})
-FOLLOW_S = 180.0
-MIN_PRECISION = 0.3
-MIN_RECALL = 0.5
-TIME_WINDOW_MIN = 40
-MIN_DAY_SHARE = 0.5
 AGENT_MATCH_S = 10.0
 UNDO_S = 600.0
 UNDO_MIN = 3
@@ -132,116 +119,6 @@ def _minute(ts: float) -> int:
 
 def _domain(entity_id: str) -> str:
     return entity_id.split(".", 1)[0]
-
-
-# --- 1. habits --------------------------------------------------------------------------------
-def find_habits(changes: list[Change], area_of, days: int, min_days: int) -> list[dict]:
-    """Habit candidates, strongest first. `area_of(entity_id) -> area | None`."""
-    manual: dict[tuple[str, str], list[Change]] = defaultdict(list)
-    triggers: dict[tuple[str, str], list[float]] = defaultdict(list)
-    previous: dict[str, str] = {}
-    for change in changes:
-        domain = _domain(change.entity_id)
-        if domain in ACT_DOMAINS and change.manual:
-            manual[(change.entity_id, change.state)].append(change)
-        if domain in TRIGGER_DOMAINS and previous.get(change.entity_id) != change.state:
-            triggers[(change.entity_id, change.state)].append(change.ts)
-        previous[change.entity_id] = change.state
-    found = []
-    for (entity_id, state), events in manual.items():
-        if len({_day(e.ts) for e in events}) < min_days:
-            continue
-        habit = _follow_habit(entity_id, state, events, triggers, area_of, min_days)
-        habit = habit or _time_habit(entity_id, state, events, days, min_days)
-        if habit:
-            habit["room"] = area_of(entity_id)
-            found.append(habit)
-    found.sort(key=lambda h: (-h["days"], -h["count"]))
-    return found
-
-
-def _follow_habit(entity_id, state, events, triggers, area_of, min_days) -> dict | None:
-    area = area_of(entity_id)
-    best = None
-    for (trigger, trigger_state), times in triggers.items():
-        if trigger == entity_id:
-            continue
-        if _domain(trigger) not in HOUSE_WIDE and (area is None or area_of(trigger) != area):
-            continue
-        followed, delays = [], []
-        for event in events:
-            before = [t for t in times if 0 <= event.ts - t <= FOLLOW_S]
-            if before:
-                followed.append(event)
-                delays.append(event.ts - max(before))
-        days = len({_day(e.ts) for e in followed})
-        if days < min_days:
-            continue
-        hits = sum(1 for t in times if any(0 <= e.ts - t <= FOLLOW_S for e in events))
-        precision, recall = hits / len(times), len(followed) / len(events)
-        if precision < MIN_PRECISION or recall < MIN_RECALL:
-            continue
-        score = precision * recall
-        if best is None or score > best["score"]:
-            best = {
-                "kind": "follow", "entity_id": entity_id, "state": state, "trigger": trigger,
-                "trigger_state": trigger_state, "count": len(followed), "days": days,
-                "trigger_count": len(times), "precision": round(precision, 2), "recall": round(recall, 2),
-                "median_delay_s": round(statistics.median(delays)), "score": score,
-            }  # fmt: skip
-    return best
-
-
-def _time_habit(entity_id, state, events, days, min_days) -> dict | None:
-    minutes = sorted(((_minute(e.ts), e) for e in events), key=lambda pair: (pair[0], pair[1].ts))
-    best: list = []
-    for start, _ in minutes:
-        window = [(m, e) for m, e in minutes if (m - start) % 1440 < TIME_WINDOW_MIN]
-        if len({_day(e.ts) for _, e in window}) > len({_day(e.ts) for _, e in best}):
-            best = window
-    on_days = sorted({_day(e.ts) for _, e in best})
-    if len(on_days) < min_days or len(on_days) < MIN_DAY_SHARE * days:
-        return None
-    center = int(statistics.median((m - best[0][0]) % 1440 for m, _ in best) + best[0][0]) % 1440
-    weekdays = sorted({datetime.fromtimestamp(e.ts).astimezone().weekday() for _, e in best})
-    return {
-        "kind": "time", "entity_id": entity_id, "state": state, "at": f"{center // 60:02d}:{center % 60:02d}",
-        "count": len(best), "days": len(on_days), "days_scanned": days, "weekdays": weekdays,
-        "score": len(on_days) / days,
-    }  # fmt: skip
-
-
-def habit_request(habit: dict) -> tuple[str, str]:
-    """(title, request for the orchestrator) of one habit."""
-    entity, state = habit["entity_id"], habit["state"]
-    if habit["kind"] == "follow":
-        title = f"{entity} → {state} after {habit['trigger']} → {habit['trigger_state']}"
-        facts = (
-            f"{entity} was set to {state} by hand within {int(FOLLOW_S // 60)} minutes after "
-            f"{habit['trigger']} changed to {habit['trigger_state']}: {habit['count']} times on "
-            f"{habit['days']} days; the sensor changed to {habit['trigger_state']} {habit['trigger_count']} "
-            f"times and was followed by it {int(habit['precision'] * 100)}% of the time; median delay "
-            f"{habit['median_delay_s']} s."
-        )
-    else:
-        title = f"{entity} → {state} at about {habit['at']}"
-        days = (
-            "every day"
-            if len(habit["weekdays"]) == 7
-            else "on weekdays "
-            + ",".join("Mon Tue Wed Thu Fri Sat Sun".split()[d] for d in habit["weekdays"])
-        )
-        facts = (
-            f"{entity} was set to {state} by hand at about {habit['at']} ({days}) on {habit['days']} of "
-            f"the last {habit['days_scanned']} days."
-        )
-    request = (
-        f"A habit found in Home Assistant's history (counted, no model involved): {facts} "
-        "Draft one automation that does this for the owner. Use the trigger named here; add a "
-        "condition only if it is clearly needed (for example the house mode, input_select."
-        "agent_house_mode, or that it is dark)."
-    )
-    return title, request
 
 
 # --- 2. feedback after deploy ----------------------------------------------------------------
@@ -395,23 +272,23 @@ class Insights:
         return out
 
     async def scan(self, now: datetime | None = None) -> dict:
-        days = int(getattr(self.settings, "habit_days", 14))
-        min_days = int(getattr(self.settings, "habit_min_repeats", 5))
+        days = int(getattr(self.settings, "habit_days", 10))
+        min_days = int(getattr(self.settings, "habit_min_repeats", 3))
         changes = await self.changes(days, now)
         area_of = self.ha.registry.area_of
         ours = self.ours()
         recent = (now or datetime.now(UTC)).timestamp() - FEEDBACK_DAYS * 86400
         latest = [c for c in changes if c.ts >= recent]
         automated = {e for info in ours.values() for e in _targets(self.lifecycle, info["ha_id"])}
+        policy = getattr(getattr(self.lifecycle, "safety", None), "policy", None)
+        dossiers, funnel = habits.build(changes, self.ha, days=days, min_days=min_days, policy=policy,
+                                        skip=frozenset(automated))  # fmt: skip
         found = []
-        for habit in find_habits(changes, area_of, days, min_days):
-            if habit["entity_id"] in automated:
-                continue  # one of ours already does something with it: feedback covers that
-            title, request = habit_request(habit)
-            key = f"habit:{habit['entity_id']}:{habit['state']}:" + (
-                f"{habit['trigger']}:{habit['trigger_state']}" if habit["kind"] == "follow" else "time"
-            )
-            found.append(self._save(key, "habit", title, request, habit, habit["room"]))
+        for dossier in dossiers:
+            title = f"{dossier['name'] or dossier['entity_id']}: {habits.summary(dossier)}"[:200]
+            data = {k: v for k, v in dossier.items() if k != "samples"}
+            key = f"habit:{dossier['entity_id']}"
+            found.append(self._save(key, "habit", title, habits.request(dossier), data, dossier["room"]))
         undos = find_undos(latest, ours)
         for item in undos:
             if item["flagged"]:
@@ -432,12 +309,14 @@ class Insights:
             "manual": sum(c.manual for c in changes),
             "findings": [f for f in found if f],
             "feedback": [{k: i[k] for k in ("ha_id", "acted", "undone", "rate", "flagged")} for i in undos],
+            "habits": {**funnel, "days": days, "min_days": min_days},
             "scanned": time.time(),
         }
         self.store.set("insights_last_scan", {k: v for k, v in summary.items() if k != "findings"})
         self.feed.add(
             "council",
-            f"History scan: {summary['changes']} changes ({summary['manual']} by hand), "
+            f"History scan: {summary['changes']} changes ({summary['manual']} by hand); habits: "
+            f"{funnel['relevant']} of {funnel['entities']} entities relevant, {funnel['dossiers']} regular; "
             f"{len(summary['findings'])} findings",
         )
         return summary

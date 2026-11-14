@@ -130,7 +130,7 @@ export interface paths {
         };
         get: operations["listAgents"];
         put?: never;
-        /** @description 422 when HA is connected and the room is not one of its areas or an entity is unknown to it. */
+        /** @description `id` and `name` may be left out: they follow from `room` (its slug, the area's name). 422 lists every invalid field at once; also when HA is connected and the room is not one of its areas (with the closest area id) or an entity is unknown to it. 409 when the id exists. */
         post: operations["createAgent"];
         delete?: never;
         options?: never;
@@ -1261,7 +1261,10 @@ export interface components {
                 running?: boolean;
                 last?: Record<string, never> | null;
             };
+            /** @description the last history scan without its findings; `habits` is its funnel (ScanResult.habits) */
             last_scan?: Record<string, never> | null;
+            /** @description the first scan after install (D31): when, how many drafted, the habit funnel; null until it ran */
+            first_look?: Record<string, never> | null;
         };
         ManagerStatus: {
             enabled: boolean;
@@ -1280,6 +1283,8 @@ export interface components {
             owned: string[];
             /** @description plain-language explanation of `owned` for the owner */
             owned_note?: string;
+            /** @description while off: what that means and how to turn it on */
+            hint?: string | null;
             weak: {
                 ha_id?: string;
                 title?: string | null;
@@ -1336,7 +1341,7 @@ export interface components {
             history?: Record<string, never>[];
         };
         Finding: {
-            /** @description stable key, e.g. habit:<entity>:<state>:<trigger>:<state> */
+            /** @description stable key, e.g. habit:<entity> (one per device), undo:<ha_id>:v<n>, conflict:<entity>:<sides> */
             id: string;
             /** @enum {string} */
             kind: "habit" | "undo" | "conflict";
@@ -1366,6 +1371,28 @@ export interface components {
                 flagged?: boolean;
             }[];
             scanned: number;
+            /** @description How the habit dossiers (D31) narrowed the house down, so "no proposal" explains itself: entities in HA → switchable → changed by hand → relevant → regular (dossiers). */
+            habits?: {
+                days?: number;
+                min_days?: number;
+                entities?: number;
+                switchable?: number;
+                changed_by_hand?: number;
+                relevant?: number;
+                /** @description relevant devices whose episodes follow no regularity */
+                irregular?: number;
+                dossiers?: number;
+                /** @description reason → devices */
+                left_out?: {
+                    [key: string]: number;
+                };
+                /** @description devices changed by hand on too few days, with how many are needed */
+                near?: {
+                    entity_id?: string;
+                    days?: number;
+                    needed?: number;
+                }[];
+            };
         };
         Original: {
             id: string;

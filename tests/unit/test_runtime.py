@@ -488,3 +488,22 @@ async def test_an_agent_proposes_an_automation_once_and_replays_do_not(tmp_path)
     stack.rt.replay(result["id"])
     await settle(stack)
     assert len(asked) == 1, "a replay never drafts"
+
+
+def test_a_second_alarm_about_the_same_entity_updates_the_first(tmp_path):
+    """QA-001: one leak, one inbox item that stays current; other alarms and info stay separate."""
+    from tests.helpers import make_stack
+
+    s = make_stack(tmp_path)
+    leak = "binary_sensor.kitchen_leak_sensor_water_leak"
+    s.rt.inbox_add("kitchen", "r1", "alarm", f"Water leak: {leak} is on")
+    s.rt.inbox_add("orchestrator", "r2", "alarm", f"{leak} is still on after the kitchen's call")
+    s.rt.inbox_add("hall", "r3", "alarm", "Smoke: binary_sensor.hall_smoke is on")
+    s.rt.inbox_add("kitchen", "r4", "info", f"{leak} is off again")
+    rows = s.store.query("SELECT agent_id, severity, summary FROM inbox ORDER BY id")
+    assert [(r["agent_id"], r["severity"]) for r in rows] == [
+        ("orchestrator", "alarm"),
+        ("hall", "alarm"),
+        ("kitchen", "info"),
+    ]
+    assert rows[0]["summary"].endswith("after the kitchen's call")

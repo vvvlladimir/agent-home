@@ -317,3 +317,8 @@ Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_CO
   open Settings → Apps → Agent House → Configuration, add `lock.front_door`, save, restart.
   Expected: the GUI's Settings page lists it under add-on options, the entity shows T2, and
   `PUT api/policy` with a different `t3_whitelist` answers 422.
+- `[UNVERIFIED-ON-HW]` Habit dossiers on the real house (D31, ~1900 entities): after install, wait
+  for the inbox line "First look at your last 10 days" (or Proposals → Scan). Expected: the scan
+  finishes within a minute or two, the line names how many devices were relevant and regular, and
+  the proposals are devices you really switch by hand. Note in `owner-reports/` any device that is
+  missing (and its "Almost"/"Left out" reason on the Proposals page) or that should not be there.

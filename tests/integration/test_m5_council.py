@@ -92,8 +92,10 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     kinds = {f["kind"]: f for f in scan["findings"]}
     assert set(kinds) == {"habit", "undo"}, scan
     habit, undo = kinds["habit"], kinds["undo"]
-    habit = next(f for f in scan["findings"] if f["id"].startswith("habit:light.hallway:on:"))
-    assert habit["data"]["trigger"] == "binary_sensor.hallway_motion" and habit["data"]["days"] == 6
+    habit = next(f for f in scan["findings"] if f["id"] == "habit:light.hallway")
+    on = next(s for s in habit["data"]["states"] if s["state"] == "on")
+    assert on["after"][0]["signal"] == "binary_sensor.hallway_motion" and on["days"] == 6
+    assert scan["habits"]["dossiers"] >= 1 and "binary_sensor.hallway_motion" in habit["request"]
     assert undo["ha_id"] == "agent_house_bedroom_lamp_at_dusk" and undo["data"]["undone"] == 3
     assert [f["ha_id"] for f in scan["feedback"]] == ["agent_house_bedroom_lamp_at_dusk"]
     assert not any("agent" == f["data"].get("cause") for f in scan["findings"])
@@ -108,7 +110,7 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     [drafted] = httpx.get(f"{base}/api/findings", params={"status": "drafted"}).json()
     validate([drafted], "/api/findings")
     proposal = httpx.get(f"{base}/api/proposals/{drafted['proposal_id']}").json()
-    assert proposal["status"] == "draft" and "Evidence: 6×" in proposal["rationale"]
+    assert proposal["status"] == "draft" and "→ on 6× on 6 days" in proposal["rationale"]
     assert proposal["evidence"]["would_fire"] == 6
     assert httpx.post(f"{quoted}/draft").status_code == 409, "a finding is drafted once"
     dismissed = httpx.post(f"{base}/api/findings/{quote(undo['id'], safe='')}/dismiss").json()

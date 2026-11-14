@@ -60,7 +60,7 @@ async def test_the_review_scans_summarises_and_drafts_one_proposal_per_finding(t
     [finding] = s.insights.list()
     assert finding["kind"] == "habit" and finding["status"] == "drafted" and finding["proposal_id"]
     proposal = s.lifecycle.get(finding["proposal_id"])
-    assert proposal["origin_agent"] == "orchestrator" and "Evidence: 6× on 6 days" in proposal["rationale"]
+    assert proposal["origin_agent"] == "orchestrator" and "→ on 6× on 6 days" in proposal["rationale"]
     inbox = s.rt.inbox()[0]
     assert inbox["agent_id"] == "orchestrator" and inbox["summary"].startswith("Daily review: Quiet day.")
     summary_request = s.llm.requests[0]
@@ -196,3 +196,17 @@ async def test_one_proposal_per_entity_per_review_and_none_beside_an_open_one(tm
     )
     s.llm.steps = []
     assert await s.review.draft_new() == [], "the lamp now has an open proposal of ours"
+
+
+async def test_the_first_look_drafts_right_away_and_only_once(tmp_path):
+    """D31 / QA-002: the owner does not wait for the daily review; the inbox says what was found."""
+    s = stack(tmp_path, submit(GOOD), {"text": "Submitted."})
+    s.ha.logbook_rows = habit_rows()
+    result = await s.review.first_look()
+    assert [d["status"] for d in result["drafted"]] == ["draft"]
+    assert result["habits"]["dossiers"] == 1 and result["habits"]["relevant"] >= 1
+    [note] = [i for i in s.rt.inbox() if i["summary"].startswith("First look")]
+    assert "Proposed:" in note["summary"] and "light.room_lamp" in note["summary"]
+    assert s.store.get("habits_first_look")["drafted"] == 1
+    s.ha.connected = True
+    assert s.review.maybe_first_look() is False, "once"

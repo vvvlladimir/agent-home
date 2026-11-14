@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import re
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
@@ -34,7 +35,7 @@ async def _body(request: Request) -> object:
         return None
 
 
-def _scope_note(agent: AgentConfig, count: int) -> str:
+def _scope_note(agent: AgentConfig, count: int, in_area: int | None = None) -> str:
     """QA-009: what `entities`, `entities_mode` and `max_entities` add up to, in words."""
     if not agent.entities:
         how = f"every entity of room {agent.room} (none ticked, so entities_mode does not apply)"
@@ -43,9 +44,15 @@ def _scope_note(agent: AgentConfig, count: int) -> str:
     else:
         how = f"the {len(agent.entities)} ticked entities first, then the rest of room {agent.room}"
     per_prompt = max(agent.max_entities, len(agent.entities))
+    total = f"{count} in total"
+    if not agent.entities and in_area is not None and in_area > count:  # QA-005: say where the rest went
+        total = (
+            f"{count} of the area's {in_area}; the other {in_area - count} are device settings, "
+            "diagnostics, hidden entities or device noise (battery, signal, firmware, …)"
+        )
     return (
-        f"Sees {how}: {count} in total, device noise left out. Up to {per_prompt} are in each prompt; "
-        "it finds the others with list_entities."
+        f"Sees {how}: {total}. Up to {per_prompt} are in each prompt; it finds the others with "
+        "list_entities. With entities_mode 'only' and no ticked entities it sees the whole room, not nothing."
     )
 
 
@@ -60,7 +67,7 @@ def _summary(ctx, agent: AgentConfig) -> dict:
         "mode": agent.mode,
         "effective_mode": ctx.agents_rt.effective_mode(agent),
         "entity_count": count,
-        "scope": _scope_note(agent, count),
+        "scope": _scope_note(agent, count, len(ctx.ha.registry.entities_in(agent.room))),
         "last_run": last[0] if last else None,
         "wakes_last_hour": ctx.gate.wakes_last_hour(agent.id),
     }
@@ -122,11 +129,24 @@ def _save(ctx, agent: AgentConfig, verb: str) -> None:
     ctx.feed.add("system", f"Agent {agent.id} {verb} (mode {agent.mode})", level=level, agent_id=agent.id)
 
 
+def _with_defaults(ctx, body: object) -> object:
+    """QA-004: a room is enough to create an agent; id and name follow from it when missing."""
+    if not isinstance(body, dict) or not isinstance(body.get("room"), str) or not body["room"].strip():
+        return body
+    room = body["room"].strip()
+    area = ctx.ha.registry.areas.get(room) or {}
+    body = dict(body)
+    slug = re.sub(r"[^a-z0-9_]+", "_", room.lower()).strip("_")
+    body.setdefault("id", (slug if slug[:1].isalpha() else f"room_{slug}")[:32])
+    body.setdefault("name", str(area.get("name") or room.replace("_", " ").capitalize())[:64])
+    return body
+
+
 @router.post("/agents")
 async def create_agent(request: Request):
     ctx = request.app.state.ctx
     try:
-        agent = parse_agent(await _body(request))
+        agent = parse_agent(_with_defaults(ctx, await _body(request)))
     except ConfigError as err:
         return _error("invalid", str(err), 422)
     if ctx.agents.get(agent.id) is not None:

@@ -97,9 +97,9 @@ def parse_agent(payload: object) -> AgentConfig:
         raise ConfigError("the agent config must be an object")
     try:
         agent = AgentConfig(**payload)
-    except ValidationError as err:
-        first = err.errors()[0]
-        raise ConfigError(f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None
+    except ValidationError as err:  # every problem at once, not one per attempt (QA-004)
+        problems = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in err.errors()[:6]]
+        raise ConfigError("; ".join(problems)) from None
     if agent.id == "orchestrator":
         raise ConfigError("id: 'orchestrator' is reserved for the orchestrator")
     if agent.entities and agent.entities_mode == "only":
@@ -147,6 +147,9 @@ class AgentStore:
         return True
 
 
+# Network-level switches nothing of ours should flip or learn from: opening the Zigbee / Z-Wave /
+# Thread network to new devices. Usually `entity_category: config` too, but not always.
+NEVER_OWNED = re.compile(r"_(permit_join|permit_joining|inclusion_mode|commissioning)$")
 # Noise in a real HA: device bookkeeping, not anything a room agent reasons about.
 NOISE_DOMAINS = frozenset({"update", "device_tracker"})
 NOISE_DEVICE_CLASSES = frozenset({"battery", "signal_strength", "voltage", "connectivity", "update"})

@@ -32,7 +32,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from .agents import is_noise
+from .agents import NEVER_OWNED, is_noise
 from .council import MODE_ENTITY, ORCHESTRATOR
 from .insights import ACT_DOMAINS
 from .llm import Priority
@@ -49,10 +49,7 @@ MAX_TASKS_PER_RUN = 3
 MAX_CALLS_PER_RUN = 6
 MAX_PROPOSALS_PER_RUN = 1
 TEXT_MAX = 500
-# Network-level switches no house manager should flip: opening the Zigbee / Z-Wave / Thread network
-# to new devices. Usually `entity_category: config` too, but not always (Zigbee2MQTT's bridge).
 ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b")
-NEVER_OWNED = re.compile(r"_(permit_join|permit_joining|inclusion_mode|commissioning)$")
 OWNED_NOTE = (
     "Owned: switchable devices that no room agent looks after (no area, or an area without a room "
     "agent), so the house manager is the one that may act on them. Device settings and diagnostics "
@@ -427,6 +424,15 @@ class Manager:
             "last_run_id": self._last_run_id,
             "anomalies": self.anomalies(),
             "owned": self.owned(),
+            "hint": None
+            if self.enabled
+            else (
+                "Off: nothing checks the house between daily reviews (habits are still proposed by the "
+                "first look and the daily review). Turn it on in Settings → Orchestrator → House "
+                "manager. It stays in shadow (records, switches nothing) until the orchestrator mode is "
+                "live; the model is called only when the check finds something, at most "
+                f"{self._cap()} times an hour."
+            ),
             "owned_note": OWNED_NOTE.format(
                 enabled="enabled" if self.enabled else "disabled",
                 mode=getattr(self.settings, "orchestrator_mode", "shadow"),

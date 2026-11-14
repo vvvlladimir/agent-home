@@ -1,6 +1,6 @@
 <!-- Drafts: automation proposals (list → detail), a new draft from text or YAML, and history findings. -->
 <script setup lang="ts">
-import { onActivated, ref } from 'vue';
+import { computed, onActivated, ref } from 'vue';
 import { api, type Finding, type Proposal } from '../api';
 import Chips from '../components/Chips.vue';
 import Icon from '../components/Icon.vue';
@@ -45,10 +45,23 @@ async function create() {
   } catch (e) { error.value = (e as Error).message; }
   drafting.value = false;
 }
+type Funnel = { days: number; min_days: number; entities: number; relevant: number; dossiers: number; left_out?: Record<string, number>; near?: { entity_id: string; days: number; needed: number }[] };
+const funnel = ref<Funnel | null>(null);
+async function loadFunnel() {
+  try { funnel.value = ((await api.get<{ last_scan?: { habits?: Funnel } | null }>('api/council')).last_scan?.habits) || null; } catch { funnel.value = null; }
+}
+const funnelText = computed(() => {
+  const f = funnel.value;
+  if (!f) return '';
+  const near = (f.near || []).slice(0, 3).map((n) => `${n.entity_id} (${n.days}/${n.needed} ${t('days')})`).join(', ');
+  const left = Object.entries(f.left_out || {}).slice(0, 3).map(([why, n]) => `${n} ${t(why)}`).join('; ');
+  return `${t('Last')} ${f.days} ${t('days')}: ${f.relevant} ${t('of')} ${f.entities} ${t('entities are devices you switch by hand on')} ≥ ${f.min_days} ${t('days')}, ${f.dossiers} ${t('regularly')}.`
+    + (left ? ` ${t('Left out')}: ${left}.` : '') + (near ? ` ${t('Almost')}: ${near}.` : '');
+});
 async function scan() {
   scanning.value = true;
-  const r = await withBusy('scan', () => api.post<{ changes: number; manual: number; findings: unknown[] }>('api/council/scan'));
-  if (r) toast(`${r.changes} ${t('changes scanned')}, ${r.manual} ${t('by hand')}, ${r.findings.length} ${t('findings')}`);
+  const r = await withBusy('scan', () => api.post<{ changes: number; manual: number; findings: unknown[]; habits?: Funnel }>('api/council/scan'));
+  if (r) { toast(`${r.changes} ${t('changes scanned')}, ${r.manual} ${t('by hand')}, ${r.findings.length} ${t('findings')}`); funnel.value = r.habits || null; }
   await loadAsks();
   scanning.value = false;
 }
@@ -67,6 +80,7 @@ onActivated(() => {
   if (nav.proposalId) { selId.value = nav.proposalId; nav.proposalId = ''; }
   load();
   loadAsks();
+  loadFunnel();
 });
 </script>
 
@@ -113,7 +127,7 @@ onActivated(() => {
 
         <article class="card stack">
           <div class="sec-h">
-            <h2>{{ t('Found in the history') }} <Info :tip="t('Counted without a model: things you do by hand after a sensor or at the same time of day, automations you undo, automations that fight. The daily review drafts the new ones.')" /></h2>
+            <h2>{{ t('Found in the history') }} <Info :tip="t('Counted without a model: devices you switch by hand regularly (time of day, after a sensor, with someone home), automations you undo, automations that fight. The first look after install and the daily review draft the new ones.')" /></h2>
             <button class="btn sm" :aria-busy="scanning || undefined" :disabled="scanning" @click="scan"><Icon name="refresh" /><span>{{ t('Scan') }}</span></button>
           </div>
           <div v-for="f in state.findings" :key="f.id" class="row" :class="{ leaving: state.leaving[f.id] }" style="border-top: 1px solid var(--line); padding-top: 10px">
@@ -123,6 +137,7 @@ onActivated(() => {
             <IconButton v-if="f.status !== 'drafting'" icon="x" :tip="t('Dismiss')" @click="finding(f, 'dismiss')" />
           </div>
           <p v-if="!state.findings.length" class="muted small">{{ t('Nothing found yet.') }}</p>
+          <p v-if="funnelText" class="muted small">{{ funnelText }}</p>
         </article>
       </div>
     </div>

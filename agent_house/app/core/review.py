@@ -14,6 +14,10 @@
    other (switched off on approval); the owner's automations and scripts are never touched.
    An undone automation that should rather be rolled back says so in its inbox line; nothing is
    rolled back or deployed here.
+
+First look (D31): the owner should not wait a day. Once Home Assistant is connected, the add-on
+scans the history once (`habit_days`) and drafts up to `FIRST_DRAFTS` proposals from it right
+away; failures retry every `FIRST_RETRY_S`. After that, the daily review does the same each day.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
+from . import habits
 from .insights import _targets
 from .lifecycle import action_entities
 from .llm import Priority
@@ -31,6 +36,9 @@ from .orchestrator import OrchestratorError
 log = logging.getLogger(__name__)
 
 MAX_DRAFTS = 3
+FIRST_DRAFTS = 5
+FIRST_RETRY_S = 600.0
+FIRST_KEY = "habits_first_look"
 PENDING = ("draft", "blocked", "approved")  # proposals that may still reach HA
 ORDER = {"conflict": 0, "undo": 1, "habit": 2}
 LATE_LIMIT = timedelta(hours=2)  # a review missed by more (add-on was down) waits for the next day
@@ -41,6 +49,7 @@ class Review:
         self.store, self.feed, self.orch, self.insights = store, feed, orchestrator, insights
         self.council, self.rt, self.settings, self.lifecycle = council, agents_rt, settings, lifecycle
         self.running = False
+        self._first_tried = 0.0
         self.metrics = None  # core/metrics.py, wired by the app factory
 
     def due(self, now: datetime) -> bool:
@@ -50,6 +59,43 @@ class Review:
         hour, minute = (int(p) for p in at.split(":"))
         slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
         return slot <= now < slot + LATE_LIMIT and self.store.get("review_last_day") != now.date().isoformat()
+
+    def maybe_first_look(self) -> bool:
+        """From the council tick: start the first look in the background, once HA is connected."""
+        if self.store.get(FIRST_KEY) or self.running or self.orch.safety.kill_engaged:
+            return False
+        if not getattr(self.orch.ha, "connected", False) or time.time() - self._first_tried < FIRST_RETRY_S:
+            return False
+        self.orch.spawn(self.first_look(), "first-look")
+        return True
+
+    async def first_look(self) -> dict | None:
+        """The first scan and drafts (see the module doc). None when it has to try again later."""
+        if self.running:
+            return None
+        self._first_tried = time.time()
+        self.running = True
+        try:
+            scan = await self.insights.scan()
+            drafted = await self.draft_new(FIRST_DRAFTS)
+        except Exception as err:  # noqa: BLE001 - the logbook may not be ready yet: try again later
+            log.info("first look failed: %s", err)
+            return None
+        finally:
+            self.running = False
+        funnel = scan.get("habits") or {}
+        self.store.set(FIRST_KEY, {"ts": time.time(), "drafted": len(drafted), "habits": funnel})
+        text = (
+            f"First look at your last {funnel.get('days', '?')} days: {funnel.get('relevant', 0)} of "
+            f"{funnel.get('entities', 0)} entities are devices you switch by hand often enough, "
+            f"{funnel.get('dossiers', 0)} of them regularly."
+        )
+        if drafted:
+            text += " Proposed: " + "; ".join(d["title"] for d in drafted) + ". See Proposals."
+        else:
+            text += " Nothing regular enough to propose yet; the daily review looks again every day."
+        self.rt.inbox_add("orchestrator", None, "info", text[:2000])
+        return {"drafted": drafted, "habits": funnel}
 
     async def maybe_run(self, now: datetime) -> dict | None:
         if not self.due(now):
@@ -181,13 +227,13 @@ class Review:
         rows = self.store.query(f"SELECT yaml FROM proposals WHERE status IN ({marks})", PENDING)
         return set().union(*(action_entities(r["yaml"]) for r in rows))
 
-    async def draft_new(self) -> list[dict]:
-        """At most `MAX_DRAFTS` findings, conflicts first; one proposal per entity per review."""
+    async def draft_new(self, limit: int = MAX_DRAFTS) -> list[dict]:
+        """At most `limit` findings, conflicts first; one proposal per entity per review."""
         new = sorted(self.insights.list("new"), key=lambda f: (ORDER.get(f["kind"], 9), -f["updated"]))
         out: list[dict] = []
         taken = self.pending_entities()
         for finding in new:
-            if len(out) >= MAX_DRAFTS:
+            if len(out) >= limit:
                 break
             targets = self.targets(finding)
             if targets & taken:
@@ -231,7 +277,7 @@ class Review:
             self.lifecycle.annotate(proposal["id"], evidence)
         if proposal["status"] in ("draft", "blocked") and finding["kind"] == "habit":
             try:
-                await self.lifecycle.evidence(proposal["id"], int(getattr(self.settings, "habit_days", 14)))
+                await self.lifecycle.evidence(proposal["id"], int(getattr(self.settings, "habit_days", 10)))
             except Exception as err:  # noqa: BLE001 - the replay is a bonus, the draft stands
                 log.info("evidence for %s failed: %s", proposal["id"], err)
         return self.insights.set_status(
@@ -241,16 +287,8 @@ class Review:
 
 def _evidence_text(finding: dict, supersedes: list[str] | None = None) -> str:
     data = finding["data"]
-    if finding["kind"] == "habit" and data.get("kind") == "follow":
-        return (
-            f"{data['count']}× on {data['days']} days by hand after {data['trigger']} → "
-            f"{data['trigger_state']} (followed {int(data['precision'] * 100)}% of the sensor changes, "
-            f"median {data['median_delay_s']} s)"
-        )
-    if finding["kind"] == "habit":
-        return (
-            f"{data['count']}× by hand at about {data['at']} on {data['days']} of {data['days_scanned']} days"
-        )
+    if finding["kind"] == "habit" and data.get("states"):
+        return f"by hand in the last {data['days_scanned']} days {habits.summary(data)}"
     if finding["kind"] == "undo":
         return f"undone by hand {data['undone']} of {data['acted']} times ({int(data['rate'] * 100)}%)"
     if finding["kind"] == "conflict":
