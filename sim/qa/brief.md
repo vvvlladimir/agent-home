@@ -33,7 +33,8 @@ step, the way a real person would, and see how the add-on copes.
 3. A finding is something a real owner would trip over: a bug, a wrong or missing answer, a
    setting that is missing or unclear, behaviour you could not predict, or a safety breach.
    It is **not** a finding when the add-on refuses something unsafe, or when shadow mode logs
-   instead of acting. That is the design.
+   instead of acting. That is the design. `feature` = the house should do something it does not
+   (say what and when); `remove` = it does something that only adds noise or work for the owner.
 4. Before you write a finding, repeat its steps once. Write only what happened twice, and set
    `"reproduced_by_me": true`. Quote the exact response, do not paraphrase it.
 
@@ -43,7 +44,7 @@ Write `{out}/findings.json`, a JSON array. Each item:
 ```json
 {{
   "title": "short, specific",
-  "kind": "bug | missing_setting | unclear | safety | ux",
+  "kind": "bug | missing_setting | unclear | safety | ux | feature | remove",
   "severity": "critical | major | minor",
   "steps": ["curl -X POST .../api/... -d '...'", "..."],
   "expected": "what an owner expects",

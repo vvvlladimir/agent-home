@@ -58,3 +58,15 @@ def test_the_lead_judges_pairs_and_verdicts_update_the_backlog(tmp_path):
     verdict.write_text(json.dumps({"reproduced": True, "evidence": "HTTP 500"}))
     assert apply_verdicts(tmp_path) == {"confirmed": 1, "not_reproduced": 0, "candidate": 0}
     assert "confirmed" in (tmp_path / "backlog.md").read_text()
+
+
+def test_usefulness_kinds_are_valid_and_every_role_is_complete():
+    import yaml
+
+    from sim.qa.run import HERE
+
+    assert validate(finding("x", kind="feature")) == []
+    assert validate(finding("x", kind="remove")) == []
+    roles = yaml.safe_load((HERE / "roles.yaml").read_text())["roles"]
+    assert "hands_off_owner" in roles
+    assert all({"traits", "goal", "focus"} <= set(spec) for spec in roles.values())

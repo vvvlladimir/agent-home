@@ -11,8 +11,8 @@ duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` 
 
 ## 1. Prepare
 - `make install` if `.venv` is missing.
-- Roles: the owner's list, else `newcomer migrator fussy_tenant`. `all` = six roles; warn that
-  six testers plus the add-on's models can use up a Pro plan's usage window.
+- Roles: the owner's list, else `newcomer migrator fussy_tenant`. `all` = seven roles; warn that
+  seven testers plus the add-on's models can use up a Pro plan's usage window.
 - Deterministic checks first: `make polygon-claude` (falls back: `make polygon`). A failing
   `shadow_*`, `t3_*` or `owner_*` check is critical: report it with `report.json` and stop.
 
@@ -21,7 +21,7 @@ duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` 
   `models: fake` means `claude -p` does not work here and the add-on's models are the fakes:
   say so in the report (model behaviour untested, code paths still are).
 - Spawn one subagent per role **in one message, in the background**: `qa-attacker` for
-  `intruder` and `chaos`, `qa-tester` for the rest. Prompt: `Your brief: <brief path>`.
+  `intruder` and `chaos`, `qa-evaluator` for `hands_off_owner`, `qa-tester` for the rest. Prompt: `Your brief: <brief path>`.
 - Wait for their notifications; do not poll. A tester that fails leaves no `findings.json`;
   note it and go on.
 
@@ -39,6 +39,8 @@ duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` 
 
 ## 5. Report
 - Copy `<out>/backlog.md` to `owner-reports/qa/<YYYY-MM-DD>-claude.md`; commit only if asked.
+- If `hands_off_owner` ran, append its `<out>/hands_off_owner/assessment.md` to that file under
+  `## Usefulness (hands_off_owner)` and give its one-sentence verdict in the answer.
 - Answer the owner in at most 150 words: the `confirmed` items, most severe first (id, one line,
   endpoint), then counts of `not_reproduced`, unverified candidates and rejected findings, the
   `models` value, and the backlog path.

@@ -52,6 +52,7 @@ that budget. Check the gateway request log (`polygon.json` → panel `/api/reque
 | Changes to existing automations | `tests/unit/test_manager.py` (only ours), lifecycle tests | `fussy_tenant`: undoes, then accepts one proposed change and rejects one |
 | Accuracy metrics | `tests/unit/test_metrics.py` (Wilson values, outcome rules) | `fussy_tenant` checks precision falls when it undoes |
 | Resilience (HA restart, WS drop, 429, timeouts) | sim faults in integration tests | `chaos` |
+| Usefulness: does the house find what to do, fix and remove by itself | — | `hands_off_owner` (sonnet): owner who no longer writes automations; findings `feature` / `remove` plus `assessment.md` with a verdict |
 
 Known limit: the add-on runs on the real clock. Backfilled history (`--backfill-days`) feeds the
 habit finder and migration parity at once, but metrics only count changes since the current
@@ -81,7 +82,7 @@ modes (false positives, over-cooperative simulated users).
    means keep both. Groups keep the worst severity and every role that saw it.
 7. **Verification.** Each candidate is replayed on a fresh polygon by a fresh tester that sees only
    the steps. Only `confirmed` items go to the backlog (`backlog.md`), most severe first.
-8. **Start small.** Three roles first (`newcomer migrator fussy_tenant`), then all six.
+8. **Start small.** Three roles first (`newcomer migrator fussy_tenant`), then all seven.
 
 ```
 python -m sim.qa run --roles newcomer migrator fussy_tenant -- --orchestrator openai \
@@ -103,6 +104,7 @@ keys, no Jetson.
 | Lead + coordinator | the session you start | yours (e.g. Opus) |
 | Testers `newcomer`, `migrator`, `fussy_tenant`, `manager_boss` | subagent `qa-tester` | haiku / low |
 | Testers `intruder`, `chaos` | subagent `qa-attacker` | sonnet / medium |
+| Tester `hands_off_owner` (usefulness) | subagent `qa-evaluator` | sonnet / medium |
 | Verifier, one per candidate | subagent `qa-verifier` | sonnet / medium |
 | Room agents (stand-in for the Jetson's 4B) | `claude -p` behind the llama-server API | haiku / low |
 | Orchestrator + house manager | `claude -p` behind the Messages API | sonnet / medium |

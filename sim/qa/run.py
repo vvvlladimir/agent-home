@@ -40,7 +40,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-KINDS = ("bug", "missing_setting", "unclear", "safety", "ux")
+KINDS = ("bug", "missing_setting", "unclear", "safety", "ux", "feature", "remove")
 SEVERITIES = ("critical", "major", "minor")
 REQUIRED = ("title", "kind", "severity", "steps", "expected", "actual", "endpoint")
 SIMILAR = 0.35  # token Jaccard above which two findings are a candidate pair for the coordinator
@@ -174,7 +174,8 @@ def model_args(models: str) -> tuple[str, list[str]]:
 
 
 CLAUDE_POLYGON = ["--orchestrator", "claude", "--room-llm", "claude", "--no-pace", "--backfill-days", "14"]
-CLAUDE_ROLE_MODELS = {"intruder": "sonnet", "chaos": "sonnet"}  # attackers need the stronger model
+# the attackers and the usefulness judge need the stronger model
+CLAUDE_ROLE_MODELS = {"intruder": "sonnet", "chaos": "sonnet", "hands_off_owner": "sonnet"}
 
 
 def tester(prompt: str, cwd: Path, model: str, max_turns: int, effort: str | None = None) -> subprocess.Popen:
@@ -480,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--tester-effort", help="claude --effort for the testers")
     verify.add_argument("--tester-effort", help="claude --effort for the verifier")
     allc = sub.add_parser("claude", help="run + coordinate + verify on Claude Code alone (no API keys)")
-    allc.add_argument("--roles", nargs="+", default=["all"], help="default: all six")
+    allc.add_argument("--roles", nargs="+", default=["all"], help="default: all seven")
     allc.add_argument("--tester-model", default="haiku")
     allc.add_argument("--verifier-model", default="sonnet")
     allc.add_argument("--max-turns", type=int, default=60)
