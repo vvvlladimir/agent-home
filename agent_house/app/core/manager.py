@@ -51,14 +51,16 @@ MAX_PROPOSALS_PER_RUN = 1
 TEXT_MAX = 500
 # Network-level switches no house manager should flip: opening the Zigbee / Z-Wave / Thread network
 # to new devices. Usually `entity_category: config` too, but not always (Zigbee2MQTT's bridge).
+ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b")
 NEVER_OWNED = re.compile(r"_(permit_join|permit_joining|inclusion_mode|commissioning)$")
 OWNED_NOTE = (
     "Owned: switchable devices that no room agent looks after (no area, or an area without a room "
     "agent), so the house manager is the one that may act on them. Device settings and diagnostics "
     "(entity_category config / diagnostic), hidden or disabled entities and network pairing "
-    "switches are never owned. The manager is {enabled}: switched off it touches nothing; switched "
-    "on it may only switch these, through the safety policy, in {mode} mode (shadow: recorded, not "
-    "done). Give a room "
+    "switches are never owned. The manager is {enabled}. Off: it is never woken by itself and switches "
+    "nothing; a manual wake still runs it once to look, give room agents tasks, propose drafts and "
+    "report to you. On: it is also woken by the sweep and may switch these, through the safety "
+    "policy, in {mode} mode (shadow: recorded, not done). Give a room "
     "an agent, or set its area in Home Assistant, to hand an entity to that room."
 )
 
@@ -74,6 +76,10 @@ the safety policy; the result tells you if it ran, ran in shadow, waits for the 
 (give its ha_id). The owner reviews every proposal; nothing is deployed by you.
 - report to the owner when they must know or decide something.
 - find_entities to look entities up.
+The context lists what the deterministic check found. Each finding must be handled: act on what \
+is yours, assign_task to the room agent that owns the room, or report it to the owner when nobody \
+can act on it (for example lights on in a room without an agent while nobody is home). Never leave \
+a finding unmentioned in your final sentence.
 Rules: act only on what the data shows; never invent entity ids or states. Prefer the smallest \
 action. Do not repeat what a room agent is already doing. When done, answer with one short sentence \
 and no tool call."""
@@ -128,6 +134,7 @@ class Manager:
         self._task: asyncio.Task | None = None
         self._last_sweep = clock()
         self._last_run = 0.0
+        self._last_run_id: str | None = None
         self.weak: list[dict] = []  # automations flagged by the last metrics read
 
     # --- settings ---------------------------------------------------------------------------
@@ -253,17 +260,25 @@ class Manager:
             await asyncio.gather(self._task, return_exceptions=True)
 
     # --- one run --------------------------------------------------------------------------------
-    def context(self, reasons: list[str]) -> str:
-        lines = [f"Woken because: {'; '.join(reasons)}", self.orch.house_summary()]
+    def context(self, reasons: list[str], found: list[str] | None = None) -> str:
+        lines = [f"Woken because: {'; '.join(reasons)}"]
+        if found:  # a manual wake or an escalation still sees what the sweep would have
+            lines.append("Found by the deterministic check:")
+            lines += [f"- {f}" for f in found]
+        lines.append(self.orch.house_summary())
         people = {e: s.get("state") for e, s in self.ha.states.items() if e.startswith("person.")}
         if people:
             lines.append("People: " + ", ".join(f"{e} = {v}" for e, v in sorted(people.items())))
         agents = [a for a in self.council.agents.list() if a.enabled]
         if agents:
             lines.append("Rooms (agent: room): " + ", ".join(f"{a.id}: {a.room}" for a in agents))
-        mine = self.owned()
+        mine = self.owned() if self.enabled else []
         lines.append("Yours (no room agent owns them):")
-        lines += [f"- {e} = {(self.ha.states.get(e) or {}).get('state')}" for e in mine[:40]] or ["(none)"]
+        lines += [f"- {e} = {(self.ha.states.get(e) or {}).get('state')}" for e in mine[:40]] or [
+            "(none: the manager is off, you switch nothing; assign, propose or report)"
+            if not self.enabled
+            else "(none)"
+        ]
         board = [r for r in self.council.board.since(self.clock() - 6 * 3600) if r["kind"] != "fact"]
         if board:
             lines.append("Board (last 6 h):")
@@ -279,9 +294,11 @@ class Manager:
 
     async def run(self, reasons: list[str]) -> str:
         """One bounded conversation. → run id."""
+        found = [f for f in self.anomalies() if not any(f in r for r in reasons)]
         self._last_run = self.clock()
-        user = self.context(reasons)
+        user = self.context(reasons, found)
         trace = _Trace(self.orch, "manager: " + "; ".join(reasons), "manage")
+        self._last_run_id = trace.run_id
         shadow = getattr(self.settings, "orchestrator_mode", "shadow") != "live" or self.safety.mode != "live"
         self.store.execute("UPDATE runs SET shadow=? WHERE id=?", (int(shadow), trace.run_id))
         trace.step("context", {"system": SYSTEM, "user": user})
@@ -364,6 +381,15 @@ class Manager:
             summary = str(args.get("summary") or "").strip()[:TEXT_MAX]
             if not summary:
                 return answer("empty report", True)
+            domains = {e.split(".", 1)[0] for e in self.ha.states}
+            named = set(ENTITY_ID.findall(summary))
+            invented = sorted(m for m in named if m.split(".", 1)[0] in domains and m not in self.ha.states)
+            if invented:  # QA-005: the owner must not be told about entities that do not exist
+                return answer(
+                    f"not sent: unknown entity ids {', '.join(invented)}; use ids from the context "
+                    "or find_entities, or describe them in words",
+                    True,
+                )
             self.orch.agents_rt.inbox_add(ORCHESTRATOR, trace.run_id, severity, summary)
             return answer("in the owner's inbox")
         return answer(f"unknown tool {name}", True)
@@ -398,6 +424,7 @@ class Manager:
             "wakes_last_hour": sum(1 for t in self._wakes if self.clock() - t <= 3600),
             "running": self._task is not None and not self._task.done(),
             "last_run": self._last_run or None,
+            "last_run_id": self._last_run_id,
             "anomalies": self.anomalies(),
             "owned": self.owned(),
             "owned_note": OWNED_NOTE.format(

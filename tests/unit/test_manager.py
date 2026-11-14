@@ -84,6 +84,32 @@ async def test_lights_left_on_with_nobody_home_wake_it_and_its_call_runs_in_shad
     assert s.ha.calls == []  # shadow: nothing reached HA
 
 
+async def test_a_manual_wake_sees_the_findings_and_an_off_manager_owns_nothing(tmp_path):
+    """QA-003/006: a wake by hand carries what the prefilter found (lights on, nobody home); with
+    the manager off the model is told it switches nothing."""
+    s = stack(tmp_path, {"text": "Reported the lights."}, manager_enabled=False)
+    assert s.manager.request("manual: look", force=True)["status"] == "started"
+    await s.manager.wait()
+    sent = str(s.llm.requests[0])
+    assert "Found by the deterministic check" in sent and "nobody is home and still on" in sent
+    assert "the manager is off, you switch nothing" in sent
+    status = s.manager.status()
+    assert status["last_run_id"] and "manual wake still runs it once" in status["owned_note"]
+
+
+async def test_a_report_naming_an_entity_that_does_not_exist_is_sent_back(tmp_path):
+    """QA-005: the inbox never names invented ids; the model gets the error and can fix it."""
+    s = stack(tmp_path,
+              call("report", severity="info", summary="person.person_1 is away, light.hall is on"),
+              call("report", severity="info", summary="Nobody is home (person.owner); light.hall is on"),
+              {"text": "Reported."})  # fmt: skip
+    s.manager.request("manual: look", force=True)
+    await s.manager.wait()
+    inbox = [r["summary"] for r in s.store.query("SELECT summary FROM inbox")]
+    assert inbox == ["Nobody is home (person.owner); light.hall is on"]
+    assert "unknown entity ids person.person_1" in str(s.llm.requests[1])
+
+
 async def test_it_cannot_act_on_a_room_agents_entity_or_a_t3_one(tmp_path):
     s = stack(tmp_path,
               call("call_service", domain="light", service="turn_off", entity_id="light.room_lamp", data={}),

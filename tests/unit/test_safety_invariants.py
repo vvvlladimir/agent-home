@@ -154,3 +154,21 @@ async def test_superseding_switches_off_only_ours_never_the_owners_and_never_und
     await s.lifecycle.approve(proposal["id"])
     assert {w[1] for w in s.ha.writes if w[0] == "disable"} == {ours[1]}
     assert s.ha.automations["1700000000001"]["alias"] == "Owner's own"
+
+
+def test_only_the_add_on_option_lifts_a_t3_never_the_policy_file(tmp_path):
+    """QA-004: a t3_whitelist written into policy.yaml (the API's file) is ignored and not kept;
+    the add-on option lifts to T2, never lower."""
+    from app.core.policy import resolve_tier
+    from app.core.safety import Safety
+    from app.store.db import Store
+    from app.store.feed import Feed
+
+    store = Store(tmp_path / "db.sqlite")
+    feed = Feed(store)
+    plain = Safety(store, feed, tmp_path)
+    saved = plain.save_policy({**plain.policy, "t3_whitelist": ["lock.front_door"]})
+    assert saved["t3_whitelist"] == [] and "t3_whitelist" not in (tmp_path / "policy.yaml").read_text()
+    assert resolve_tier("lock.front_door", plain.policy) == "T3"
+    owner = Safety(store, feed, tmp_path, ["lock.front_door"])
+    assert resolve_tier("lock.front_door", owner.policy) == "T2"

@@ -17,8 +17,10 @@ KILL_EVENT = "agent_house_kill_switch"
 
 
 class Safety:
-    def __init__(self, store, feed, data_dir: Path) -> None:
+    def __init__(self, store, feed, data_dir: Path, t3_whitelist=()) -> None:
         self.store, self.feed = store, feed
+        # The add-on option, never the policy file: nothing reachable from the API lifts a T3.
+        self.t3_whitelist = sorted({str(e) for e in t3_whitelist})
         self.policy_file = Path(data_dir) / "policy.yaml"
         self._policy: dict | None = None
 
@@ -77,14 +79,15 @@ class Safety:
             try:
                 if self.policy_file.is_file():
                     stored = yaml.safe_load(self.policy_file.read_text())
-            except (OSError, yaml.YAMLError):
+            except (OSError, ValueError, yaml.YAMLError):  # ValueError: not UTF-8
                 # An unreadable policy must not widen anything: fall back to deny-everything.
                 self._policy = {**effective_policy(None), "domain_tiers": {}, "t3_whitelist": []}
                 return self._policy
-            self._policy = effective_policy(stored)
+            self._policy = {**effective_policy(stored), "t3_whitelist": list(self.t3_whitelist)}
         return self._policy
 
     def save_policy(self, policy: dict) -> dict:
+        policy = {k: v for k, v in policy.items() if k != "t3_whitelist"}  # an add-on option
         temporary = self.policy_file.with_suffix(".yaml.tmp")
         temporary.write_text(yaml.safe_dump(policy, sort_keys=True))
         temporary.replace(self.policy_file)

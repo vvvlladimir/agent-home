@@ -157,7 +157,7 @@ async def test_retries_give_up_and_client_errors_are_never_retried(make_llm, llm
     with pytest.raises(LLMError, match="after 2 attempts"):
         await llm.chat(say("hi"))
     llm_sim.script.append({"status": 400})
-    with pytest.raises(LLMError, match="HTTP 400"):
+    with pytest.raises(LLMError, match="refused the request \\(HTTP 400\\): simulated failure"):
         await llm.chat(say("hi"))
     assert len(llm_sim.requests) == 3
     assert llm.status()["errors_total"] == 2
@@ -176,9 +176,39 @@ async def test_degraded_after_repeated_failures_and_back(make_llm, llm_sim):
 async def test_timeout_is_an_error_without_retry(make_llm, llm_sim):
     llm = await make_llm()
     llm_sim.script.append({"text": "late", "hang": 2})
-    with pytest.raises(LLMError, match="no complete answer"):
+    with pytest.raises(LLMError, match="did not answer"):
         await llm.chat(say("hi"), timeout_s=0.3)
     assert len(llm_sim.requests) == 1
+
+
+async def test_a_429_is_retried_and_reads_plainly_when_it_gives_up(make_llm, llm_sim):
+    """QA-002: rate limits are retried with backoff, the error is readable, the state degrades."""
+    llm = await make_llm(llm_max_retries=2)
+    llm_sim.script.extend([{"status": 429}, {"text": "fine"}])
+    assert (await llm.chat(say("hi"))).text == "fine" and llm.status()["retries_total"] == 1
+    llm_sim.script.extend([{"status": 429}] * 3)
+    with pytest.raises(LLMError, match="HTTP 429: too many requests") as err:
+        await llm.chat(say("hi"))
+    assert "{" not in str(err.value), "no raw JSON body"
+    assert llm.state == "degraded" and llm.status()["last_error"]
+
+
+async def test_the_wait_behind_a_stalled_request_counts_toward_the_timeout(make_llm, llm_sim):
+    """QA-001: a chat queued behind a stall gets a plain timeout instead of waiting it out."""
+    llm = await make_llm()
+    llm_sim.script.append({"text": "stalled", "hang": 3})
+    stalled = asyncio.create_task(llm.chat(say("stalled"), priority=Priority.AGENT, timeout_s=10))
+    for _ in range(100):
+        if llm.status()["in_flight"]:
+            break
+        await asyncio.sleep(0.01)
+    assert llm.status()["in_flight_s"] is not None
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(LLMError, match="did not answer within 0.5 s .*waited behind another request"):
+        await llm.chat(say("owner"), priority=Priority.INTERACTIVE, timeout_s=0.5)
+    assert asyncio.get_running_loop().time() - started < 2.5
+    assert llm.status()["queue_depth"] == 0
+    stalled.cancel()
 
 
 async def test_requests_wait_while_the_model_loads(make_llm, llm_sim):

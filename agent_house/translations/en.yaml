@@ -38,3 +38,8 @@ configuration:
   redact_cloud:
     name: Redact cloud prompts
     description: Remove names, coordinates and camera or media entities from anything sent to the cloud.
+  t3_whitelist:
+    name: T3 exceptions
+    description: >-
+      Exact entity ids (for example lock.front_door) agents may act on despite a T3 domain such as
+      locks or alarms. They become T2: every action waits for your approval. Only settable here.

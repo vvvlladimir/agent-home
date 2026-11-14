@@ -13,7 +13,6 @@ from pathlib import Path
 
 import httpx
 import jsonschema
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -280,10 +279,16 @@ def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
         assert secret.encode() not in blob
 
 
-@pytest.mark.parametrize("path", ["api/not-in-this-build", "api/migration/unknown"])
-def test_later_milestones_answer_501_with_the_contract_error_shape(ingress, path):
-    response = httpx.get(f"{ingress.base}/{path}")
-    assert response.status_code == 501 and response.json()["error"] == "not_implemented"
+def test_unknown_paths_404_with_a_pointer_and_wrong_methods_405(ingress):
+    """QA-007/008: no 501 "not available in this build" for a typo or a wrong method."""
+    bare = httpx.get(f"{ingress.base}/api/migration")
+    assert bare.status_code == 404 and bare.json()["error"] == "not_found"
+    assert "POST /api/migration/import" in bare.json()["detail"]
+    assert "GET /api/migration/originals" in bare.json()["detail"]
+    assert httpx.get(f"{ingress.base}/api/not-in-this-build").status_code == 404
+    wrong = httpx.get(f"{ingress.base}/api/agents/x/prompt-preview")
+    assert wrong.status_code == 405 and wrong.headers["allow"] == "POST"
+    assert wrong.json()["error"] == "method_not_allowed" and "use POST" in wrong.json()["detail"]
 
 
 def test_logs_endpoint(ingress):

@@ -118,7 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     runtime = load_runtime(settings.data_dir)
     llm = LLMManager(settings, runtime, monitor)
     ha = HAClient(settings)
-    safety = Safety(store, feed, settings.data_dir)
+    safety = Safety(store, feed, settings.data_dir, settings.t3_whitelist)
     agents = AgentStore(settings.data_dir)
     agents_rt = AgentRuntime(
         agents=agents, ha=ha, llm=llm, store=store, feed=feed, safety=safety, runtime_settings=runtime

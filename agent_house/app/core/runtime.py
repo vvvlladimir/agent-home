@@ -333,7 +333,9 @@ class AgentRuntime:
                     priority=priority,
                     timeout_s=remaining,
                 )
-                spent += result.total_ms / 1000
+                # the wait in the queue counts too (QA-001): wall clock, or what the model reports
+                reported = (result.total_ms + (result.queued_ms or 0)) / 1000
+                spent += max(time.monotonic() - started, reported)
                 tokens_in = int(result.timings.get("prompt_tokens") or result.timings.get("prompt_n") or 0)
                 tokens_out = int(result.timings.get("predicted_n") or 0)
                 run["steps"] += 1

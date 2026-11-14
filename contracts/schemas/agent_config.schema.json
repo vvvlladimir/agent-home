@@ -26,9 +26,9 @@
     "entities_mode": {
       "enum": ["only", "pinned"],
       "default": "only",
-      "description": "only = the agent sees exactly `entities`. pinned = `entities` always go first in the prompt, the rest of the room fills it up and stays findable with list_entities."
+      "description": "Applies only when `entities` is not empty (empty = the whole room either way). only = the agent sees exactly `entities`. pinned = `entities` always go first in the prompt, the rest of the room fills it up and stays findable with list_entities. GET /api/agents says the result in words (`scope`)."
     },
-    "max_entities": {"type": "integer", "minimum": 1, "maximum": 25, "default": 20},
+    "max_entities": {"type": "integer", "minimum": 1, "maximum": 25, "default": 20, "description": "How many entities go into each prompt; the rest of its scope stays findable with list_entities."},
     "tier_overrides": {
       "type": "object",
       "description": "entity_id or glob -> tier. Can only make an entity stricter than the global policy; T3 can never be lowered here.",

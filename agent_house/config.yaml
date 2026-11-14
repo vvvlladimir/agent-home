@@ -26,6 +26,7 @@ options:
   openai_model: gpt-6.1-sol
   daily_budget_eur: 1.0
   redact_cloud: true
+  t3_whitelist: []
 schema:
   log_level: list(debug|info|warning|error)
   jetson_llm_url: str?
@@ -38,3 +39,5 @@ schema:
   openai_model: str
   daily_budget_eur: float(0,100)
   redact_cloud: bool
+  t3_whitelist:
+    - match(^[a-z0-9_]+\.[a-z0-9_]+$)

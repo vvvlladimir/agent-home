@@ -934,7 +934,7 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         Error: {
-            /** @description machine code, e.g. not_implemented, not_found, kill_switch, policy_blocked */
+            /** @description machine code, e.g. not_found, method_not_allowed, kill_switch, policy_blocked */
             error: string;
             detail?: string;
         };
@@ -998,6 +998,8 @@ export interface components {
             queue_depth?: number;
             /** @description priority class of the request being served */
             in_flight?: string | null;
+            /** @description how long the request being served has been running */
+            in_flight_s?: number | null;
             last_error?: string | null;
             /** @description rolling median */
             decode_tps?: number | null;
@@ -1077,7 +1079,10 @@ export interface components {
             enabled: boolean;
             mode: components["schemas"]["Mode"];
             effective_mode?: components["schemas"]["Mode"];
+            /** @description entities the agent may read or use (prompt + findable) */
             entity_count?: number;
+            /** @description plain words: which entities it sees and why (entities, entities_mode, max_entities) */
+            scope?: string;
             last_run?: components["schemas"]["RunSummary"] | null;
             wakes_last_hour?: number;
         };
@@ -1267,6 +1272,8 @@ export interface components {
             wakes_last_hour?: number;
             running?: boolean;
             last_run?: number | null;
+            /** @description the run (trace) of the last manager run */
+            last_run_id?: string | null;
             /** @description what the deterministic prefilter would wake the model for */
             anomalies: string[];
             /** @description entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches) */
@@ -1643,6 +1650,7 @@ export interface operations {
                     "application/json": components["schemas"]["AgentConfig"];
                 };
             };
+            409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };
     };
@@ -2651,6 +2659,10 @@ export interface operations {
                     "application/json": {
                         /** @enum {string} */
                         status: "started" | "queued";
+                        /** @description manager_enabled at the time of the wake */
+                        enabled?: boolean;
+                        /** @description what this run may do (with the manager off it switches nothing) */
+                        note?: string;
                     };
                 };
             };

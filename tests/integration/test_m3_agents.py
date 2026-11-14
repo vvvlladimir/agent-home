@@ -67,6 +67,7 @@ def test_agent_crud_follows_the_contract(base):
     listed = httpx.get(f"{base}/api/agents").json()
     validate(listed, "/api/agents")
     assert listed[0]["effective_mode"] == "shadow" and listed[0]["entity_count"] == 10
+    assert "10 in total" in listed[0]["scope"], "QA-009: the count is explained in words"
     assert httpx.get(f"{base}/api/agents/living_room").json() == created
     areas = {a["area_id"]: a["agent_id"] for a in httpx.get(f"{base}/api/areas").json()}
     assert areas["living_room"] == "living_room" and areas["kitchen"] is None
@@ -74,16 +75,17 @@ def test_agent_crud_follows_the_contract(base):
 
     updated = httpx.put(f"{base}/api/agents/living_room", json={**created, "name": "Lounge"})
     assert updated.status_code == 200 and updated.json()["name"] == "Lounge"
+    duplicate = httpx.post(f"{base}/api/agents", json=AGENT)
+    assert duplicate.status_code == 409 and duplicate.json()["error"] == "conflict"
     for response in (
-        httpx.post(f"{base}/api/agents", json=AGENT),  # duplicate
         httpx.post(f"{base}/api/agents", json={**AGENT, "id": "x2", "mode": "yolo"}),
         httpx.post(f"{base}/api/agents", content=b"not json"),
         httpx.put(f"{base}/api/agents/living_room", json={**AGENT, "id": "other"}),
     ):
         assert response.status_code == 422 and response.json()["error"] == "invalid", response.text
     # QA-005/006: a typo in the room or an entity is refused at save time, and says what is wrong
-    typo_room = httpx.post(f"{base}/api/agents", json={**AGENT, "id": "office", "room": "offce"})
-    assert typo_room.status_code == 422 and "'offce' is not an area" in typo_room.json()["detail"]
+    typo_room = httpx.post(f"{base}/api/agents", json={**AGENT, "id": "office", "room": "livng-room"})
+    assert typo_room.status_code == 422 and "Did you mean 'living_room'?" in typo_room.json()["detail"]
     typo_entity = httpx.put(
         f"{base}/api/agents/living_room",
         json={**created, "entities": ["switch.fan_typo"], "entities_mode": "pinned"},
@@ -278,6 +280,24 @@ def test_policy_can_be_read_and_tightened(base, settings):
     assert yaml.safe_load((settings.data_dir / "policy.yaml").read_text())["domain_tiers"]["light"] == "T2"
     for bad in ({"domain_tiers": {"light": "T9"}}, {"unknown_key": 1}, ["list"]):
         assert httpx.put(f"{base}/api/policy", json=bad).status_code == 422
+
+
+def test_nothing_reachable_from_the_api_lifts_a_t3(base):
+    """QA-004: t3_whitelist is an add-on option; the API refuses to change it, a looser agent
+    override is refused, and lock.front_door stays T3 whatever is PUT."""
+    policy = httpx.get(f"{base}/api/policy").json()
+    assert policy["t3_whitelist"] == []
+    lifted = httpx.put(f"{base}/api/policy", json={**policy, "t3_whitelist": ["lock.front_door"],
+                                                    "allowed_services": {**policy["allowed_services"],
+                                                                         "lock": ["unlock"]}})  # fmt: skip
+    assert lifted.status_code == 422 and "add-on option" in lifted.json()["detail"]
+    assert httpx.put(f"{base}/api/policy", json=policy).status_code == 200, "GET → PUT round-trips"
+    override = httpx.post(f"{base}/api/agents", json={**AGENT, "tier_overrides": {"lock.front_door": "T0"}})
+    assert override.status_code == 422 and "only make an entity stricter" in override.json()["detail"]
+    imported = httpx.post(f"{base}/api/config/import", json={"policy": {"t3_whitelist": ["lock.front_door"]}})
+    assert imported.status_code == 422
+    tiers = {e["entity_id"]: e["tier"] for e in httpx.get(f"{base}/api/entities").json()}
+    assert tiers["lock.front_door"] == "T3"
 
 
 def test_reports_reach_the_inbox(base, llm_sim):

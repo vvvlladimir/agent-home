@@ -8,7 +8,10 @@ One model, one slot (`-np 1`), so requests are serialised here instead of piling
 - stale drop: a request that waited longer than its `max_age_s` is dropped, not answered late;
 - health: `/health` probe → unconfigured / ok / warming / busy / unreachable / degraded;
   while the model loads (HTTP 503, or a profile swap in progress) requests wait instead of failing;
-- retry with backoff for connection errors, 5xx and unparsable responses; never for 4xx or timeouts;
+- retry with backoff for connection errors, 5xx, 429 (honouring `Retry-After`) and unparsable
+  responses; never for other 4xx or timeouts;
+- one deadline per request, counted from when it was queued: time spent waiting behind another
+  request counts, so a stalled model cannot keep a waiting human hanging past `timeout_s`;
 - metrics: rolling medians of decode / prefill tokens per second and time to first token.
 
 Callers get `LLMDropped` (superseded, stale, queue full) or `LLMUnavailable` (the Jetson is off)
@@ -66,7 +69,8 @@ class LLMDropped(LLMError):
 
 
 class _Retry(Exception):
-    def __init__(self, detail: str, loading: bool = False) -> None:
+    def __init__(self, detail: str, loading: bool = False, retry_after: float | None = None) -> None:
+        self.retry_after = retry_after
         super().__init__(detail)
         self.loading = loading
 
@@ -93,6 +97,26 @@ class LLMResult:
             "total_ms": self.total_ms,
             "error": None,
         }
+
+
+def _retry_after(response) -> float | None:
+    """`Retry-After` in seconds (RFC 9110 §10.2.3: delay-seconds; an HTTP date is not used here)."""
+    try:
+        return min(max(float(response.headers.get("retry-after", "")), 0.0), 60.0)
+    except ValueError:
+        return None
+
+
+def _error_message(text: str) -> str:
+    """The `error.message` of an OpenAI-style error body, else the start of the text."""
+    try:
+        data = json.loads(text)
+        message = data.get("error", {}).get("message") if isinstance(data, dict) else None
+        if isinstance(message, str) and message:
+            return message[:200]
+    except (ValueError, AttributeError):
+        pass
+    return text[:200]
 
 
 @dataclass
@@ -138,6 +162,7 @@ class LLMManager:
         self._seq = 0
         self._wake = asyncio.Event()
         self._in_flight: _Job | None = None
+        self._in_flight_since = 0.0
         self._current: asyncio.Task | None = None
         self._tasks: list[asyncio.Task] = []
         self._stopping = False
@@ -194,6 +219,7 @@ class LLMManager:
             "model": self.model,
             "queue_depth": len(self._queue),
             "in_flight": self._in_flight.priority.name.lower() if self._in_flight else None,
+            "in_flight_s": round(time.monotonic() - self._in_flight_since, 1) if self._in_flight else None,
             "last_error": self.last_error,
             "decode_tps": median(self._decode),
             "prefill_tps": median(self._prefill),
@@ -324,7 +350,20 @@ class LLMManager:
         self._queue.append(job)
         self._wake.set()
         try:
-            return await job.future
+            # `_run` stops at the same deadline; this also bounds the wait in the queue
+            async with asyncio.timeout(job.timeout_s + 1.0):
+                return await job.future
+        except TimeoutError:
+            queued = job in self._queue
+            if queued:
+                self._queue.remove(job)
+            elif self._in_flight is job and self._current is not None:
+                self._current.cancel()
+            job.future.cancel()
+            self.errors_total += 1
+            where = "it waited behind another request" if queued else "the request did not finish"
+            self.last_error = f"no answer within {job.timeout_s:g} s ({where})"
+            raise LLMTimeout(f"the model did not answer within {job.timeout_s:g} s ({where})") from None
         except asyncio.CancelledError:
             if job in self._queue:
                 self._queue.remove(job)
@@ -352,7 +391,7 @@ class LLMManager:
             if self._too_old(job):
                 self._drop(job, "stale")
                 continue
-            self._in_flight = job
+            self._in_flight, self._in_flight_since = job, time.monotonic()
             self._current = asyncio.create_task(self._run(job))
             try:
                 result = await self._current
@@ -399,7 +438,7 @@ class LLMManager:
 
     async def _run(self, job: _Job) -> LLMResult:
         started = time.monotonic()
-        deadline = started + job.timeout_s
+        deadline = job.enqueued + job.timeout_s  # the wait in the queue counts
         queued_ms = (started - job.enqueued) * 1000
         attempts = 0
         while True:
@@ -415,7 +454,8 @@ class LLMManager:
                 return result
             except TimeoutError:
                 self._failures += 1
-                raise LLMTimeout(f"no complete answer within {job.timeout_s:.0f} s") from None
+                self.last_error = f"no complete answer within {job.timeout_s:g} s"
+                raise LLMTimeout(f"the model did not answer within {job.timeout_s:g} s") from None
             except _Retry as err:
                 self._failures += 1
                 if err.loading:
@@ -426,8 +466,12 @@ class LLMManager:
                     raise LLMError(f"{err} (after {attempts} attempts)") from None
                 self.retries_total += 1
                 log.warning("llm request failed (%s), retry %d", err, attempts)
+                self.last_error = str(err)
                 if not err.loading:
-                    await asyncio.sleep(self.retry_backoff * 2 ** (attempts - 1))
+                    pause = max(self.retry_backoff * 2 ** (attempts - 1), err.retry_after or 0.0)
+                    if time.monotonic() + pause >= deadline:
+                        raise LLMError(f"{err} (no time left to retry)") from None
+                    await asyncio.sleep(pause)
 
     async def _once(self, job: _Job, queued_ms: float, attempts: int) -> LLMResult:
         body = {**job.body, "stream": True, "stream_options": {"include_usage": True}}
@@ -439,9 +483,13 @@ class LLMManager:
                     raise _Retry("HTTP 503", loading=True)
                 if response.status_code >= 500:
                     raise _Retry(f"HTTP {response.status_code}")
+                if response.status_code == 429:
+                    raise _Retry("HTTP 429: too many requests", retry_after=_retry_after(response))
                 if response.status_code >= 400:
-                    detail = (await response.aread()).decode("utf-8", "replace")[:300]
-                    raise LLMError(f"llama-server rejected the request: HTTP {response.status_code} {detail}")
+                    detail = _error_message((await response.aread()).decode("utf-8", "replace"))
+                    raise LLMError(
+                        f"the local model refused the request (HTTP {response.status_code}): {detail}"
+                    )
                 if "text/event-stream" in response.headers.get("content-type", ""):
                     stream = StreamAccumulator()
                     async for line in response.aiter_lines():

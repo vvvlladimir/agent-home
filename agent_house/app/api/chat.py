@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from ..config import RuntimeSettings, save_runtime
 from ..core.actuator import new_id
-from ..core.agents import ConfigError, parse_agent, parse_policy
+from ..core.agents import ConfigError, check_whitelist, parse_agent, parse_policy
 from ..core.orchestrator import OrchestratorError
 from ..core.runtime import WakeRefused
 
@@ -71,7 +71,12 @@ async def chat(request: Request):
             )
             run = await ctx.agents_rt.wait(run_id)
             final = next((s["data"].get("text") for s in run["trace"][::-1] if s["type"] == "final"), None)
-            reply = final or run.get("summary") or run.get("error") or f"(run {run['status']})"
+            if final or run.get("summary"):
+                reply = final or run["summary"]
+            elif run.get("error"):
+                reply = f"Sorry, I could not answer: {run['error']}"
+            else:
+                reply = f"(run {run['status']})"
     except (OrchestratorError, WakeRefused) as err:
         return _error(err.code, str(err))
     history += [
@@ -130,6 +135,8 @@ async def import_config(request: Request):
                 raise ConfigError(f"agents.{index}: {err}") from None
         if len({a.id for a in agents}) != len(agents):
             raise ConfigError("agents: an id appears twice")
+        if document.get("policy") is not None:
+            check_whitelist(document["policy"], ctx.safety.t3_whitelist)
         policy = parse_policy(document["policy"]) if document.get("policy") is not None else None
         runtime = RuntimeSettings(**document["settings"]) if document.get("settings") is not None else None
     except ConfigError as err:

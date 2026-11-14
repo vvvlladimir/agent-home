@@ -26,7 +26,7 @@
       "type": "array",
       "items": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
       "default": [],
-      "description": "Exact entity ids the owner explicitly allows despite a T3 domain. They become T2 (approval required), never lower. No globs."
+      "description": "Read-only here: the add-on option t3_whitelist (HA Configuration tab). Exact entity ids the owner explicitly allows despite a T3 domain. They become T2 (approval required), never lower. No globs. PUT /api/policy accepts it only unchanged."
     },
     "allowed_services": {
       "type": "object",

@@ -74,7 +74,7 @@ onActivated(() => {
                 <td :data-tip="a.mode !== a.effective_mode ? `${t('Own mode')}: ${a.mode}. ${t('The global mode is shadow.')}` : ''">
                   <span v-if="a.effective_mode === 'live'" class="live-dot">{{ t('Live') }}</span>
                   <span v-else class="status shadow">{{ t('Shadow') }}</span></td>
-                <td>{{ a.entity_count }}</td>
+                <td :data-tip="a.scope">{{ a.entity_count }}</td>
                 <td class="small">{{ a.last_run ? a.last_run.summary || a.last_run.status : '—' }}
                   <span v-if="a.last_run" class="faint">· {{ ago(a.last_run.started) }}</span></td>
                 <td class="act" @click.stop>

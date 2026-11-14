@@ -5,7 +5,8 @@ info:
   description: |
     JSON API between the add-on backend and its GUI. All paths are RELATIVE to the ingress
     root (the GUI calls `api/status`, never `/api/status`). `x-milestone` says in which
-    milestone an operation is implemented; until then it answers 501 `not_implemented`.
+    milestone an operation was implemented. A path that is not here answers 404 `not_found` naming
+    the routes under or near it; a known path with the wrong method answers 405 with `Allow`.
     File formats (agent config, policy, bench reports, …) live in `schemas/*.schema.json`.
 servers:
   - url: .
@@ -103,6 +104,7 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+        "409": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
   /api/agents/{agent_id}:
     parameters: [{$ref: "#/components/parameters/agent_id"}]
@@ -523,7 +525,17 @@ paths:
       requestBody:
         content: {application/json: {schema: {type: object, properties: {reason: {type: string, maxLength: 500}}}}}
       responses:
-        "202": {description: started or queued, content: {application/json: {schema: {type: object, required: [status], properties: {status: {type: string, enum: [started, queued]}}}}}}
+        "202":
+          description: started or queued
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {type: string, enum: [started, queued]}
+                  enabled: {type: boolean, description: manager_enabled at the time of the wake}
+                  note: {type: string, description: what this run may do (with the manager off it switches nothing)}
         "409": {$ref: "#/components/responses/Error"}
   /api/metrics:
     get:
@@ -704,7 +716,7 @@ components:
       type: object
       required: [error]
       properties:
-        error: {type: string, description: "machine code, e.g. not_implemented, not_found, kill_switch, policy_blocked"}
+        error: {type: string, description: "machine code, e.g. not_found, method_not_allowed, kill_switch, policy_blocked"}
         detail: {type: string}
     Mode: {type: string, enum: [shadow, live]}
     Tier: {type: string, enum: [T0, T1, T2, T3]}
@@ -767,6 +779,7 @@ components:
         model: {type: [string, "null"]}
         queue_depth: {type: integer}
         in_flight: {type: [string, "null"], description: priority class of the request being served}
+        in_flight_s: {type: [number, "null"], description: how long the request being served has been running}
         last_error: {type: [string, "null"]}
         decode_tps: {type: [number, "null"], description: rolling median}
         prefill_tps: {type: [number, "null"]}
@@ -850,7 +863,8 @@ components:
         enabled: {type: boolean}
         mode: {$ref: "#/components/schemas/Mode"}
         effective_mode: {$ref: "#/components/schemas/Mode"}
-        entity_count: {type: integer}
+        entity_count: {type: integer, description: entities the agent may read or use (prompt + findable)}
+        scope: {type: string, description: "plain words: which entities it sees and why (entities, entities_mode, max_entities)"}
         last_run: {oneOf: [{$ref: "#/components/schemas/RunSummary"}, {type: "null"}]}
         wakes_last_hour: {type: integer}
     RunSummary:
@@ -1055,6 +1069,7 @@ components:
         wakes_last_hour: {type: integer}
         running: {type: boolean}
         last_run: {type: [number, "null"]}
+        last_run_id: {type: [string, "null"], description: the run (trace) of the last manager run}
         anomalies: {type: array, items: {type: string}, description: "what the deterministic prefilter would wake the model for"}
         owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches)"}
         owned_note: {type: string, description: plain-language explanation of `owned` for the owner}

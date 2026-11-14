@@ -80,6 +80,9 @@ class Settings(BaseModel):
     openai_base_url: str = ""  # only the simulator sets this
     daily_budget_eur: float = 1.0
     redact_cloud: bool = True
+    # Exact entity ids lifted from T3 to T2 (approval for every action), DECISIONS S2. Only here,
+    # in the add-on options (HA admin + restart): the API and the GUI cannot change it (QA-004).
+    t3_whitelist: list[str] = Field(default_factory=list)
 
     @property
     def via_supervisor(self) -> bool:
@@ -178,6 +181,7 @@ _ENV = {
     "AH_OPENAI_BASE_URL": "openai_base_url",
     "AH_DAILY_BUDGET_EUR": "daily_budget_eur",
     "AH_REDACT_CLOUD": "redact_cloud",
+    "AH_T3_WHITELIST": "t3_whitelist",
 }
 _OPTION_KEYS = (
     "log_level",
@@ -191,6 +195,7 @@ _OPTION_KEYS = (
     "openai_model",
     "daily_budget_eur",
     "redact_cloud",
+    "t3_whitelist",
 )
 
 
@@ -211,7 +216,11 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         if env.get(var, "") == "":
             continue
         raw = env[var]
-        values[field] = [p.strip() for p in raw.split(",") if p.strip()] if field == "allowed_peers" else raw
+        values[field] = (
+            [p.strip() for p in raw.split(",") if p.strip()]
+            if field in ("allowed_peers", "t3_whitelist")
+            else raw
+        )
 
     if not values.get("ha_token"):
         values["ha_token"] = env.get("SUPERVISOR_TOKEN", "")

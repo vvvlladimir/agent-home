@@ -132,6 +132,13 @@ async def wake_manager(request: Request):
     if result["status"] == "refused":
         code = "kill_switch" if "kill" in result["detail"] else "conflict"
         return _error(code, result["detail"])
+    result["enabled"] = ctx.manager.enabled
+    result["note"] = (
+        "The manager is on: this run may also switch the entities it owns (in its mode)."
+        if ctx.manager.enabled
+        else "The manager is off: this one run may look, give room agents tasks, propose drafts and "
+        "report to you, but switches nothing. It counts toward the hourly wake limit."
+    )
     return JSONResponse(result, status_code=202)
 
 

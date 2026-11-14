@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import io
 import json
 import platform
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field, ValidationError
 
 from .. import __version__
@@ -354,9 +356,51 @@ async def get_diagnostics(request: Request) -> Response:
     )
 
 
+def _api_routes(routes) -> list[APIRoute]:
+    """Every APIRoute, also inside included routers (newer FastAPI wraps them)."""
+    out: list[APIRoute] = []
+    for route in routes:
+        if isinstance(route, APIRoute):
+            out.append(route)
+        elif isinstance(inner := getattr(route, "routes", None), list):
+            out += _api_routes(inner)
+        else:
+            for attr in ("original_router", "router"):  # FastAPI ≥0.13x: _IncludedRouter
+                sub = getattr(route, attr, None)
+                if sub is not None and isinstance(getattr(sub, "routes", None), list):
+                    out += _api_routes(sub.routes)
+                    break
+    return out
+
+
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
-async def not_implemented(path: str) -> JSONResponse:
-    """Everything else in contracts/openapi.yaml arrives in a later milestone (see x-milestone)."""
-    return JSONResponse(
-        {"error": "not_implemented", "detail": f"api/{path} is not available in this build"}, status_code=501
-    )
+async def unknown_route(path: str, request: Request) -> JSONResponse:
+    """Nothing else matched: 405 with `Allow` when the path exists for other methods (RFC 9110
+    §15.5.6), else 404 that names the routes under or near that path."""
+    target = f"/api/{path}".rstrip("/")
+    allowed: set[str] = set()
+    known: list[str] = []
+    for route in _api_routes(request.app.routes):
+        if route.endpoint is unknown_route:
+            continue
+        if route.path_regex.match(target):
+            allowed |= route.methods or set()
+        if route.path.startswith("/api/"):
+            known += [f"{m} {route.path}" for m in sorted(route.methods or ())]
+    if allowed:
+        allow = ", ".join(sorted(allowed - {"HEAD"}))
+        return JSONResponse(
+            {
+                "error": "method_not_allowed",
+                "detail": f"{request.method} is not allowed on {target}; use {allow}",
+            },
+            status_code=405,
+            headers={"Allow": allow},
+        )
+    under = [k for k in known if k.split(" ", 1)[1].startswith(target + "/")]
+    near = under or [
+        k for k in known
+        if k.split(" ", 1)[1] in difflib.get_close_matches(target, [x.split(" ", 1)[1] for x in known], n=3)
+    ]  # fmt: skip
+    hint = f"; did you mean: {', '.join(near[:8])}" if near else ""
+    return JSONResponse({"error": "not_found", "detail": f"no API route {target}{hint}"}, status_code=404)

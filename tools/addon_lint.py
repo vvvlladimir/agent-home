@@ -64,6 +64,13 @@ def lint(addon: Path) -> list[str]:
         if key not in schema:
             errors.append(f"config.yaml: option `{key}` has no schema entry")
     for key, type_ in schema.items():
+        if isinstance(type_, list) and len(type_) == 1 and isinstance(type_[0], str):
+            # a list option: one element type, the default is a list in options
+            if not SCHEMA_TYPE.match(type_[0]):
+                errors.append(f"config.yaml: schema `{key}` has an unknown element type {type_[0]!r}")
+            elif not isinstance(options.get(key, []), list):
+                errors.append(f"config.yaml: list option `{key}` needs a list default")
+            continue
         if not isinstance(type_, str) or not SCHEMA_TYPE.match(type_):
             errors.append(f"config.yaml: schema `{key}` has an unknown type {type_!r}")
         elif not type_.endswith("?") and key not in options:

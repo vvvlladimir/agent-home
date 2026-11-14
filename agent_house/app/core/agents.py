@@ -277,6 +277,21 @@ class PolicyModel(_Strict):
         return value
 
 
+T3_WHITELIST_HINT = (
+    "t3_whitelist is an add-on option, read-only here: set it in Home Assistant under Settings → Apps "
+    "(Add-ons before HA 2026.2) → Agent House → Configuration"
+)
+
+
+def check_whitelist(payload: object, current: list[str]) -> None:
+    """A policy body may carry `t3_whitelist` only unchanged (as GET returned it): lifting a T3 is
+    an add-on option, never something the API or an agent can do (QA-004)."""
+    if isinstance(payload, dict) and "t3_whitelist" in payload:
+        given = payload["t3_whitelist"]
+        if not isinstance(given, list) or sorted({str(e) for e in given}) != sorted(current):
+            raise ConfigError(T3_WHITELIST_HINT)
+
+
 def parse_policy(payload: object) -> dict:
     if not isinstance(payload, dict):
         raise ConfigError("the policy must be an object")

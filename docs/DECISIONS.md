@@ -43,7 +43,7 @@ hardware; replaced after `make analyze-report` has real data.
 | # | Decision | Why |
 |---|---|---|
 | S1 | Unknown domains are T3. Sensor-like domains are T3 too and shown as "read-only". | Deny by default; nothing to actuate there anyway. |
-| S2 | A T3 domain can only be lifted by `t3_whitelist` (exact entity ids), and only to T2. | "Never unless the owner explicitly whitelists", and even then a human approves each action. |
+| S2 | A T3 domain can only be lifted by `t3_whitelist` (exact entity ids), and only to T2. The list is an add-on option (HA Configuration tab, admin + restart), not part of the policy file: `PUT /api/policy` and the config import refuse to change it (QA-004, 2026-11-14). | "Never unless the owner explicitly whitelists", and even then a human approves each action. Nothing reachable from the API or a prompt can lift a T3. |
 | S3 | Agent tier overrides can only tighten. | A prompt or config mistake in one agent must not widen its rights. |
 | S4 | Garage covers match `cover.*garage*` → T3 by default. | Covers are T2, but a garage door is a perimeter. Entities named differently need an explicit `entity_tiers` entry (OWNER_CHECKLIST Q4). |
 | S5 | The app rejects every peer except 172.30.32.2; no published port; `/healthz` is the only loopback exception. | The GUI can switch modes; it must only be reachable through HA's authenticated ingress. |

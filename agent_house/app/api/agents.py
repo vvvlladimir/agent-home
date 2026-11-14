@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import difflib
+
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from ..core.actuator import ApprovalConflict
-from ..core.agents import AgentConfig, ConfigError, parse_agent, parse_policy
+from ..core.agents import AgentConfig, ConfigError, check_whitelist, parse_agent, parse_policy
+from ..core.policy import TIERS, resolve_tier
 from ..core.runtime import WakeRefused
 
 router = APIRouter(prefix="/api")
@@ -31,8 +34,24 @@ async def _body(request: Request) -> object:
         return None
 
 
+def _scope_note(agent: AgentConfig, count: int) -> str:
+    """QA-009: what `entities`, `entities_mode` and `max_entities` add up to, in words."""
+    if not agent.entities:
+        how = f"every entity of room {agent.room} (none ticked, so entities_mode does not apply)"
+    elif agent.entities_mode == "only":
+        how = f"only the {len(agent.entities)} ticked entities"
+    else:
+        how = f"the {len(agent.entities)} ticked entities first, then the rest of room {agent.room}"
+    per_prompt = max(agent.max_entities, len(agent.entities))
+    return (
+        f"Sees {how}: {count} in total, device noise left out. Up to {per_prompt} are in each prompt; "
+        "it finds the others with list_entities."
+    )
+
+
 def _summary(ctx, agent: AgentConfig) -> dict:
     last = ctx.agents_rt.list_runs(agent=agent.id, limit=1)
+    count = len(ctx.agents_rt.scope(agent))
     return {
         "id": agent.id,
         "name": agent.name,
@@ -40,7 +59,8 @@ def _summary(ctx, agent: AgentConfig) -> dict:
         "enabled": agent.enabled,
         "mode": agent.mode,
         "effective_mode": ctx.agents_rt.effective_mode(agent),
-        "entity_count": len(ctx.agents_rt.scope(agent)),
+        "entity_count": count,
+        "scope": _scope_note(agent, count),
         "last_run": last[0] if last else None,
         "wakes_last_hour": ctx.gate.wakes_last_hour(agent.id),
     }
@@ -56,21 +76,43 @@ async def list_agents(request: Request) -> list[dict]:
 
 
 def _unknown(ctx, agent: AgentConfig, before: AgentConfig | None = None) -> str | None:
-    """Why the room or an entity is a typo, or None. Checked against HA only while it is connected
-    (offline nothing can be told), and on an update only what changed, so an area the owner removed
-    in HA later does not lock the agent's other settings."""
+    """Why the agent config cannot be saved as given, or None: a tier override that would be
+    ignored (overrides only make stricter), or a typo in the room or an entity. The typos are
+    checked against HA only while it is connected (offline nothing can be told), and on an update
+    only what changed, so an area the owner removed in HA later does not lock the other settings."""
+    for entity_id, tier in (agent.tier_overrides or {}).items():
+        if any(c in entity_id for c in "*?["):
+            continue
+        floor = resolve_tier(entity_id, ctx.safety.policy)
+        if TIERS.index(tier) < TIERS.index(floor):
+            return (
+                f"tier_overrides can only make an entity stricter: {entity_id} is {floor} by the "
+                f"policy, {tier} would be ignored"
+            )
     ha = ctx.ha
     if not ha.connected:
         return None
     areas = ha.registry.areas
     if areas and agent.room not in areas and (before is None or agent.room != before.room):
-        known = ", ".join(sorted(areas)[:20])
-        return f"room {agent.room!r} is not an area in Home Assistant (areas: {known})"
+        return _unknown_room(agent.room, areas)
     old = set(before.entities) if before else set()
     missing = [e for e in agent.entities if e not in ha.states and e not in old]
     if missing:
         return f"unknown to Home Assistant: {', '.join(missing)}"
     return None
+
+
+def _unknown_room(room: str, areas: dict) -> str:
+    """QA-010: name the closest area id, then the list."""
+    normal = room.strip().lower().replace("-", "_").replace(" ", "_")
+    by_name = {str(a.get("name") or "").strip().lower().replace(" ", "_"): k for k, a in areas.items()}
+    guess = normal if normal in areas else by_name.get(normal)
+    if guess is None:
+        close = difflib.get_close_matches(normal, list(areas), n=1, cutoff=0.6)
+        guess = close[0] if close else None
+    hint = f" Did you mean {guess!r}?" if guess else ""
+    known = ", ".join(sorted(areas)[:20])
+    return f"room {room!r} is not an area in Home Assistant.{hint} Areas: {known}"
 
 
 def _save(ctx, agent: AgentConfig, verb: str) -> None:
@@ -88,7 +130,9 @@ async def create_agent(request: Request):
     except ConfigError as err:
         return _error("invalid", str(err), 422)
     if ctx.agents.get(agent.id) is not None:
-        return _error("invalid", f"agent {agent.id} already exists", 422)
+        return _error(
+            "conflict", f"agent {agent.id} already exists: change it with PUT /api/agents/{agent.id}", 409
+        )
     if why := _unknown(ctx, agent):
         return _error("invalid", why, 422)
     _save(ctx, agent, "created")
@@ -210,8 +254,10 @@ async def get_policy(request: Request) -> dict:
 @router.put("/policy")
 async def put_policy(request: Request):
     ctx = request.app.state.ctx
+    body = await _body(request)
     try:
-        policy = parse_policy(await _body(request))
+        check_whitelist(body, ctx.safety.t3_whitelist)
+        policy = parse_policy(body)
     except ConfigError as err:
         return _error("invalid", str(err), 422)
     return ctx.safety.save_policy(policy)

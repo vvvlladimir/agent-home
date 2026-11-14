@@ -313,3 +313,7 @@ Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_CO
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.
 - llama-server `timings` field names, default port, `--mlock` spelling: `setup.sh --check` will
   record `llama-server --help` and one sample response.
+- `[UNVERIFIED-ON-HW]` The `t3_whitelist` add-on option (QA-004, a list of `match(...)` entries):
+  open Settings → Apps → Agent House → Configuration, add `lock.front_door`, save, restart.
+  Expected: the GUI's Settings page lists it under add-on options, the entity shows T2, and
+  `PUT api/policy` with a different `t3_whitelist` answers 422.
