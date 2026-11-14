@@ -142,18 +142,40 @@ class _Presence:
         return not state or any(v == "home" for v in state.values())
 
 
+def _blank(ha_id: str, title, version) -> dict:
+    return {"ha_id": ha_id, "title": title, "version": version,
+            "kept": 0, "undone": 0, "unobserved": 0, "missed": 0, "examples": []}  # fmt: skip
+
+
 def evaluate(changes: list[Change], ours: dict[str, dict], intents: dict[str, dict[str, set[str]]]) -> dict:
-    """`ours`: automation entity → {ha_id, since, title, version}; `intents`: ha_id → intended_states.
-    Pure: everything the API and the review show comes from here."""
+    """`ours`: automation entity → {ha_id, since, title, version, previous?}; `intents`: ha_id →
+    intended_states of the current version. `previous` (optional, oldest first) lists the earlier
+    versions as {version, since, intents}: each one is scored over its own window (its `since` up to
+    the next version's), so an undo before a new version stays in the house counts and shows as that
+    version's outcome instead of vanishing. Pure: everything the API and the review show comes from here."""
     by_entity: dict[str, list[Change]] = defaultdict(list)
     for change in changes:
         by_entity[change.entity_id].append(change)
     presence = _Presence(changes)
-    autos: dict[str, dict] = {
-        info["ha_id"]: {"ha_id": info["ha_id"], "title": info.get("title"), "version": info.get("version"),
-                        "kept": 0, "undone": 0, "unobserved": 0, "missed": 0, "examples": []}
-        for info in ours.values()
-    }  # fmt: skip
+    # (ha_id, version) → item, with its window [since, until) and its intended states
+    windows: dict[str, list[tuple[float, float, dict, dict]]] = {}
+    autos: dict[str, dict] = {}
+    for info in ours.values():
+        ha_id = info["ha_id"]
+        current = autos[ha_id] = _blank(ha_id, info.get("title"), info.get("version"))
+        spans = [*(info.get("previous") or []), {"since": info["since"], "item": current}]
+        spans.sort(key=lambda s: s["since"])
+        rows = []
+        for i, span in enumerate(spans):
+            until = spans[i + 1]["since"] if i + 1 < len(spans) else math.inf
+            item = span.get("item") or _blank(ha_id, info.get("title"), span.get("version"))
+            want = intents.get(ha_id) if item is current else span.get("intents") or intents.get(ha_id)
+            rows.append((span["since"], until, item, want or {}))
+        windows[ha_id] = rows
+
+    def window_of(ha_id: str, ts: float):
+        return next((w for w in windows[ha_id] if w[0] <= ts < w[1]), None)
+
     agents: dict[str, dict] = {}
     undo_of: set[int] = set()  # id() of manual changes that reverted something of ours
     acted_at: dict[tuple[str, str], list[float]] = defaultdict(list)  # (ha_id, entity) → times
@@ -161,11 +183,12 @@ def evaluate(changes: list[Change], ours: dict[str, dict], intents: dict[str, di
     for entity_id, rows in by_entity.items():
         for i, change in enumerate(rows):
             if change.cause == "automation" and change.ref in ours:
-                info = ours[change.ref]
-                if change.ts < info["since"]:
+                ha_id = ours[change.ref]["ha_id"]
+                found = window_of(ha_id, change.ts)
+                if found is None:
                     continue
-                item = autos[info["ha_id"]]
-                acted_at[(info["ha_id"], entity_id)].append(change.ts)
+                item = found[2]
+                acted_at[(ha_id, entity_id)].append(change.ts)
             elif change.cause == "agent" and change.ref:
                 item = agents.setdefault(change.ref, {"agent_id": change.ref, "kept": 0, "undone": 0,
                                                       "unobserved": 0, "examples": []})  # fmt: skip
@@ -184,32 +207,39 @@ def evaluate(changes: list[Change], ours: dict[str, dict], intents: dict[str, di
             else:
                 item["kept"] += 1
 
-    for info in ours.values():
-        ha_id = info["ha_id"]
-        for entity_id, states in (intents.get(ha_id) or {}).items():
-            for change in by_entity.get(entity_id, []):
-                if (
-                    not change.manual or change.ts < info["since"] or id(change) in undo_of
-                    or change.state not in states
-                ):  # fmt: skip
-                    continue
-                if any(0 <= change.ts - t <= UNDO_S for t in acted_at.get((ha_id, entity_id), [])):
-                    continue  # it acted shortly before: the owner repeated it, not a miss
-                autos[ha_id]["missed"] += 1
-                if len(autos[ha_id]["examples"]) < 3:
-                    autos[ha_id]["examples"].append(f"{entity_id} → {change.state} by hand (missed)")
+    for ha_id, spans in windows.items():
+        for since, until, item, want in spans:
+            for entity_id, states in want.items():
+                for change in by_entity.get(entity_id, []):
+                    if (
+                        not change.manual or not since <= change.ts < until or id(change) in undo_of
+                        or change.state not in states
+                    ):  # fmt: skip
+                        continue
+                    if any(0 <= change.ts - t <= UNDO_S for t in acted_at.get((ha_id, entity_id), [])):
+                        continue  # it acted shortly before: the owner repeated it, not a miss
+                    item["missed"] += 1
+                    if len(item["examples"]) < 3:
+                        item["examples"].append(f"{entity_id} → {change.state} by hand (missed)")
+
+    olds: list[dict] = []
+    for ha_id, spans in windows.items():
+        previous = [w[2] for w in spans if w[2] is not autos[ha_id] and _outcomes(w[2])]
+        for item in previous:
+            _rates(item)
+        olds += previous
+        autos[ha_id]["previous"] = previous
 
     for item in autos.values():
-        item["precision"] = rate(item["kept"], item["kept"] + item["undone"])
-        item["coverage"] = rate(item["kept"], item["kept"] + item["missed"])
-        item["f1"] = f1(item["precision"]["value"], item["coverage"]["value"])
+        _rates(item)
     for item in agents.values():
         item["precision"] = rate(item["kept"], item["kept"] + item["undone"])
 
-    kept_a = sum(i["kept"] for i in autos.values())
+    every = [*autos.values(), *olds]  # the house counts keep what earlier versions did
+    kept_a = sum(i["kept"] for i in every)
     kept_g = sum(i["kept"] for i in agents.values())
-    undone = sum(i["undone"] for i in autos.values()) + sum(i["undone"] for i in agents.values())
-    missed = sum(i["missed"] for i in autos.values())
+    undone = sum(i["undone"] for i in every) + sum(i["undone"] for i in agents.values())
+    missed = sum(i["missed"] for i in every)
     precision = rate(kept_a + kept_g, kept_a + kept_g + undone)
     coverage = rate(kept_a, kept_a + missed)
     manual = sum(1 for c in changes if c.manual and c.entity_id.split(".", 1)[0] in ACT_DOMAINS)
@@ -220,13 +250,23 @@ def evaluate(changes: list[Change], ours: dict[str, dict], intents: dict[str, di
         "score_low": f1(precision["low"], coverage["low"]),
         "house_share": rate(kept_a + kept_g, kept_a + kept_g + manual),
         "counts": {"kept": kept_a + kept_g, "undone": undone, "missed": missed, "manual": manual,
-                   "unobserved": sum(i["unobserved"] for i in [*autos.values(), *agents.values()])},
+                   "unobserved": sum(i["unobserved"] for i in [*every, *agents.values()])},
     }  # fmt: skip
     return {
         "automations": sorted(autos.values(), key=lambda i: (i["f1"] is None, i["f1"] or 0)),
         "agents": sorted(agents.values(), key=lambda i: i["agent_id"]),
         "program": program,
     }
+
+
+def _outcomes(item: dict) -> int:
+    return item["kept"] + item["undone"] + item["unobserved"] + item["missed"]
+
+
+def _rates(item: dict) -> None:
+    item["precision"] = rate(item["kept"], item["kept"] + item["undone"])
+    item["coverage"] = rate(item["kept"], item["kept"] + item["missed"])
+    item["f1"] = f1(item["precision"]["value"], item["coverage"]["value"])
 
 
 class Metrics:
@@ -245,9 +285,24 @@ class Metrics:
         )
         return {r["ha_id"]: intended_states(r["yaml"]) for r in rows}
 
+    def ours(self) -> dict[str, dict]:
+        """`insights.ours()` plus the earlier versions of each, so their outcomes are not lost."""
+        ours = self.insights.ours()
+        for info in ours.values():
+            rows = self.store.query(
+                "SELECT version, created, yaml FROM automation_versions WHERE ha_id=? AND version<? "
+                "ORDER BY version",
+                (info["ha_id"], info["version"]),
+            )
+            info["previous"] = [
+                {"version": r["version"], "since": r["created"], "intents": intended_states(r["yaml"])}
+                for r in rows
+            ]
+        return ours
+
     async def compute(self, days: int = 7) -> dict:
         changes = await self.insights.changes(days)
-        result = evaluate(changes, self.insights.ours(), self.intents())
+        result = evaluate(changes, self.ours(), self.intents())
         return {"days": days, "min_n": MIN_N, "undo_window_s": UNDO_S, **result,
                 "history": self.history()}  # fmt: skip
 

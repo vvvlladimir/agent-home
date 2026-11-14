@@ -156,7 +156,7 @@ const shown = computed(() => today.value.filter((x) => !filter.value || group(x.
           <dt>{{ t('Precision') }}</dt><dd>{{ pct(metrics?.program.precision.value) }} <span class="faint">n={{ metrics?.program.precision.n ?? 0 }}</span></dd>
           <dt>{{ t('Coverage') }}</dt><dd>{{ pct(metrics?.program.coverage.value) }} <span class="faint">n={{ metrics?.program.coverage.n ?? 0 }}</span></dd>
           <dt>{{ t('Automated share') }}</dt><dd>{{ pct(metrics?.program.house_share.value) }}</dd>
-          <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span></dd>
+          <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span><span v-if="manager" class="faint"> · {{ manager.owned.length }} {{ t('without a room agent') }} <Info :tip="manager.owned_note || ''" /></span></dd>
         </dl>
         <ul v-if="weakAutos.length" class="feed">
           <li v-for="a in weakAutos" :key="a.ha_id"><i class="mk warn" /><span class="msg">{{ a.title || a.ha_id }} · F1 {{ pct(a.f1) }} <span class="where">{{ a.examples?.[0] }}</span></span></li>

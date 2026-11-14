@@ -55,6 +55,24 @@ async def list_agents(request: Request) -> list[dict]:
     return [_summary(ctx, agent) for agent in ctx.agents.list()]
 
 
+def _unknown(ctx, agent: AgentConfig, before: AgentConfig | None = None) -> str | None:
+    """Why the room or an entity is a typo, or None. Checked against HA only while it is connected
+    (offline nothing can be told), and on an update only what changed, so an area the owner removed
+    in HA later does not lock the agent's other settings."""
+    ha = ctx.ha
+    if not ha.connected:
+        return None
+    areas = ha.registry.areas
+    if areas and agent.room not in areas and (before is None or agent.room != before.room):
+        known = ", ".join(sorted(areas)[:20])
+        return f"room {agent.room!r} is not an area in Home Assistant (areas: {known})"
+    old = set(before.entities) if before else set()
+    missing = [e for e in agent.entities if e not in ha.states and e not in old]
+    if missing:
+        return f"unknown to Home Assistant: {', '.join(missing)}"
+    return None
+
+
 def _save(ctx, agent: AgentConfig, verb: str) -> None:
     ctx.agents.save(agent)
     ctx.gate.reload()
@@ -71,6 +89,8 @@ async def create_agent(request: Request):
         return _error("invalid", str(err), 422)
     if ctx.agents.get(agent.id) is not None:
         return _error("invalid", f"agent {agent.id} already exists", 422)
+    if why := _unknown(ctx, agent):
+        return _error("invalid", why, 422)
     _save(ctx, agent, "created")
     return JSONResponse(agent.dump(), status_code=201)
 
@@ -84,7 +104,8 @@ async def get_agent(agent_id: str, request: Request):
 @router.put("/agents/{agent_id}")
 async def update_agent(agent_id: str, request: Request):
     ctx = request.app.state.ctx
-    if ctx.agents.get(agent_id) is None:
+    before = ctx.agents.get(agent_id)
+    if before is None:
         return _error("not_found", f"no agent {agent_id!r}", 404)
     try:
         agent = parse_agent(await _body(request))
@@ -92,6 +113,8 @@ async def update_agent(agent_id: str, request: Request):
         return _error("invalid", str(err), 422)
     if agent.id != agent_id:
         return _error("invalid", "the id of an agent cannot be changed", 422)
+    if why := _unknown(ctx, agent, before):
+        return _error("invalid", why, 422)
     _save(ctx, agent, "updated")
     return agent.dump()
 

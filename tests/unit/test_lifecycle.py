@@ -305,6 +305,41 @@ async def test_evidence_simulates_state_numeric_and_time_triggers(lc):
     assert result["would_fire"] == len(result["samples"])
 
 
+async def test_evidence_checks_conditions_at_each_firing_and_says_what_it_could_not(lc):
+    """QA-002: a condition the draft adds is replayed, and one it cannot replay is reported."""
+    now = datetime(2026, 11, 13, 12, 0, tzinfo=UTC)
+
+    def at(hours: float) -> str:
+        return (now - timedelta(hours=hours)).isoformat()
+
+    lc.ha_stub.history_rows = {
+        "binary_sensor.room_motion": [
+            {"state": "off", "last_changed": at(48)}, {"state": "on", "last_changed": at(30)},
+            {"state": "off", "last_changed": at(29)}, {"state": "on", "last_changed": at(2)},
+        ],
+        "binary_sensor.occupancy": [
+            {"state": "on", "last_changed": at(48)}, {"state": "off", "last_changed": at(10)},
+        ],
+    }  # fmt: skip
+    from app.core.evidence import simulate
+
+    trigger = [{"trigger": "state", "entity_id": "binary_sensor.room_motion", "to": "on"}]
+    occupied = {"condition": "state", "entity_id": "binary_sensor.occupancy", "state": "off"}
+    config = {"triggers": trigger, "conditions": [occupied], "actions": [{"delay": 1}]}
+    result = await simulate(config, lc.ha_stub, days=2, now=now)
+    assert (result["fired"], result["blocked"], result["would_fire"]) == (2, 1, 1), "30 h ago it was occupied"
+    assert result["conditions_evaluated"] is True and result["supported"] is True
+
+    config["conditions"] = [
+        {"condition": "not", "conditions": [occupied]},
+        {"condition": "sun", "after": "sunset"},
+    ]
+    result = await simulate(config, lc.ha_stub, days=2, now=now)
+    assert (result["blocked"], result["would_fire"]) == (1, 1), "the sun is let through, `not` is checked"
+    assert result["conditions_evaluated"] is False and result["supported"] is False
+    assert any("sun" in note and "not evaluated" in note for note in result["unsupported"])
+
+
 # --- supersedes (M5 council): never two of ours fighting over one entity --------------------------
 OFF = GOOD.replace("Lamp on motion", "Lamp off").replace("light.turn_on", "light.turn_off")
 

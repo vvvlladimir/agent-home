@@ -99,6 +99,7 @@ paths:
       tags: [agents]
       operationId: createAgent
       x-milestone: M3
+      description: 422 when HA is connected and the room is not one of its areas or an entity is unknown to it.
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
       responses:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
@@ -116,9 +117,12 @@ paths:
       tags: [agents]
       operationId: updateAgent
       x-milestone: M3
+      description: 422 when HA is connected and a changed room or a newly added entity is unknown to it.
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
+        "404": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
     delete:
       tags: [agents]
       operationId: deleteAgent
@@ -962,11 +966,13 @@ components:
       required: [days, would_fire, supported]
       properties:
         days: {type: integer}
-        supported: {type: boolean, description: false when a trigger type cannot be simulated from history}
-        unsupported: {type: array, items: {type: string}}
-        would_fire: {type: integer}
+        supported: {type: boolean, description: false when a trigger or a condition cannot be replayed from history}
+        unsupported: {type: array, items: {type: string}, description: what was not replayed, triggers and conditions}
+        fired: {type: integer, description: trigger firings in the window, before conditions}
+        blocked: {type: integer, description: firings the conditions would have stopped}
+        would_fire: {type: integer, description: firings that pass the conditions (fired - blocked)}
         samples: {type: array, items: {type: object, properties: {ts: {type: number}, trigger: {type: string}}}}
-        conditions_evaluated: {type: boolean, description: "false: would_fire counts trigger firings, conditions are not replayed"}
+        conditions_evaluated: {type: boolean, description: "false: some condition could not be checked (listed in unsupported) and let the firings through, so would_fire is an upper bound"}
         computed: {type: number}
     DeployedAutomation:
       type: object
@@ -1050,7 +1056,8 @@ components:
         running: {type: boolean}
         last_run: {type: [number, "null"]}
         anomalies: {type: array, items: {type: string}, description: "what the deterministic prefilter would wake the model for"}
-        owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them)"}
+        owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches)"}
+        owned_note: {type: string, description: plain-language explanation of `owned` for the owner}
         weak: {type: array, items: {type: object, properties: {ha_id: {type: string}, title: {type: [string, "null"]}}}}
         checked: {type: string}
     Rate:
@@ -1086,6 +1093,12 @@ components:
               coverage: {$ref: "#/components/schemas/Rate"}
               f1: {type: [number, "null"]}
               examples: {type: array, items: {type: string}}
+              previous:
+                type: array
+                description: >-
+                  Earlier versions with outcomes in the window, each scored over its own time span
+                  (same fields, no `previous`); the program counts include them.
+                items: {type: object}
         agents:
           type: array
           items:

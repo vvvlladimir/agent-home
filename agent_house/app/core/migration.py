@@ -145,8 +145,19 @@ class Migration:
         self.lifecycle, self.orchestrator, self.safety = lifecycle, orchestrator, safety
 
     # --- reading ----------------------------------------------------------------------------
+    def _entity(self, row: dict) -> str | None:
+        """The original's entity now: found by its config id (HA keeps that stable, the entity id
+        may be renamed), else the one seen at import. Never trust a stored id alone: it could name
+        another automation by now."""
+        if row["source"] == "ha_automation" and row["ref"]:
+            found = self.ha.automation_entity(row["ref"])
+            if found:
+                return found
+        return row["entity_id"]
+
     def _row(self, row: dict) -> dict:
-        state = self.ha.states.get(row["entity_id"]) if row["entity_id"] else None
+        entity_id = self._entity(row)
+        state = self.ha.states.get(entity_id) if entity_id else None
         enabled = None if row["enabled"] is None else bool(row["enabled"])
         if row["source"] == "ha_automation" and state and state.get("state") in ("on", "off"):
             enabled = state["state"] == "on"
@@ -159,7 +170,7 @@ class Migration:
         return {
             "id": row["id"],
             "source": row["source"],
-            "entity_id": row["entity_id"],
+            "entity_id": entity_id,
             "title": row["title"],
             "enabled": enabled,
             "summary": row["summary"],
@@ -314,6 +325,16 @@ class Migration:
     async def parity(self, original_id: str, days: int = 7) -> dict:
         original = self.get(original_id)
         if not original["replacement_proposal_id"]:
+            last = self.store.query(
+                "SELECT id, status FROM proposals WHERE replaces_original=? ORDER BY created DESC LIMIT 1",
+                (original_id,),
+            )
+            if last:
+                raise MigrationError(
+                    "conflict",
+                    f"the last replacement {last[0]['id']} was {last[0]['status'].replace('_', ' ')}: "
+                    "nothing to compare, ask for a new one",
+                )
             raise MigrationError("conflict", "no replacement proposal yet: ask for one first")
         proposal = self.lifecycle.get(original["replacement_proposal_id"])
         replacement, _ = self.lifecycle.parse(proposal["yaml"])

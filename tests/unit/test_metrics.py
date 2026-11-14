@@ -106,3 +106,20 @@ actions:
 """
     assert intended_states(text) == {"light.a": {"on"}, "light.b": {"on"}, "climate.room": {"heat"}}
     assert intended_states(": not yaml [") == {}
+
+
+def test_outcomes_of_an_earlier_version_stay_in_the_house_counts_and_show_per_version():
+    """QA-001: approving v2 must not make v1's undos vanish from the headline numbers."""
+    ours = {AUTO: {**OURS[AUTO], "version": 2, "since": 1000.0,
+                   "previous": [{"version": 1, "since": 0.0, "intents": INTENTS["agent_house_lamp"]}]}}  # fmt: skip
+    changes = [HOME]
+    for i in range(5):  # v1 acted five times, undone each time
+        changes += [auto(10 + i * 60), hand(20 + i * 60, "off")]
+    changes += [auto(2000)]  # v2 acted once, kept
+    result = evaluate(changes, ours, INTENTS)
+    [item] = result["automations"]
+    assert (item["version"], item["kept"], item["undone"]) == (2, 1, 0)
+    [v1] = item["previous"]
+    assert (v1["version"], v1["kept"], v1["undone"]) == (1, 0, 5)
+    assert v1["precision"]["value"] == 0.0 and v1["precision"]["n"] == 5
+    assert result["program"]["counts"]["undone"] == 5 and result["program"]["counts"]["kept"] == 1

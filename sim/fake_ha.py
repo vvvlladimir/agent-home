@@ -292,9 +292,14 @@ class HAState:
     def put_automation(self, cid: str, config: dict) -> None:
         cfg = {**config, "id": cid}
         self.automations[cid] = cfg
-        eid = f"automation.{slugify(cfg.get('alias') or cid)}"
-        for old in [e for e, s in self.states.items() if s["attributes"].get("id") == cid and e != eid]:
-            self.remove_state(old)
+        # Like HA's entity registry: the entity id is made from the alias once, on creation, and kept
+        # (the unique_id is the config id); a taken id gets `_2`, `_3`, … — never another's entity.
+        eid = next((e for e, s in self.states.items() if s["attributes"].get("id") == cid), None)
+        if eid is None:
+            base = f"automation.{slugify(cfg.get('alias') or cid)}"
+            eid, n = base, 2
+            while eid in self.states:
+                eid, n = f"{base}_{n}", n + 1
         prev = self.states.get(eid, {}).get("attributes", {})
         self.set_state(
             eid,

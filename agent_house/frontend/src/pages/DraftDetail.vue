@@ -55,7 +55,7 @@ async function simulate() {
 const diffClass = (line: string) =>
   line.startsWith('+') && !line.startsWith('+++') ? 'diff-add' : line.startsWith('-') && !line.startsWith('---') ? 'diff-del' : '';
 function openRun() { nav.runId = p.value!.run_id!; go('runs'); }
-const ev = () => p.value!.evidence as { would_fire: number; days: number; unsupported?: string[]; samples?: { ts: number; trigger: string }[] };
+const ev = () => p.value!.evidence as { would_fire: number; days: number; blocked?: number; conditions_evaluated?: boolean; unsupported?: string[]; samples?: { ts: number; trigger: string }[] };
 </script>
 
 <template>
@@ -98,14 +98,14 @@ const ev = () => p.value!.evidence as { would_fire: number; days: number; unsupp
         </article>
         <article class="card stack">
           <div class="sec-h"><h2>{{ t('Against history') }}
-            <Info :tip="t('Replays the triggers over recorded history. Conditions are not evaluated.') + (p.expected_triggers ? '\n' + t('Expected to fire:') + ' ' + p.expected_triggers : '')" /></h2></div>
+            <Info :tip="t('Replays the triggers over recorded history and checks the conditions (state, numeric, time) at each firing.') + (p.expected_triggers ? '\n' + t('Expected to fire:') + ' ' + p.expected_triggers : '')" /></h2></div>
           <div class="row" style="align-items: end">
             <label class="field" style="width: 6rem"><span>{{ t('Days') }}</span><input v-model="days" type="number" min="1" max="30" /></label>
             <button class="btn" :disabled="busy" @click="simulate">{{ t('Simulate') }}</button>
           </div>
           <div v-if="p.evidence" class="stack">
             <div class="row"><span class="big">{{ ev().would_fire }}</span>
-              <span class="muted small">{{ t('times it would have fired in') }} {{ ev().days }} {{ t('days') }}</span></div>
+              <span class="muted small">{{ t('times it would have fired in') }} {{ ev().days }} {{ t('days') }}<template v-if="ev().blocked"> · {{ ev().blocked }} {{ t('stopped by its conditions') }}</template><template v-if="ev().conditions_evaluated === false"> · {{ t('upper bound: some conditions were not checked') }}</template></span></div>
             <p v-if="ev().unsupported?.length" class="error small">{{ t('Not simulated:') }} {{ ev().unsupported!.join('; ') }}</p>
             <ul class="feed small">
               <li v-for="(x, i) in (ev().samples || []).slice(0, 8)" :key="i" style="grid-template-columns: auto minmax(0, 1fr)">

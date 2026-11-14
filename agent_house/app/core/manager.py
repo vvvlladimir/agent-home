@@ -27,10 +27,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections import deque
 from datetime import datetime
 
+from .agents import is_noise
 from .council import MODE_ENTITY, ORCHESTRATOR
 from .insights import ACT_DOMAINS
 from .llm import Priority
@@ -47,6 +49,18 @@ MAX_TASKS_PER_RUN = 3
 MAX_CALLS_PER_RUN = 6
 MAX_PROPOSALS_PER_RUN = 1
 TEXT_MAX = 500
+# Network-level switches no house manager should flip: opening the Zigbee / Z-Wave / Thread network
+# to new devices. Usually `entity_category: config` too, but not always (Zigbee2MQTT's bridge).
+NEVER_OWNED = re.compile(r"_(permit_join|permit_joining|inclusion_mode|commissioning)$")
+OWNED_NOTE = (
+    "Owned: switchable devices that no room agent looks after (no area, or an area without a room "
+    "agent), so the house manager is the one that may act on them. Device settings and diagnostics "
+    "(entity_category config / diagnostic), hidden or disabled entities and network pairing "
+    "switches are never owned. The manager is {enabled}: switched off it touches nothing; switched "
+    "on it may only switch these, through the safety policy, in {mode} mode (shadow: recorded, not "
+    "done). Give a room "
+    "an agent, or set its area in Home Assistant, to hand an entity to that room."
+)
 
 SYSTEM = """You are the house manager of Agent House, the orchestrator of a smart home. Room agents \
 (small local models) look after single rooms; you look after the whole house between the owner's \
@@ -127,9 +141,12 @@ class Manager:
     # --- scope: what the actuator lets the orchestrator touch ---------------------------------
     def owned(self) -> list[str]:
         """Entities the manager may actuate: owned by the orchestrator, of a switchable domain."""
+        registry = self.ha.registry
         return [
             e for e in self.council.ownership.owned_by(ORCHESTRATOR)
-            if e.split(".", 1)[0] in ACT_DOMAINS and not self.ha.registry.is_hidden(e)
+            if e.split(".", 1)[0] in ACT_DOMAINS and not registry.is_hidden(e)
+            and not registry.entity_meta.get(e, {}).get("entity_category")
+            and not NEVER_OWNED.search(e) and not is_noise(self.ha, e)
         ]  # fmt: skip
 
     def scope(self) -> set[str]:
@@ -383,6 +400,10 @@ class Manager:
             "last_run": self._last_run or None,
             "anomalies": self.anomalies(),
             "owned": self.owned(),
+            "owned_note": OWNED_NOTE.format(
+                enabled="enabled" if self.enabled else "disabled",
+                mode=getattr(self.settings, "orchestrator_mode", "shadow"),
+            ),
             "weak": [{"ha_id": w["ha_id"], "title": w.get("title")} for w in self.weak],
             "checked": datetime.now().astimezone().isoformat(timespec="seconds"),
         }

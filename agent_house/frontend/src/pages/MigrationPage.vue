@@ -77,6 +77,7 @@ onActivated(load);
           <div><span class="big">{{ parity.matched }}</span><div class="muted small">{{ t('matched') }}</div></div>
           <Info :tip="`${t('Trigger firings replayed from the last')} ${parity.days} ${t('days; conditions are not evaluated.')}` + (parity.supported ? '' : '\n' + t('Some triggers could not be replayed.'))" />
         </div>
+        <p v-if="!parity.supported" class="error small">{{ t('Not comparable: these could not be replayed from history, so the counts above do not show a match.') }}</p>
         <p v-for="u in parity.unsupported || []" :key="u" class="muted small">{{ u }}</p>
         <ul class="feed small">
           <li v-for="d in parity.diffs" :key="`${d.ts}${d.side}`" style="grid-template-columns: auto auto minmax(0, 1fr)">

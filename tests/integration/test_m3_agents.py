@@ -81,6 +81,14 @@ def test_agent_crud_follows_the_contract(base):
         httpx.put(f"{base}/api/agents/living_room", json={**AGENT, "id": "other"}),
     ):
         assert response.status_code == 422 and response.json()["error"] == "invalid", response.text
+    # QA-005/006: a typo in the room or an entity is refused at save time, and says what is wrong
+    typo_room = httpx.post(f"{base}/api/agents", json={**AGENT, "id": "office", "room": "offce"})
+    assert typo_room.status_code == 422 and "'offce' is not an area" in typo_room.json()["detail"]
+    typo_entity = httpx.put(
+        f"{base}/api/agents/living_room",
+        json={**created, "entities": ["switch.fan_typo"], "entities_mode": "pinned"},
+    )
+    assert typo_entity.status_code == 422 and "switch.fan_typo" in typo_entity.json()["detail"]
     assert httpx.put(f"{base}/api/agents/ghost", json=AGENT).status_code == 404
     assert httpx.get(f"{base}/api/agents/ghost").status_code == 404
     assert httpx.delete(f"{base}/api/agents/living_room").status_code == 204

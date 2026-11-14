@@ -200,6 +200,16 @@ async def put_settings(request: Request):
         return _error("invalid", "the body is not JSON", 422)
     if not isinstance(changes, dict):
         return _error("invalid", "the body must be an object of settings", 422)
+    options = sorted(
+        k for k in changes if k not in RuntimeSettings.model_fields and k in ctx.settings.masked()
+    )
+    if options:
+        return _error(
+            "invalid",
+            f"{', '.join(options)}: an add-on option, read-only here; change it in Home Assistant under "
+            "Settings → Apps (Add-ons before HA 2026.2) → Agent House → Configuration (it restarts)",
+            422,
+        )
     try:
         updated = RuntimeSettings(**{**ctx.runtime.model_dump(), **changes})
     except ValidationError as err:

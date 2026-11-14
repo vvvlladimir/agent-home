@@ -46,6 +46,20 @@ def test_scope_is_the_mode_helper_plus_unowned_switchables_only_when_enabled(tmp
     assert s.council.agent_config(ORCHESTRATOR).entities == [MODE_ENTITY]
 
 
+def test_device_settings_and_pairing_switches_are_never_owned(tmp_path):
+    """QA-008: permit-join and config switches (Fritz! internet access) are not the manager's."""
+    s = stack(tmp_path)
+    s.ha.add("switch.zigbee2mqtt_bridge_permit_join", "off")
+    s.ha.add("switch.laptop_internet_access", "on")
+    s.ha.registry.entity_meta["switch.laptop_internet_access"] = {"entity_category": "config"}
+    owned = s.manager.owned()
+    assert "light.hall" in owned
+    assert (
+        "switch.zigbee2mqtt_bridge_permit_join" not in owned and "switch.laptop_internet_access" not in owned
+    )
+    assert "no room agent" in s.manager.status()["owned_note"]
+
+
 async def test_a_sweep_with_nothing_to_do_never_calls_the_model(tmp_path):
     s = stack(tmp_path)
     s.ha.states["light.hall"]["state"] = "off"

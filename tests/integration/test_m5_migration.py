@@ -139,3 +139,57 @@ def test_what_cannot_be_switched_and_the_kill_switch(app, ha_state):
     assert ha_state.service_calls == []
     undo = httpx.put(f"{base}/api/migration/originals/{OWN}/enabled", json={"enabled": True})
     assert undo.status_code == 200, "enabling the owner's automation again is always possible"
+
+
+def test_a_replacement_with_the_originals_alias_does_not_take_its_entity(app, ha_state, llm_sim):
+    """QA-003: HA gives a second automation with the same alias `<slug>_2`; the original keeps its
+    entity, stays the owner's, and can still be switched off from the migration page."""
+    base = app.base
+    httpx.post(f"{base}/api/migration/import")
+    same = REPLACEMENT.replace("alias: Hallway light on motion", "alias: Hallway motion light")
+    llm_sim.script[:] = [
+        {"tool_calls": [{"name": "submit_automation", "arguments": {
+            "title": "Hallway motion light", "rationale": "same", "expected_triggers": "motion",
+            "yaml": same}}]},
+        {"text": "Submitted."},
+    ]  # fmt: skip
+    assert httpx.post(f"{base}/api/migration/originals/{OWN}/propose").status_code == 202
+    pid = wait_for(
+        lambda: {o["id"]: o for o in httpx.get(f"{base}/api/migration/originals").json()}[OWN][
+            "replacement_proposal_id"
+        ]
+    )
+    assert httpx.post(f"{base}/api/proposals/{pid}/approve").status_code == 200
+    ours = next(
+        e for e, s in ha_state.states.items() if s["attributes"].get("id", "").startswith("agent_house_")
+    )
+    assert ours == "automation.hallway_motion_light_2"
+    assert ha_state.states["automation.hallway_motion_light"]["attributes"]["id"] == "1700000000001"
+    off = httpx.put(f"{base}/api/migration/originals/{OWN}/enabled", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert off.json()["entity_id"] == "automation.hallway_motion_light"
+    wait_for(lambda: ha_state.states["automation.hallway_motion_light"]["state"] == "off")
+    assert ha_state.states[ours]["state"] == "on", "ours is untouched"
+
+
+def test_parity_after_a_rejected_replacement_says_so(app, ha_state, llm_sim):
+    """QA-004: the 409 after a rejection names the rejected draft instead of "ask for one first"."""
+    base = app.base
+    httpx.post(f"{base}/api/migration/import")
+    llm_sim.script[:] = [
+        {"tool_calls": [{"name": "submit_automation", "arguments": {
+            "title": "Hallway light on motion", "rationale": "same", "expected_triggers": "motion",
+            "yaml": REPLACEMENT}}]},
+        {"text": "Submitted."},
+    ]  # fmt: skip
+    httpx.post(f"{base}/api/migration/originals/{OWN}/propose")
+    pid = wait_for(
+        lambda: {o["id"]: o for o in httpx.get(f"{base}/api/migration/originals").json()}[OWN][
+            "replacement_proposal_id"
+        ]
+    )
+    assert httpx.post(f"{base}/api/proposals/{pid}/reject", json={}).status_code == 200
+    for _ in range(2):
+        parity = httpx.get(f"{base}/api/migration/originals/{OWN}/parity")
+        assert parity.status_code == 409
+        assert f"{pid} was rejected" in parity.json()["detail"]

@@ -81,7 +81,9 @@ def test_static_sources_contain_no_absolute_urls():
     """Absolute paths and CDN links would work in `make sim` on / but 404 inside Home Assistant.
     Checks the built GUI (what the add-on serves) and the Vue sources it is built from."""
     files = [f for f in STATIC.rglob("*") if f.suffix in (".html", ".js", ".css")]
-    files += [f for f in FRONTEND_SRC.rglob("*") if f.suffix in (".ts", ".vue", ".css") and f.name != "api-types.ts"]
+    files += [
+        f for f in FRONTEND_SRC.rglob("*") if f.suffix in (".ts", ".vue", ".css") and f.name != "api-types.ts"
+    ]
     assert any(f.suffix == ".js" for f in files), "no built GUI in app/web/static: run `make gui`"
     offenders = []
     for file in files:
@@ -261,6 +263,10 @@ def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
     assert_matches_contract(shown, "/api/settings")
     assert shown["options"]["ha_token"] == "***" and shown["options"]["anthropic_api_key"] == "***"
     assert shown["options"]["openai_api_key"] == "***"
+    # QA-007: an add-on option is refused with where to change it, not "extra inputs"
+    budget = httpx.put(f"{ingress.base}/api/settings", json={"daily_budget_eur": 2})
+    assert budget.status_code == 422 and "add-on option" in budget.json()["detail"]
+    assert "Configuration" in budget.json()["detail"]
 
     bundle = httpx.get(f"{ingress.base}/api/diagnostics")
     assert bundle.headers["content-type"] == "application/zip"

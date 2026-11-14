@@ -5,8 +5,13 @@ The draft's triggers are replayed against Home Assistant's recorded history. Sim
 - `numeric_state` (entity_id, above, below: entering the range counts),
 - `time` with fixed `at` times (once per day).
 Everything else (sun, template, event, time_pattern, attributes, value_template, …) is listed in
-`unsupported`; then `supported` is false and `would_fire` is a lower bound. Conditions are not
-evaluated either: `would_fire` counts trigger firings, which the GUI says.
+`unsupported`; then `supported` is false and `would_fire` is a lower bound.
+
+The evidence then checks the conditions at each firing, from the same history: `state`,
+`numeric_state`, `time` (after / before / weekday) and `and` / `or` / `not` of those. `blocked` is
+how many firings they stopped. A condition it cannot check (template, sun, zone, attribute, `for`,
+an entity as a time, …) lets the firing through, is listed in `unsupported` and makes
+`conditions_evaluated` and `supported` false: `would_fire` is then an upper bound for that part.
 """
 
 from __future__ import annotations
@@ -128,19 +133,143 @@ async def firings(
     return samples, unsupported
 
 
+def _state_at(rows: list[dict], ts: float) -> str | None:
+    """The entity's state at `ts` (the last recorded change at or before it)."""
+    state = None
+    for row in rows:
+        at = _ts(row.get("last_changed") or row.get("last_updated") or "")
+        if at is not None and at > ts and state is not None:
+            break
+        state = str(row.get("state"))
+    return state
+
+
+def _clock(text) -> tuple[int, int, int] | None:
+    try:
+        parts = [int(p) for p in str(text).split(":")]
+    except ValueError:
+        return None
+    if not 1 <= len(parts) <= 3:
+        return None
+    hour, minute, second = (parts + [0, 0])[:3]
+    return hour, minute, second
+
+
+WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+class _Conditions:
+    """Evaluates HA conditions at a moment from recorded history: True / False, or None when it
+    cannot tell (noted once in `notes`)."""
+
+    def __init__(self, history) -> None:
+        self.history, self.notes = history, []
+
+    def _cannot(self, label: str, why: str) -> None:
+        note = f"condition {label}: {why} (not evaluated)"
+        if note not in self.notes:
+            self.notes.append(note)
+
+    async def every(self, conditions, ts: float, prefix: str = "") -> bool | None:
+        results = [await self.one(c, ts, f"{prefix}#{i + 1}") for i, c in enumerate(_list(conditions))]
+        if False in results:
+            return False
+        return None if None in results else True
+
+    async def one(self, cond, ts: float, label: str) -> bool | None:
+        if not isinstance(cond, dict):
+            self._cannot(label, "a template shorthand")
+            return None
+        kind = cond.get("condition")
+        label = f"{label} {kind}"
+        if kind == "and":
+            return await self.every(cond.get("conditions"), ts, f"{label}.")
+        if kind == "or":
+            results = [
+                await self.one(c, ts, f"{label}.#{i + 1}")
+                for i, c in enumerate(_list(cond.get("conditions")))
+            ]
+            if True in results:
+                return True
+            return None if None in results else False
+        if kind == "not":
+            results = [
+                await self.one(c, ts, f"{label}.#{i + 1}")
+                for i, c in enumerate(_list(cond.get("conditions")))
+            ]
+            if True in results:
+                return False
+            return None if None in results else True
+        if kind in ("state", "numeric_state") and (cond.get("attribute") or cond.get("value_template")):
+            self._cannot(label, "attribute / value_template")
+            return None
+        if kind == "state":
+            if cond.get("for"):
+                self._cannot(label, "`for`")
+                return None
+            wanted = [str(v) for v in _list(cond.get("state"))]
+            if any("." in w for w in wanted):  # an entity as the state: its value at ts is unknown here
+                self._cannot(label, "a state taken from an entity")
+                return None
+            hits = [_state_at(await self.history(str(e)), ts) in wanted for e in _list(cond.get("entity_id"))]
+            if not hits:
+                return None
+            return any(hits) if cond.get("match") == "any" else all(hits)
+        if kind == "numeric_state":
+            above, below = cond.get("above"), cond.get("below")
+            if not isinstance(above, int | float | None) or not isinstance(below, int | float | None):
+                self._cannot(label, "above/below from an entity")
+                return None
+            hits = [
+                _in_range(_number(_state_at(await self.history(str(e)), ts)), above, below)
+                for e in _list(cond.get("entity_id"))
+            ]
+            return all(hits) if hits else None
+        if kind == "time":
+            moment = datetime.fromtimestamp(ts).astimezone()
+            days = [str(d) for d in _list(cond.get("weekday"))]
+            if days and WEEKDAYS[moment.weekday()] not in days:
+                return False
+            after, before = cond.get("after"), cond.get("before")
+            start = _clock(after) if after is not None else (0, 0, 0)
+            end = _clock(before) if before is not None else None
+            if start is None or (before is not None and end is None):
+                self._cannot(label, "a time taken from an entity")
+                return None
+            now = (moment.hour, moment.minute, moment.second)
+            if end is None:
+                return now >= start
+            return start <= now < end if start <= end else (now >= start or now < end)  # past midnight
+        self._cannot(label, "cannot be checked from history")
+        return None
+
+
 def fully_supported(unsupported: list[str]) -> bool:
     return not [u for u in unsupported if "ignored" not in u]
 
 
 async def simulate(config: dict, ha, days: int = 7, now: datetime | None = None) -> dict:
     days = max(1, min(int(days), 30))
-    samples, unsupported = await firings(config, ha, days, now)
+    end = now or datetime.now(UTC)
+    samples, unsupported = await firings(config, ha, days, end)
+    cache: dict[str, list[dict]] = {}
+    start = end - timedelta(days=days)
+
+    async def history(entity_id: str) -> list[dict]:
+        if entity_id not in cache:
+            cache[entity_id] = await ha.history(entity_id, start.isoformat(), end.isoformat())
+        return cache[entity_id]
+
+    checker = _Conditions(history)
+    passed = [s for s in samples if await checker.every(config.get("conditions"), s["ts"]) is not False]
     return {
         "days": days,
-        "supported": fully_supported(unsupported),
-        "unsupported": unsupported,
-        "would_fire": len(samples),
-        "samples": samples[:MAX_SAMPLES],
-        "conditions_evaluated": False,
+        "supported": fully_supported(unsupported) and not checker.notes,
+        "unsupported": unsupported + checker.notes,
+        "fired": len(samples),
+        "blocked": len(samples) - len(passed),
+        "would_fire": len(passed),
+        "samples": passed[:MAX_SAMPLES],
+        "conditions_evaluated": not checker.notes,
         "computed": time.time(),
     }

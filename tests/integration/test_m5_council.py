@@ -131,7 +131,10 @@ def test_manager_and_metrics_endpoints_follow_the_contract(app):
     status = httpx.get(f"{base}/api/manager").json()
     validate(status, "/api/manager")
     assert status["enabled"] is False and status["mode"] == "shadow"
-    assert httpx.put(f"{base}/api/settings", json={"manager_enabled": True, "manager_sweep_min": 0}).status_code == 200
+    assert (
+        httpx.put(f"{base}/api/settings", json={"manager_enabled": True, "manager_sweep_min": 0}).status_code
+        == 200
+    )
     assert httpx.get(f"{base}/api/manager").json()["enabled"] is True
     woken = httpx.post(f"{base}/api/manager/wake", json={"reason": "tester"})
     assert woken.status_code == 202 and woken.json()["status"] in ("started", "queued")

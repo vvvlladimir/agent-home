@@ -130,6 +130,7 @@ export interface paths {
         };
         get: operations["listAgents"];
         put?: never;
+        /** @description 422 when HA is connected and the room is not one of its areas or an entity is unknown to it. */
         post: operations["createAgent"];
         delete?: never;
         options?: never;
@@ -147,6 +148,7 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getAgent"];
+        /** @description 422 when HA is connected and a changed room or a newly added entity is unknown to it. */
         put: operations["updateAgent"];
         post?: never;
         delete: operations["deleteAgent"];
@@ -1173,15 +1175,21 @@ export interface components {
         };
         Evidence: {
             days: number;
-            /** @description false when a trigger type cannot be simulated from history */
+            /** @description false when a trigger or a condition cannot be replayed from history */
             supported: boolean;
+            /** @description what was not replayed */
             unsupported?: string[];
+            /** @description trigger firings in the window */
+            fired?: number;
+            /** @description firings the conditions would have stopped */
+            blocked?: number;
+            /** @description firings that pass the conditions (fired - blocked) */
             would_fire: number;
             samples?: {
                 ts?: number;
                 trigger?: string;
             }[];
-            /** @description false: would_fire counts trigger firings, conditions are not replayed */
+            /** @description false: some condition could not be checked (listed in unsupported) and let the firings through, so would_fire is an upper bound */
             conditions_evaluated?: boolean;
             computed?: number;
         };
@@ -1261,8 +1269,10 @@ export interface components {
             last_run?: number | null;
             /** @description what the deterministic prefilter would wake the model for */
             anomalies: string[];
-            /** @description entities the manager may actuate (no room agent owns them) */
+            /** @description entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches) */
             owned: string[];
+            /** @description plain-language explanation of `owned` for the owner */
+            owned_note?: string;
             weak: {
                 ha_id?: string;
                 title?: string | null;
@@ -1292,6 +1302,8 @@ export interface components {
                 coverage: components["schemas"]["Rate"];
                 f1: number | null;
                 examples?: string[];
+                /** @description Earlier versions with outcomes in the window, each scored over its own time span (same fields, no `previous`); the program counts include them. */
+                previous?: Record<string, never>[];
             }[];
             agents: {
                 agent_id: string;
@@ -1681,6 +1693,8 @@ export interface operations {
                     "application/json": components["schemas"]["AgentConfig"];
                 };
             };
+            404: components["responses"]["Error"];
+            422: components["responses"]["Error"];
         };
     };
     deleteAgent: {
