@@ -42,6 +42,7 @@ class Gate:
         self.stack = make_stack(tmp_path, agents=[{**AGENT, **agent, "wake_rules": wake_rules}])
         self.now, self.wall = [1000.0], [1_800_000_000.0]
         self.wakes: list[dict] = []
+        self.unwatched: list[tuple] = []
         self.gate = EventGate(
             self.stack.agents,
             self.stack.feed,
@@ -50,6 +51,7 @@ class Gate:
             lambda agent_id, **kw: self.wakes.append({"agent": agent_id, **kw}),
             clock=lambda: self.now[0],
             wall=lambda: self.wall[0],
+            unwatched=lambda *args: self.unwatched.append(args),
         )
 
     def change(self, entity: str, old: str, new: str) -> None:
@@ -117,6 +119,33 @@ async def test_only_entities_in_scope_wake_and_disabled_agents_sleep(tmp_path):
     g.change(MOTION, "off", "on")
     await asyncio.sleep(0.01)
     assert g.wakes == []
+
+
+async def test_an_alarm_nobody_watches_goes_to_the_owner_at_once(tmp_path):
+    """Stories run 2026-11-14, bug 2: a leak in a room without an agent woke nobody."""
+    leak = {"entities": ["binary_sensor.*_water_leak"], "to": ["on"], "debounce_s": 0, "priority": "alarm",
+            "reason": "Leak."}  # fmt: skip
+    g = Gate(tmp_path, {"events": [leak, {"entities": ["binary_sensor.*_door"], "debounce_s": 0}]})
+    g.stack.ha.add("binary_sensor.room_water_leak", "off", area="room")
+    g.stack.ha.add("binary_sensor.bathroom_water_leak", "off", area="bathroom")
+    g.stack.ha.add("binary_sensor.bathroom_door", "off", area="bathroom")
+
+    g.change("binary_sensor.room_water_leak", "off", "on")
+    await asyncio.sleep(0.01)
+    assert len(g.wakes) == 1 and g.unwatched == [], "in scope: the agent is woken, no direct alarm"
+
+    g.change("binary_sensor.bathroom_water_leak", "off", "on")
+    g.change("binary_sensor.bathroom_water_leak", "on", "off")  # the alarm rule wants `on` only
+    g.change("binary_sensor.bathroom_door", "off", "on")  # out of scope, but not an alarm rule
+    await asyncio.sleep(0.01)
+    assert len(g.wakes) == 1
+    assert g.unwatched == [("binary_sensor.bathroom_water_leak", "off", "on", "Leak.")]
+
+    g.stack.agents.save(g.stack.agents.get("room").model_copy(update={"enabled": False}))
+    g.change("binary_sensor.room_water_leak", "off", "on")
+    await asyncio.sleep(0.01)
+    assert len(g.wakes) == 1, "a disabled agent sleeps"
+    assert g.unwatched[-1][0] == "binary_sensor.room_water_leak", "so its room's alarm goes to the owner"
 
 
 async def test_min_change_is_measured_from_the_last_wake(tmp_path):

@@ -5,6 +5,11 @@ State change → per-agent wake rules (entity globs inside the agent's scope, fr
 min_change) → debounce (the timer restarts while the state keeps changing) → cooldown per rule →
 hourly cap per agent → `wake(...)`. Cron rules and the one-shot wakes agents schedule for
 themselves pass the same hourly cap. Every wake and every drop goes to the feed.
+
+Unwatched alarms (stories run 2026-11-14, bug 2): when a change matches an alarm-priority rule of
+any agent but is in the scope of no enabled agent with such a rule (a leak in a room without an
+agent, or with its agent off), no agent can be woken for it. The gate then calls `unwatched(...)`
+at once, which writes an alarm to the owner's inbox. No model is involved, so this cannot be lost.
 """
 
 from __future__ import annotations
@@ -67,8 +72,10 @@ class EventGate:
         wake: Callable[..., object],
         clock: Callable[[], float] = house.monotonic,  # cooldowns, hourly caps: house time
         wall: Callable[[], float] = house.time,
+        unwatched: Callable[[str, str | None, str, str], object] | None = None,
     ) -> None:
         self.agents, self.feed, self.store = agents, feed, store
+        self.unwatched = unwatched  # (entity_id, old, new, rule reason) → an inbox alarm
         self.scope_of, self.wake, self.clock, self.wall = scope_of, wake, clock, wall
         self._timers: dict[tuple[str, int], asyncio.TimerHandle] = {}
         self._pending: dict[tuple[str, int], tuple[str, str | None, str]] = {}
@@ -108,14 +115,18 @@ class EventGate:
         old_state, new_state = (old or {}).get("state"), (new or {}).get("state")
         if new_state is None or old_state == new_state:
             return
+        alarm_reason: str | None = None  # an alarm rule matched, and no agent watches it (yet)
+        watched = False
         for agent in self.agents.list():
-            if not agent.enabled:
-                continue
             for index, rule in enumerate(agent.wake_rules.events):
                 if not rule_matches(rule, entity_id, old_state, new_state):
                     continue
-                if entity_id not in self.scope_of(agent):
+                if rule.priority == "alarm" and alarm_reason is None:
+                    alarm_reason = rule.reason or "Alarm."
+                if not agent.enabled or entity_id not in self.scope_of(agent):
                     continue
+                if rule.priority == "alarm":
+                    watched = True
                 key = (agent.id, index)
                 if rule.min_change is not None:
                     value, last = _number(new_state), self._last_value.get((*key, entity_id))
@@ -126,6 +137,16 @@ class EventGate:
                     self._timers[key].cancel()  # still changing: restart the debounce
                 loop = asyncio.get_running_loop()
                 self._timers[key] = loop.call_later(rule.debounce_s, self._settled, key)
+        if alarm_reason is not None and not watched:
+            self._unwatched(entity_id, old_state, new_state, alarm_reason)
+
+    def _unwatched(self, entity_id: str, old: str | None, new: str, reason: str) -> None:
+        if self.unwatched is None:
+            return
+        try:
+            self.unwatched(entity_id, old, new, reason)
+        except Exception:  # noqa: BLE001 - the gate must keep running
+            log.exception("reporting the unwatched alarm on %s failed", entity_id)
 
     def _settled(self, key: tuple[str, int]) -> None:
         self._timers.pop(key, None)

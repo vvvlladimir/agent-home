@@ -140,7 +140,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except WakeRefused as err:
             feed.add("gate_drop", f"{agent_id}: not woken, {err}", level="debug", agent_id=agent_id)
 
-    gate = EventGate(agents, feed, store, agents_rt.scope, wake)
+    def unwatched(entity_id: str, old: str | None, new: str, reason: str) -> None:
+        """An alarm rule matched, but no enabled agent watches the entity: tell the owner directly."""
+        agents_rt.inbox_add(
+            "house", None, "alarm",
+            f"{entity_id} changed {old} → {new}. {reason} No enabled agent watches it, so nobody "
+            "checked it: please look yourself.",
+        )  # fmt: skip
+
+    gate = EventGate(agents, feed, store, agents_rt.scope, wake, unwatched=unwatched)
     lifecycle = Lifecycle(store, feed, ha, safety, protected=kill_entity, owner_of=owner_of)
     orchestrator = Orchestrator(settings, llm, store, feed, ha, safety, lifecycle, agents_rt)
     agents_rt.actuator, agents_rt.gate, agents_rt.orchestrator = actuator, gate, orchestrator

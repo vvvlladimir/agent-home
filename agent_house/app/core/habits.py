@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import statistics
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from .agents import NEVER_OWNED, _device_class, is_noise
 from .policy import resolve_tier
@@ -213,12 +213,19 @@ def episodes(entity_id: str, changes, ha, timeline: _Timeline) -> list[dict]:
 
 # --- 3. regularities -----------------------------------------------------------------------------
 def _time_groups(eps: list[dict]) -> list[dict]:
-    groups = (
-        ("Mon–Fri", [e for e in eps if e["weekday"] < 5]),
-        ("Sat–Sun", [e for e in eps if e["weekday"] >= 5]),
-    )
-    if not groups[0][1] or not groups[1][1] or _close(groups[0][1], groups[1][1]):
+    workdays = [e for e in eps if e["weekday"] < 5]
+    weekend = [e for e in eps if e["weekday"] >= 5]
+    if not workdays or not weekend:
+        # one-sided (stories run 2026-11-14, bug 3: a Mon–Fri habit drafted for every day). It is a
+        # weekday habit only when the episodes span days of the other kind; else we cannot tell.
+        days = {date.fromisoformat(e["day"]) for e in eps}
+        span = [min(days) + timedelta(n) for n in range((max(days) - min(days)).days + 1)]
+        other = any(d.weekday() >= 5 for d in span) if workdays else any(d.weekday() < 5 for d in span)
+        groups = (("Mon–Fri" if workdays else "Sat–Sun", eps),) if other else (("every day", eps),)
+    elif _close(workdays, weekend):
         groups = (("every day", eps),)
+    else:
+        groups = (("Mon–Fri", workdays), ("Sat–Sun", weekend))
     out = []
     for label, group in groups:
         if not group:
@@ -317,7 +324,7 @@ def build(
             or (ha.states.get(entity_id) or {}).get("attributes", {}).get("friendly_name"),
             "room": ha.registry.area_of(entity_id), "days_scanned": days, "days": candidate["days"],
             "count": candidate["count"], "states": sorted(states, key=lambda s: -s["count"]),
-            "strength": round(strength, 2),
+            "strength": round(strength, 2), "mode_helper": MODE_ENTITY in ha.states,
             "samples": {s: _samples(group) for s, group in by_state.items()},
         })  # fmt: skip
     out.sort(key=lambda d: -d["strength"])
@@ -391,13 +398,21 @@ def request(dossier: dict) -> str:
         for c in s["together"]:
             lines.append(f"  together with {c['with']}: {c['times']} of {c['of']}")
         lines.append("  samples: " + " | ".join(dossier["samples"].get(s["state"], [])))
+    # the house mode only when the house has the helper: a condition on a missing entity is false
+    # (stories run 2026-11-14, bug 1); dossiers saved before the flag existed count as without it
+    conditions = (
+        "someone being home, the sun or the house mode input_select.agent_house_mode"
+        if dossier.get("mode_helper")
+        else "someone being home or the sun"
+    )
     lines.append(
         "Write ONE automation that does for the owner what they do here by hand, the way they do it. "
         "Habits are not exact: keep the variations the counts show (for example a different time on "
         "weekends, several triggers with trigger ids and a `choose` for on and off, a condition on "
-        "someone being home, the sun or the house mode input_select.agent_house_mode when most "
-        "episodes share it). Use a sensor trigger only when its share and precision are high; else "
-        "the time. Leave out what happened only once or twice. In the rationale, name the counts "
-        "you relied on and what you left out."
+        f"{conditions} when most episodes share it). A time line for Mon–Fri or Sat–Sun alone means "
+        "the habit is not seen on the other days: add `condition: time` with those `weekday:` values "
+        "(mon, tue, wed, thu, fri or sat, sun). Use a sensor trigger only when its share and "
+        "precision are high; else the time. Leave out what happened only once or twice. In the "
+        "rationale, name the counts you relied on and what you left out."
     )
     return "\n".join(lines)

@@ -28,6 +28,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 
+from ..ha.client import MODE_HELPER
 from . import clock
 from .actuator import new_id
 from .agents import is_noise, is_room_sensor
@@ -102,10 +103,17 @@ YAML_RULES = """YAML rules:
 {services}
   plus notify.<target> and persistent_notification.create for messages.
 - Entities marked T3 can never be in actions. No `event:` steps, no scripts, no automation.* or
-  homeassistant.* services, no webhook triggers.
-- The house mode is input_select.agent_house_mode (home, away, night, guests, work). Prefer a
-  state condition on it over re-deriving presence or bedtime from sensors.
+  homeassistant.* services, no webhook triggers. Every entity you name, in triggers and
+  conditions too, must exist: an unknown one blocks the draft.
+{house_mode}- A habit seen only on some weekdays gets `condition: time` with `weekday:` (e.g. [mon, tue, wed,
+  thu, fri]); different times on workdays and weekends get one trigger and condition per group.
 - Keep it as small as the request allows."""
+
+# Only when the helper exists: a condition on a missing entity is false, the automation never runs.
+HOUSE_MODE_RULE = (
+    "- The house mode is input_select.agent_house_mode (home, away, night, guests, work). Prefer a\n"
+    "  state condition on it over re-deriving presence or bedtime from sensors.\n"
+)
 
 TOOLS = [
     {
@@ -746,7 +754,9 @@ class Orchestrator:
     def _system(self, template: str = SYSTEM) -> str:
         services = self.safety.policy.get("allowed_services") or {}
         listed = "\n".join(f"  {d}: {', '.join(s)}" for d, s in sorted(services.items()))
-        return template.replace("{yaml_rules}", YAML_RULES).replace("{services}", listed)
+        house_mode = HOUSE_MODE_RULE if MODE_HELPER in self.ha.states else ""
+        rules = YAML_RULES.replace("{house_mode}", house_mode)
+        return template.replace("{yaml_rules}", rules).replace("{services}", listed)
 
     async def _submit(self, args: dict, proposal: dict | None, trace: _Trace, **create) -> tuple[dict, list]:
         """One submit_automation call → (the proposal, its failed checks). The first call of a

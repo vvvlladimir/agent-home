@@ -8,8 +8,11 @@ id. The four checks run on every create, edit, approve and rollback:
 2. schema      — an automation (alias, triggers, actions; known keys only), plural keys;
 3. policy      — every action names its entities explicitly; each is known, not T3, not the
                  kill-switch helper, of the service's domain, and the service is allowed by the
-                 policy (or is a notification). No events, no scripts, no automation/homeassistant
-                 services, no templated targets, no area/device/label targets, no webhook triggers;
+                 policy (or is a notification). Every entity the triggers and conditions name
+                 is known to Home Assistant too (stories run 2026-11-14: a condition on a
+                 missing helper is false, so the automation would never run). No events, no
+                 scripts, no automation/homeassistant services, no templated targets, no
+                 area/device/label targets, no webhook triggers;
 4. ha_validate — Home Assistant's own `validate_config`.
 
 Ownership (M5 council): a draft a room agent asked for may act only on entities that agent owns
@@ -72,6 +75,8 @@ OPEN = ("draft", "blocked")
 TEMPLATE = re.compile(r"{[{%]")
 SERVICE = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
 ENTITY = re.compile(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+ENTITY_VALUED = frozenset({"zone", "at", "above", "below"})  # keys that may name an entity, or not
+NAMED = re.compile(r"^[a-z_][a-z0-9_]*\.[a-z0-9_]+$")  # an entity id, never "06:51" or "1.5"
 
 
 class LifecycleError(Exception):
@@ -106,6 +111,25 @@ def _action_key(step):
     if isinstance(step, dict) and "service" in step and "action" not in step:
         return {("action" if k == "service" else k): v for k, v in step.items()}
     return step
+
+
+def named_entities(node) -> set[str]:
+    """Every literal entity id an `entity_id:` (or `zone`/`at`/`above`/`below`) key names anywhere
+    in the config (triggers, conditions, nested steps). Templates, times,
+    numbers and `all`/`none` are not entity ids and are skipped."""
+    out: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "entity_id":
+                out |= {e for e in _as_list(value) if isinstance(e, str) and ENTITY.fullmatch(e)}
+            elif key in ENTITY_VALUED:  # `zone: zone.home`, `at: input_datetime.x`, `above: sensor.y`
+                out |= {e for e in _as_list(value) if isinstance(e, str) and NAMED.fullmatch(e)}
+            else:
+                out |= named_entities(value)
+    elif isinstance(node, list):
+        for item in node:
+            out |= named_entities(item)
+    return out
 
 
 def to_yaml(config: dict) -> str:
@@ -175,6 +199,9 @@ class Lifecycle:
             if trigger.get("trigger") in BLOCKED_TRIGGERS:
                 problems.append(f"{trigger.get('trigger')} triggers are not allowed")
         self._steps(config.get("actions") or [], problems, tiers, "actions")
+        unknown = sorted(e for e in named_entities(config) if e not in tiers and e not in self.ha.states)
+        if unknown:  # entities in actions were checked by _service above
+            problems.append(f"unknown to Home Assistant: {', '.join(unknown)}")
         if origin and origin != "orchestrator":
             for entity_id in sorted(tiers):
                 owner = self.owner_of(entity_id) if self.owner_of else None

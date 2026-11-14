@@ -80,6 +80,32 @@ def test_workday_and_weekend_times_are_one_habit_with_two_bands():
     assert funnel["relevant"] == 1 and funnel["dossiers"] == 1
 
 
+def test_a_workdays_only_habit_says_so_and_a_short_scan_does_not_guess():
+    """Stories run 2026-11-14, bug 3: a Mon–Fri habit was summarised as 'every day'."""
+    workdays = [c for c in kitchen() if datetime.fromtimestamp(c.ts).weekday() < 5]
+    [dossier], _ = build(workdays)
+    on = next(s for s in dossier["states"] if s["state"] == "on")
+    assert [t["days"] for t in on["time"]] == ["Mon–Fri"]
+    assert "Mon–Fri median 06:4" in habits.request(dossier)
+    assert "Mon–Fri about 06:4" in habits.summary(dossier)
+
+    monday_to_friday = [c for c in workdays if c.ts < at(5, 0, 0)]  # never saw a weekend
+    [dossier], _ = build(monday_to_friday)
+    on = next(s for s in dossier["states"] if s["state"] == "on")
+    assert [t["days"] for t in on["time"]] == ["every day"]
+
+
+def test_the_house_mode_helper_is_offered_only_when_the_house_has_it():
+    """Stories run 2026-11-14, bug 1: drafts conditioned on a helper the house did not have."""
+    [dossier], _ = build(kitchen())
+    assert "agent_house_mode" not in habits.request(dossier)
+    ha = house()
+    ha.states["input_select.agent_house_mode"] = {"state": "home", "attributes": {}}
+    [dossier], _ = habits.build(sorted(kitchen(), key=lambda c: c.ts), ha, days=10, min_days=3,
+                                policy=DEFAULT_POLICY)  # fmt: skip
+    assert "input_select.agent_house_mode" in habits.request(dossier)
+
+
 def test_a_lamp_after_the_rooms_sensor_is_a_signal_with_its_precision():
     changes = []
     for day in range(6):  # evenings at varying times: the time says little, the sensor says it all

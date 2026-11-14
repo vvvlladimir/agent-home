@@ -129,6 +129,35 @@ async def test_the_policy_scan_blocks(lc, step, why):
     assert lc.ha_stub.writes == []
 
 
+async def test_entities_in_triggers_and_conditions_must_exist(lc):
+    """Stories run 2026-11-14, bug 1: a state condition on a missing helper is false in HA, so the
+    automation would never run, and every check was green."""
+    missing = GOOD + """conditions:
+  - condition: not
+    conditions:
+      - {condition: state, entity_id: input_select.agent_house_mode, state: away}
+"""
+    proposal = await lc.create(missing)
+    assert proposal["status"] == "blocked"
+    assert failed(proposal)["policy"] == "unknown to Home Assistant: input_select.agent_house_mode"
+
+    trigger = GOOD.replace("binary_sensor.room_motion", "[binary_sensor.room_motion, binary_sensor.gone]")
+    assert "binary_sensor.gone" in failed(await lc.create(trigger))["policy"]
+    waiting = actions("{wait_for_trigger: [{trigger: state, entity_id: sensor.gone}]}")
+    assert "sensor.gone" in failed(await lc.create(waiting))["policy"]
+
+    at = GOOD.replace("trigger: state", "trigger: time\n    at: input_datetime.gone\n    x: 1")
+    assert "input_datetime.gone" in failed(await lc.create(at))["policy"]
+    timed = GOOD + "conditions: [{condition: time, after: '06:51'}, {condition: numeric_state, " \
+                   "entity_id: binary_sensor.room_motion, above: '1.5'}]\n"  # fmt: skip
+    assert "policy" not in failed(await lc.create(timed)), "times and numbers are not entities"
+
+    lc.ha_stub.add("input_select.agent_house_mode", "home")
+    assert (await lc.create(missing))["status"] == "draft", "once the helper exists, the draft is fine"
+    template = GOOD + "conditions:\n  - {condition: template, value_template: \"{{ is_state('a.b', 'on') }}\"}\n"
+    assert (await lc.create(template))["status"] == "draft", "templates are not scanned"
+
+
 async def test_allowed_steps_and_notifications_pass(lc):
     ok = actions(
         "{action: notify.mobile_app_phone, data: {message: hi}}",
