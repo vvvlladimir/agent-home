@@ -1,0 +1,82 @@
+# Stories for `python -m sim.stories` (docs/POLYGON.md §4c): a lived household (sim/household.py)
+# plus what we inject, and what must be true afterwards (Given - When - Then).
+#
+# entity: an id, or a glob resolved against the house ("binary_sensor.*_water_leak"); a story whose
+#   entity the house lacks is skipped, not failed.
+# habits: a person's own routine on top of the household (what the add-on should learn).
+# incidents: one-off events with a tag (what the add-on should react to, or ignore).
+# expect: checks on the lived trace; needs_model: the fakes cannot pass it (they write no drafts).
+stories:
+  morning_counter_habit:
+    about: A workday habit becomes a proposal, and the owner can approve it.
+    days: 8
+    needs_model: true
+    habits:
+      - {entity: light.kitchen_counter, "on": "06:50", "off": "07:35", sd_min: 15, days: workdays}
+    expect:
+      - {proposal_for: light.kitchen_counter, by_day: 7}
+      - {deployed_for: light.kitchen_counter}
+      - {max_reports_per_day: 8}
+
+  evening_reading_lamp:
+    about: An evening habit with a late, irregular bedtime still becomes one proposal, not several.
+    days: 9
+    needs_model: true
+    habits:
+      - {entity: light.bedroom_lamp, "on": "21:30", "off": "23:40", sd_min: 40, days: all}
+    expect:
+      - {proposal_for: light.bedroom_lamp, by_day: 8}
+      - {max_proposals_for: light.bedroom_lamp, count: 2}
+
+  leak_while_out:
+    about: A kitchen water leak while nobody is home reaches the owner within minutes, once.
+    days: 3
+    incidents:
+      - {entity: "binary_sensor.kitchen*_water_leak", state: "on", day: 1, at: "11:20", back_after_min: 6,
+         tag: "incident:leak"}
+    expect:
+      - {report_about: "binary_sensor.kitchen*_water_leak", after_tag: "incident:leak", within_min: 10}
+      - {max_alarms_about: "binary_sensor.kitchen*_water_leak", count: 1}
+
+  leak_unwatched_room:
+    about: A leak in a room no agent watches (the bathroom) still reaches the owner.
+    days: 3
+    incidents:
+      - {entity: "binary_sensor.bathroom*_water_leak", state: "on", day: 1, at: "15:05", back_after_min: 6,
+         tag: "incident:leak"}
+    expect:
+      - {report_about: "binary_sensor.bathroom*_water_leak", after_tag: "incident:leak", within_min: 10}
+
+  airing_while_heating:
+    about: A window opened while the heater runs gets a warning, every time it happens.
+    days: 5
+    chaos: {airing: 0.6}
+    expect:
+      - {report_about: binary_sensor.bedroom_window, after_note: "airing while heating", within_min: 30, share: 0.5}
+
+  lying_sensors:
+    about: Ghost motion, a stuck sensor and temperature spikes cause no alarms and no new habits.
+    days: 6
+    chaos: {ghost_motion: 3.0, stuck: 0.5, spike: 1.0}
+    expect:
+      - {no_alarm_after_tag: "fault:ghost_motion", within_min: 10}
+      - {no_alarm_after_tag: "fault:spike", within_min: 10}
+      - {no_proposal_from_tag: "fault:ghost_motion"}
+
+  lights_left_on_trip:
+    about: The owner leaves for a trip with a lamp on; the house manager notices.
+    days: 9
+    settings: {manager_enabled: true, manager_sweep_min: 60}
+    chaos: {trip_days: 4}
+    incidents:
+      - {entity: light.living_room_lamp, state: "on", on_tag_note: "trip starts", after_min: -3, tag: "incident:left_on"}
+    expect:
+      - {report_about: light.living_room_lamp, after_tag: "incident:left_on", within_min: 180}
+
+  calm_house:
+    about: A tidy household stays cheap and quiet.
+    days: 4
+    chaos: calm
+    expect:
+      - {max_reports_per_day: 6}
+      - {max_event_wakes_per_day: 60}

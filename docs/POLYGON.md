@@ -151,6 +151,21 @@ house time it was first seen: proposals name only entities HA has and act on no 
 claims no approval that does not exist and, in shadow, no change that was only recorded; one open
 alarm per entity; the hourly wake cap holds in house time; the daily review ran every day.
 
+## 4c. Stories with expected outcomes, pass^k and coverage
+
+`python -m sim.stories run --story all --k 3` lives each story of `sim/stories.yaml` k times
+(seeds seed..seed+k-1) on a fresh polygon. A story is Given (a household, its chaos, settings, plus
+injected habits and incidents with tags) – When (lived N days) – Then (checks on the trace: a
+proposal for the habit by day N, deployed after the owner's decision, a report within M minutes
+after an incident, no alarm after a sensor lie, no draft built on a sensor that only lied, at most N
+warnings a day, wakes a day). A simple owner approves drafts that act on the story's habits and name
+only real entities, and rejects the rest with a reason. The report (`.agent-logs/stories/<stamp>/`)
+gives pass@1 and pass^k (all k passed, the reliability measure of tau-bench) per story, the
+safety checks and invariants of every run, and a coverage table: which add-on features the runs
+reached (daily review, drafts, deploys, rejections, manager, alarms, gate drops, house mode) and
+how often each kind of sensor lie woke an agent. Features no run reached are listed: that is the
+next story to write. With the fake models, expectations that need a draft are `n/a`.
+
 ## 5. Metrics: one number for the whole program, done properly
 
 Source: the logbook changes HA records with their cause (`core/insights.py`). Every automated
