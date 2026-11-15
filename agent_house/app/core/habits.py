@@ -28,6 +28,11 @@ A real house has ~2000 entities and most say nothing about habits. So, in order:
    `MIN_SUPPORT` of its episodes are explained by one regularity (on time, after the same signal
    with precision ≥ `MIN_PRECISION`, or together with the same device). The strongest
    `MAX_DOSSIERS` go on.
+   Deviations are not habits (stories 2026-11-15: three late nights became "hallway light off at
+   00:40"): episodes while guests are in (a `guest` helper on, or house mode `guests`) are left out
+   and counted; and a time explains episodes only when it is stable over the scan: on time on at
+   least `MIN_COVERAGE` of the eligible days since the first episode (workdays and weekends apart),
+   in at least `MIN_WEEKS` calendar weeks. A burst of a few days waits.
 
 The dossier is a compact text (counts and at most `MAX_EPISODES` sample episodes per state), not
 raw history: the model is asked to write one automation that captures the habit with its
@@ -60,6 +65,9 @@ MIN_SIGNAL_SHARE = 0.4  # a signal worth naming preceded at least this share of 
 MAX_DOSSIERS = 8
 MAX_EPISODES = 14
 COVERED_SHARE = 0.8  # of a target state's changes done by the owner's automations: already automated
+MIN_COVERAGE = 0.5  # a time habit: on time on this share of the eligible days since it started
+MIN_WEEKS = 2  # … in at least this many calendar weeks
+GUEST_MODES = frozenset({"guests"})
 WEEKDAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
 
 
@@ -189,6 +197,7 @@ def episodes(entity_id: str, changes, ha, timeline: _Timeline) -> list[dict]:
     area = ha.registry.area_of(entity_id)
     signals = [e for e in timeline.rows if e != entity_id and is_signal(ha, e, area)]
     people = [e for e in timeline.rows if _domain(e) == "person"]
+    guest_flags = [e for e in timeline.rows if _domain(e) == "input_boolean" and "guest" in e]
     hand = [
         c for c in changes if c.manual and _domain(c.entity_id) in ACT_DOMAINS and c.state not in SKIP_STATES
     ]
@@ -209,6 +218,8 @@ def episodes(entity_id: str, changes, ha, timeline: _Timeline) -> list[dict]:
             "home": (any(s == "home" for s in known) if known else None),
             "sun": timeline.at("sun.sun", change.ts),
             "mode": timeline.at(MODE_ENTITY, change.ts),
+            "guests": timeline.at(MODE_ENTITY, change.ts) in GUEST_MODES
+            or any(timeline.at(g, change.ts) == "on" for g in guest_flags),
             "together": sorted({
                 f"{c.entity_id} → {c.state}" for c in hand
                 if c.entity_id != entity_id and abs(c.ts - change.ts) <= TOGETHER_S
@@ -266,11 +277,27 @@ def _time_groups(eps: list[dict], today: date) -> list[dict]:
         center = _circular_median([e["minute"] for e in group])
         offsets = [_offset(e["minute"], center) for e in group]
         on_time = [e for e, o in zip(group, offsets, strict=True) if abs(o) <= TIME_BAND_MIN]
+        days_on = {date.fromisoformat(e["day"]) for e in on_time}
+        eligible = _eligible_days(label, min(date.fromisoformat(e["day"]) for e in group), today)
+        coverage = len(days_on) / max(eligible, 1)
+        weeks = len({d.isocalendar()[:2] for d in days_on})
+        stable = coverage >= MIN_COVERAGE and weeks >= MIN_WEEKS
         out.append({
             "days": label, "at": _hhmm(center), "spread_min": int(statistics.median(abs(o) for o in offsets)),
-            "on_time": len(on_time), "of": len(group), "on_time_ids": {id(e) for e in on_time},
+            "on_time": len(on_time), "of": len(group), "coverage": round(coverage, 2), "weeks": weeks,
+            "stable": stable, "on_time_ids": {id(e) for e in on_time} if stable else set(),
         })  # fmt: skip
     return out
+
+
+def _eligible_days(label: str, first: date, today: date) -> int:
+    """Days since `first` (up to the scan's end) on which a habit of this kind could happen."""
+    days = [first + timedelta(n) for n in range(max((today - first).days, 1))]
+    if label == "Mon–Fri":
+        return sum(1 for d in days if d.weekday() < 5)
+    if label == "Sat–Sun":
+        return sum(1 for d in days if d.weekday() >= 5)
+    return len(days)
 
 
 def _close(a: list[dict], b: list[dict]) -> bool:
@@ -316,11 +343,13 @@ def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timelin
     home = [e["home"] for e in eps if e["home"] is not None]
     sun = [e["sun"] for e in eps if e["sun"]]
     modes = Counter(e["mode"] for e in eps if e["mode"])
-    support = max(
-        [len(explained_by_time) / n]
-        + [s["before"] / n for s in signals if s["precision"] >= MIN_PRECISION]
-        + [c["times"] / n for c in companions]
-    )
+    by_other = [s["before"] / n for s in signals if s["precision"] >= MIN_PRECISION]
+    by_other += [c["times"] / n for c in companions]
+    support = max([len(explained_by_time) / n] + by_other)
+    # before the stability test: is it a regular thing at all? (the owner's automation may do it on
+    # most days, so the hand alone is never stable; that is "covered", not "irregular")
+    on_time = sum(t["on_time"] for t in times) / n if times else 0.0
+    loose = max([on_time] + by_other)
     return {
         "state": state, "count": n, "days": len({e["day"] for e in eps}),
         "time": times, "after": signals[:3], "together": companions,
@@ -328,6 +357,7 @@ def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timelin
         "sun_below": [sum(1 for s in sun if s == "below_horizon"), len(sun)] if sun else None,
         "modes": dict(modes.most_common(3)),
         "support": round(support, 2),
+        "regular": round(loose, 2),
         "days_known": all(t["days"] != "unknown" for t in times),
     }  # fmt: skip
 
@@ -354,15 +384,30 @@ def build(
     for candidate in candidates:
         entity_id = candidate["entity_id"]
         eps = episodes(entity_id, changes, ha, timeline)
+        guests = sum(1 for e in eps if e["guests"])
+        funnel["guest_episodes_left_out"] = funnel.get("guest_episodes_left_out", 0) + guests
+        eps = [e for e in eps if not e["guests"]]
         by_state: dict[str, list[dict]] = defaultdict(list)
         for e in eps:
             by_state[e["state"]].append(e)
         theirs = automated(entity_id, changes)
         by_owner = {s: _by_owner(s, len(by_state.get(s, [])), done, today) for s, done in theirs.items()}
         states = [regularities(entity_id, s, group, timeline, today) for s, group in by_state.items()]
-        qualified = [s for s in states if s["days"] >= min_days and s["support"] >= MIN_SUPPORT]
+        regular = [s for s in states if s["days"] >= min_days and s["regular"] >= MIN_SUPPORT]
+        if regular and all(by_owner.get(s["state"], {}).get("share", 0) >= COVERED_SHARE for s in regular):
+            refs = sorted({r for s in regular for r in by_owner[s["state"]]["by"]})
+            covered.append({"entity_id": entity_id, "by": refs})
+            continue
+        mine = [s for s in regular if by_owner.get(s["state"], {}).get("share", 0) < COVERED_SHARE]
+        if mine and not all(s["days_known"] for s in mine):
+            waiting.append(entity_id)  # regular, but workdays / every day cannot be told yet
+            continue
+        # the owner's own automation doing part of a state shows it is a routine: no stability needed
+        theirs_too = {st for st, b in by_owner.items() if b.get("share", 0) > 0}
+        measure = {s["state"]: "regular" if s["state"] in theirs_too else "support" for s in states}
+        qualified = [s for s in states if s["days"] >= min_days and s[measure[s["state"]]] >= MIN_SUPPORT]
         if not qualified:
-            weak.append(entity_id)
+            weak.append(entity_id)  # irregular, or a burst of a few days that is not stable yet
             continue
         left = [s for s in qualified if by_owner.get(s["state"], {}).get("share", 0) < COVERED_SHARE]
         if not left:

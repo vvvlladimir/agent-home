@@ -73,7 +73,10 @@ def test_workday_and_weekend_times_are_one_habit_with_two_bands():
     bands = {t["days"]: t for t in on["time"]}
     assert set(bands) == {"Mon–Fri", "Sat–Sun"}
     assert bands["Mon–Fri"]["at"].startswith("06:4") and bands["Mon–Fri"]["on_time"] == 8
-    assert bands["Sat–Sun"]["at"].startswith("08:") and on["support"] == 1.0
+    # one weekend is not stable yet (MIN_WEEKS): the workdays explain 8 of 10, the weekend waits
+    assert bands["Sat–Sun"]["at"].startswith("08:") and not bands["Sat–Sun"]["stable"] and on["support"] == 0.8
+    two_weekends = next(s for s in build(kitchen(14))[0][0]["states"] if s["state"] == "on")
+    assert two_weekends["support"] == 1.0
     text = habits.request(dossier)
     assert "Mon–Fri median 06:4" in text and "Sat–Sun median 08:" in text and "ONE automation" in text
     assert "samples: Mon 11-02 06:40" in text
@@ -101,7 +104,10 @@ def test_weekdays_wait_until_a_day_of_the_other_kind_has_passed():
     for today in (3, 5):  # Thursday, Saturday: no weekend day is over yet
         dossiers, funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=today)).date())
         assert dossiers == [] and funnel["waiting_for_weekdays"] == ["light.kitchen"]
-    [dossier], funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=6)).date())  # Sunday
+    dossiers, funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=6)).date())  # Sunday
+    assert dossiers == [] and funnel["waiting_for_weekdays"] == [], "days known, but one week is a burst"
+    and_monday = monday_to_wednesday + [c for c in kitchen(8) if c.ts >= at(7, 0, 0)]
+    [dossier], funnel = build(and_monday, today=(BASE + timedelta(days=8)).date())  # Tuesday, week 2
     on = next(s for s in dossier["states"] if s["state"] == "on")
     assert [t["days"] for t in on["time"]] == ["Mon–Fri"] and funnel["waiting_for_weekdays"] == []
 
@@ -219,3 +225,29 @@ def test_a_device_the_owners_automation_mostly_runs_is_left_out_as_covered():
     [dossier], funnel = build(changes)
     assert {b["state"]: b["share"] for b in dossier["by_owner"]} == {"on": 0.7, "off": 0.7}
     assert funnel["covered_by_owner"] == []
+
+
+def test_a_burst_of_late_nights_is_not_a_habit():
+    """Stories 2026-11-15: three late nights became "hallway light off at 00:40". On time on 3 of
+    10 days is a burst, not a habit; the same time every day for two weeks is."""
+    late = [hand(at(day, 0, 40 + day % 3), "light.porch", "off") for day in (2, 3, 6)]
+    late += [hand(at(day - 1, 22, 0), "light.porch", "on") for day in (2, 3, 6)]
+    dossiers, funnel = build(late)
+    assert dossiers == [] and funnel["irregular"] == 1
+    daily = [hand(at(day, 0, 40 + day % 3), "light.porch", "off") for day in range(1, 10)]
+    daily += [hand(at(day - 1, 22, 5), "light.porch", "on") for day in range(1, 10)]
+    [dossier], _ = build(daily)
+    assert dossier["entity_id"] == "light.porch"
+
+
+def test_episodes_while_guests_are_in_are_left_out():
+    """Guest evenings (the guest helper on, or house mode guests) are not the owner's routine."""
+    guests = []
+    for day in (1, 2, 4, 7, 8):
+        guests += [hand(at(day, 19, 55), "input_boolean.guest_mode", "on"),
+                   hand(at(day, 20, 0), "light.porch", "on"), hand(at(day, 23, 50), "light.porch", "off"),
+                   hand(at(day, 23, 55), "input_boolean.guest_mode", "off")]  # fmt: skip
+    dossiers, funnel = build(guests)
+    assert dossiers == [] and funnel["guest_episodes_left_out"] == 10
+    [dossier], funnel = build(kitchen() + guests)
+    assert dossier["entity_id"] == "light.kitchen" and funnel["guest_episodes_left_out"] == 10

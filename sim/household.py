@@ -30,6 +30,7 @@ TV, BLINDS = "media_player.living_room_tv", "cover.living_room_blinds"
 HALL_MOTION, LIVING_MOTION = "binary_sensor.hallway_motion", "binary_sensor.living_room_motion"
 DOOR, LOCK, PERSON = "binary_sensor.front_door_contact", "lock.front_door", "person.owner"
 WINDOW, HEATER = "binary_sensor.bedroom_window", "switch.space_heater"
+GUEST_MODE = "input_boolean.guest_mode"
 TEMPS = {"sensor.living_room_temperature": 21.0, "sensor.bedroom_temperature": 19.0}
 MOTIONS = (HALL_MOTION, LIVING_MOTION)
 
@@ -54,6 +55,7 @@ class Chaos:
     forgot_light: float = 0.10  # a light left on all night
     sick_day: float = 0.03  # a workday at home
     guests: float = 0.08  # an evening with more people, lights and motion
+    guest_mode: float = 0.0  # share of guest evenings the owner marks with input_boolean.guest_mode
     airing: float = 0.15  # a cold evening: heater on, and someone opens the bedroom window anyway
     trip_days: int = 4  # one trip away of this many days (0 = none); placed in the second half
     ghost_motion: float = 0.3  # false positives a day, house-wide
@@ -112,6 +114,10 @@ def plan(days: int, start: datetime, seed: int = 7, chaos: Chaos | None = None) 
         evening = _at(day, 19.0, 30, rng)
         add(evening, LIVING, "on", "user")
         add(evening + timedelta(minutes=rng.uniform(5, 30)), TV, "on", "user")
+        # drawn only when used, so plans without it stay exactly as they were (same seed, same days)
+        marked = guests and c.guest_mode > 0 and rng.random() < c.guest_mode
+        if marked:
+            add(evening - timedelta(minutes=5), GUEST_MODE, "on", "user", "human", "guests")
         if guests:
             for eid in (KITCHEN, HALL):
                 add(evening + timedelta(minutes=rng.uniform(10, 60)), eid, "on", "user", "human", "guests")
@@ -129,6 +135,8 @@ def plan(days: int, start: datetime, seed: int = 7, chaos: Chaos | None = None) 
         if guests:
             for eid in (KITCHEN, HALL):
                 add(bed - timedelta(minutes=rng.uniform(1, 4)), eid, "off", "user", "human", "guests")
+        if marked:
+            add(bed + timedelta(minutes=1), GUEST_MODE, "off", "user", "human", "guests")
         add(bed, BEDROOM, "on", "user", btag)
         add(bed + timedelta(minutes=rng.uniform(10, 35)), BEDROOM, "off", "user", btag)
         add(bed + timedelta(minutes=rng.uniform(0, 5)), LOCK, "locked", "user", btag)

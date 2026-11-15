@@ -212,7 +212,7 @@ stories:
     about: Guest evenings and days off sick change the house for a day; none of them becomes a draft.
     days: 10
     needs_model: true
-    chaos: {guests: 0.6, sick_day: 0.4}
+    chaos: {guests: 0.6, sick_day: 0.4, guest_mode: 0.5}  # half of the guest evenings marked by the owner
     expect:
       - {no_proposal_from_tag: "human"}
       - {max_reports_per_day: 6}
