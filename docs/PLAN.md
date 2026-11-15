@@ -155,3 +155,15 @@ steps are written down in `OWNER_CHECKLIST.md`.
       `tests/unit/test_claude_bridge.py`, D30
 - [ ] **Owner:** first `python -m sim.qa run` with three roles and real keys (OWNER_CHECKLIST → AI testers)
 - [ ] **Owner:** one `/polygon-claude` in a claude.ai/code cloud session; commit the backlog
+
+## Predictive habits — D35 (prototype: branch `proto/predictive-habits`)
+
+- [ ] Context snapshots: every entity encoded the same way (state, time since change), sun, hour,
+      weekend; negatives are the minutes the owner did not act → `core/context.py`
+- [ ] Per device and state: shallow tree, leaves as rules mapped to HA triggers + conditions
+- [ ] Shadow track record per rule on the days after it was learnt; ladder shadow → ask → act → draft
+- [ ] Act / ask / wait by expected utility; cost of a wrong action learnt from undos; ask budget per day
+- [ ] Replace the D31 gate; dossier stays as the explanation; LLM only writes the YAML and the text
+- [ ] Polygon household with causes (dark, presence, choices) instead of clock-driven routines
+- [ ] Open: wants acted on late (lamp when it got dark): learn from undo/accept of asks, not only actions
+
