@@ -120,6 +120,9 @@ class EventGate:
         for agent in self.agents.list():
             for index, rule in enumerate(agent.wake_rules.events):
                 if not rule_matches(rule, entity_id, old_state, new_state):
+                    pending = self._pending.get((agent.id, index))
+                    if pending is not None and pending[0] == entity_id:  # moved on before it settled
+                        self._pending[(agent.id, index)] = (entity_id, pending[1], new_state)
                     continue
                 if rule.priority == "alarm" and alarm_reason is None:
                     alarm_reason = rule.reason or "Alarm."
@@ -156,6 +159,11 @@ class EventGate:
             return
         entity_id, old_state, new_state = pending
         rule = agent.wake_rules.events[key[1]]
+        if not rule_matches(rule, entity_id, old_state, new_state):
+            # a door contact bouncing on/off ends "off": waking for "opened" made a false alarm
+            # (stories 2026-11-15, flaky_network_sensors)
+            why = f"{entity_id} settled at {new_state}, the rule no longer matches"
+            return self._drop(agent, why, entity_id)
         now = self.clock()
         last = self._last_rule_wake.get(key)
         if last is not None and now - last < rule.cooldown_s:

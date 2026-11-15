@@ -74,6 +74,21 @@ async def test_debounce_restarts_while_the_state_keeps_changing(tmp_path):
     assert wake["reason"] == f"{MOTION} changed off → on. Someone moved."
 
 
+async def test_a_change_that_reverts_inside_the_debounce_does_not_wake(tmp_path):
+    """Stories 2026-11-15: a door contact bouncing on/off ended "off", yet the agent woke for
+    "opened" and raised a false alarm. The debounce settles on the last state, and only wakes if
+    the rule still matches it."""
+    g = Gate(tmp_path, {"events": [{"entities": [MOTION], "to": ["on"], "debounce_s": 0.05}]})
+    for old, new in (("off", "on"), ("on", "off"), ("off", "on"), ("on", "off")):
+        g.change(MOTION, old, new)
+    await asyncio.sleep(0.1)
+    assert g.wakes == [] and any("settled at off" in d for d in g.drops())
+    for old, new in (("off", "on"), ("on", "off"), ("off", "on")):
+        g.change(MOTION, old, new)
+    await asyncio.sleep(0.1)
+    assert len(g.wakes) == 1, "ends on: one wake"
+
+
 async def test_cooldown_per_rule(tmp_path):
     g = Gate(tmp_path, {"events": [{"entities": [MOTION], "to": ["on"], "debounce_s": 0, "cooldown_s": 60}]})
     for _ in range(3):

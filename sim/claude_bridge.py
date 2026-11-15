@@ -38,10 +38,12 @@ PREAMBLE = (
 
 
 # `--json-schema` answers through the CLI's own `StructuredOutput` tool. A `tool_use` of any other
-# name means the model reached for a native tool, got "No such tool available" from the CLI and
-# wrote its answer about that (stories 2026-11-15: an agent told the owner its call_service was
-# broken before calling it). Read from `--output-format stream-json`; counting turns was too blunt
-# (a retried StructuredOutput also adds a turn, and every such answer was thrown away).
+# name is the model calling a tool natively; the CLI answers "No such tool available" and the model
+# then writes about broken tools (stories 2026-11-15: an agent told the owner its call_service was
+# broken before calling it). Mostly the tools are the application's own (find_entities,
+# submit_automation, assign_task): those calls are what the model meant, so they become the turn's
+# `tool_calls` and the text about the failure is dropped. Any other native tool (Bash, Read …):
+# the turn is asked again, then refused. Read from `--output-format stream-json`.
 STRUCTURED = "StructuredOutput"
 ATTEMPTS = 2
 
@@ -73,8 +75,12 @@ def _schema(names: list[str]) -> dict:
     }
 
 
-def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout: float = 240.0) -> dict:
-    """One `claude -p` turn → {"out": structured output, "model", "tokens_in", "tokens_out", "ms"}."""
+def run(
+    system: str, prompt: str, schema: dict, model: str, effort: str, timeout: float = 240.0,
+    allowed: frozenset[str] = frozenset(),
+) -> dict:
+    """One `claude -p` turn → {"out": structured output, "model", "tokens_in", "tokens_out", "ms"}.
+    `allowed`: the application's tools; native calls of these are taken as the turn's tool calls."""
     if not available():
         raise BridgeError("the `claude` CLI is not on PATH")
     cmd = ["claude", "-p", "--model", model, "--effort", effort, "--tools", "", "--no-session-persistence",
@@ -84,20 +90,24 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
     started, n_in, n_out = time.monotonic(), 0, 0
     for attempt in range(1, ATTEMPTS + 1):
         data, native = _once(cmd, prompt, env, timeout)
+        foreign = {c["name"] for c in native} - allowed
         usage = data.get("usage") or {}  # every attempt was paid for
         n_in += sum(int(usage.get(k) or 0) for k in
                     ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))  # fmt: skip
         n_out += int(usage.get("output_tokens") or 0)
-        if not native:
+        if not foreign:
             break
         if attempt == ATTEMPTS:
             raise BridgeError(
-                f"claude -p reached for native tools ({', '.join(sorted(native))}) {ATTEMPTS} times; "
+                f"claude -p reached for native tools ({', '.join(sorted(foreign))}) {ATTEMPTS} times; "
                 "its answer is not used"
             )
+    out = data["structured_output"]
+    if native:  # the application's tools, called natively: the calls are the answer
+        out = {"text": "", "tool_calls": native}
     used = list((data.get("modelUsage") or {}).keys())
     return {
-        "out": data["structured_output"],
+        "out": out,
         "model": used[0] if used else model,
         "tokens_in": n_in,
         "tokens_out": n_out,
@@ -105,8 +115,9 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
     }
 
 
-def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> tuple[dict, set[str]]:
-    """One CLI run → (the final `result` event, names of native tools the model reached for)."""
+def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> tuple[dict, list[dict]]:
+    """One CLI run → (the final `result` event, the native tool calls of the model's first turn
+    that made any: [{name, arguments}]; later turns only react to the CLI's "No such tool")."""
     with _slots:
         try:
             proc = subprocess.run(
@@ -114,7 +125,7 @@ def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> tuple[dict,
             )
         except subprocess.TimeoutExpired as err:
             raise BridgeError(f"claude -p timed out after {timeout:g} s") from err
-    data, native = None, set()
+    data, native = None, []
     for line in proc.stdout.splitlines():
         try:
             event = json.loads(line)
@@ -125,16 +136,18 @@ def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> tuple[dict,
         if event.get("type") == "result":
             data = event
         elif event.get("type") == "assistant":
+            turn = (event.get("message") or {}).get("id") or len(native)
             for block in (event.get("message") or {}).get("content") or []:
                 if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
-                if block.get("name") != STRUCTURED:
-                    native.add(str(block.get("name")))
+                if block.get("name") != STRUCTURED and (not native or native[-1]["turn"] == turn):
+                    args = block.get("input") if isinstance(block.get("input"), dict) else {}
+                    native.append({"name": str(block.get("name")), "arguments": args, "turn": turn})
     if data is None:
         raise BridgeError(f"claude -p: {(proc.stderr or proc.stdout).strip()[:300]}")
     if data.get("is_error") or not isinstance(data.get("structured_output"), dict):
         raise BridgeError(f"claude -p: {str(data.get('result') or data.get('subtype'))[:300]}")
-    return data, native
+    return data, [{"name": c["name"], "arguments": c["arguments"]} for c in native]
 
 
 def _turn(system: str, turns: list[str], tools: list[dict], model: str, effort: str, timeout: float) -> dict:
@@ -142,7 +155,7 @@ def _turn(system: str, turns: list[str], tools: list[dict], model: str, effort: 
     tool_text = json.dumps(tools, ensure_ascii=False) if tools else "none"
     full_system = f"{PREAMBLE}Tools you may call: {tool_text}\n----------\n{system}"
     prompt = "\n\n".join(turns) + "\n\n[Your next assistant turn as JSON.]"
-    res = run(full_system, prompt, _schema(names), model, effort, timeout)
+    res = run(full_system, prompt, _schema(names), model, effort, timeout, allowed=frozenset(names))
     calls = [c for c in res["out"].get("tool_calls") or [] if isinstance(c, dict) and c.get("name") in names]
     return {**res, "text": str(res["out"].get("text") or ""), "calls": calls}
 

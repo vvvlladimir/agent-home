@@ -14,8 +14,11 @@ from sim import claude_bridge as bridge
 def stream(result: dict, *tools: str) -> str:
     """`--output-format stream-json`: one event per line, the tool uses, then the result."""
     events = [{"type": "system", "subtype": "init"}]
-    events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": n, "input": {}}]}}
-               for n in (*tools, "StructuredOutput")]  # fmt: skip
+    events += [{"type": "assistant", "message": {"id": "m1", "content": [
+        {"type": "tool_use", "name": n, "input": {"query": "lamp"} if n != "StructuredOutput" else {}}]}}
+        for n in tools]  # fmt: skip
+    events += [{"type": "assistant", "message": {"id": "m2", "content": [
+        {"type": "tool_use", "name": "StructuredOutput", "input": {}}]}}]  # fmt: skip
     return "\n".join(json.dumps(e) for e in [*events, {"type": "result", **result}])
 
 
@@ -183,3 +186,19 @@ def test_a_turn_that_reached_for_a_native_tool_is_retried_then_refused(monkeypat
     answers = iter([("Bash",), ("Read",)])
     with pytest.raises(bridge.BridgeError, match=r"native tools \(Read\)"):
         bridge.run("sys", "hi", {}, "haiku", "low")
+
+
+def test_a_native_call_of_the_applications_own_tool_is_taken_as_the_tool_call(monkeypatch):
+    """The model called find_entities natively (CLI: "No such tool"), then wrote that its tools
+    were broken. The call is what it meant: it becomes tool_calls, the text is dropped."""
+
+    def fake(cmd, input, **kw):  # noqa: A002
+        data = {"is_error": False, "structured_output": {"text": "every tool call failed", "tool_calls": []},
+                "usage": {"input_tokens": 5, "output_tokens": 1}}  # fmt: skip
+        return subprocess.CompletedProcess(cmd, 0, stream(data, "find_entities"), "")
+
+    monkeypatch.setattr(bridge.subprocess, "run", fake)
+    monkeypatch.setattr(bridge, "available", lambda: True)
+    tools = [{"name": "find_entities", "description": "", "input_schema": {}}]
+    res = bridge._turn("sys", ["hi"], tools, "sonnet", "medium", 60)
+    assert res["text"] == "" and res["calls"] == [{"name": "find_entities", "arguments": {"query": "lamp"}}]
