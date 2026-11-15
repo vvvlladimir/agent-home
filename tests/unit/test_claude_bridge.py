@@ -11,6 +11,14 @@ import pytest
 from sim import claude_bridge as bridge
 
 
+def stream(result: dict, *tools: str) -> str:
+    """`--output-format stream-json`: one event per line, the tool uses, then the result."""
+    events = [{"type": "system", "subtype": "init"}]
+    events += [{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": n, "input": {}}]}}
+               for n in (*tools, "StructuredOutput")]  # fmt: skip
+    return "\n".join(json.dumps(e) for e in [*events, {"type": "result", **result}])
+
+
 class FakeCLI:
     """Stands in for `subprocess.run(["claude", "-p", ...])`; records argv, prompt and schema."""
 
@@ -22,7 +30,7 @@ class FakeCLI:
         data = {"is_error": False, "structured_output": self.out, "usage": {"input_tokens": 10,
                 "cache_read_input_tokens": 90, "output_tokens": 7},
                 "modelUsage": {"claude-haiku-5-5": {}}, **self.extra}  # fmt: skip
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(data), "")
+        return subprocess.CompletedProcess(cmd, 0, stream(data), "")
 
     def flag(self, name: str) -> str:
         cmd = self.calls[-1]["cmd"]
@@ -159,18 +167,19 @@ def test_gateways_serve_room_and_orchestrator_through_the_bridge(cli, tmp_path):
 
 def test_a_turn_that_reached_for_a_native_tool_is_retried_then_refused(monkeypatch):
     """Stories 2026-11-15: with no CLI tools the model sometimes tried one, got "No such tool
-    available" and told the owner its call_service was broken. Such an answer is never used."""
-    answers = iter([3, 2])
+    available" and told the owner its call_service was broken. Such an answer is never used; a
+    retried StructuredOutput (an extra turn, nothing native) is a clean answer."""
+    answers = iter([("Bash",), ()])
 
     def fake(cmd, input, **kw):  # noqa: A002
-        data = {"is_error": False, "num_turns": next(answers), "structured_output": {"text": "ok", "tool_calls": []},
+        data = {"is_error": False, "num_turns": 3, "structured_output": {"text": "ok", "tool_calls": []},
                 "usage": {"input_tokens": 5, "output_tokens": 1}}  # fmt: skip
-        return subprocess.CompletedProcess(cmd, 0, json.dumps(data), "")
+        return subprocess.CompletedProcess(cmd, 0, stream(data, *next(answers)), "")
 
     monkeypatch.setattr(bridge.subprocess, "run", fake)
     monkeypatch.setattr(bridge, "available", lambda: True)
     res = bridge.run("sys", "hi", {}, "haiku", "low")
     assert res["out"]["text"] == "ok" and res["tokens_in"] == 10 and res["tokens_out"] == 2
-    answers = iter([4, 3])
-    with pytest.raises(bridge.BridgeError, match="native tool"):
+    answers = iter([("Bash",), ("Read",)])
+    with pytest.raises(bridge.BridgeError, match=r"native tools \(Read\)"):
         bridge.run("sys", "hi", {}, "haiku", "low")

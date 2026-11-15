@@ -37,10 +37,12 @@ PREAMBLE = (
 )
 
 
-# `--json-schema` answers through one structured-output turn: 2 turns in all. More means the model
-# reached for a native tool, got "No such tool available" from the CLI and wrote its answer about
-# that (stories 2026-11-15: an agent told the owner its call_service was broken before calling it).
-CLEAN_TURNS = 2
+# `--json-schema` answers through the CLI's own `StructuredOutput` tool. A `tool_use` of any other
+# name means the model reached for a native tool, got "No such tool available" from the CLI and
+# wrote its answer about that (stories 2026-11-15: an agent told the owner its call_service was
+# broken before calling it). Read from `--output-format stream-json`; counting turns was too blunt
+# (a retried StructuredOutput also adds a turn, and every such answer was thrown away).
+STRUCTURED = "StructuredOutput"
 ATTEMPTS = 2
 
 
@@ -77,19 +79,22 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
         raise BridgeError("the `claude` CLI is not on PATH")
     cmd = ["claude", "-p", "--model", model, "--effort", effort, "--tools", "", "--no-session-persistence",
            "--setting-sources", "", "--strict-mcp-config", "--system-prompt", system,
-           "--output-format", "json", "--json-schema", json.dumps(schema)]  # fmt: skip
+           "--output-format", "stream-json", "--verbose", "--json-schema", json.dumps(schema)]  # fmt: skip
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}  # a nested session is fine here
     started, n_in, n_out = time.monotonic(), 0, 0
     for attempt in range(1, ATTEMPTS + 1):
-        data = _once(cmd, prompt, env, timeout)
+        data, native = _once(cmd, prompt, env, timeout)
         usage = data.get("usage") or {}  # every attempt was paid for
         n_in += sum(int(usage.get(k) or 0) for k in
                     ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))  # fmt: skip
         n_out += int(usage.get("output_tokens") or 0)
-        if int(data.get("num_turns") or CLEAN_TURNS) <= CLEAN_TURNS:
+        if not native:
             break
         if attempt == ATTEMPTS:
-            raise BridgeError(f"claude -p reached for a native tool {ATTEMPTS} times; its answer is not used")
+            raise BridgeError(
+                f"claude -p reached for native tools ({', '.join(sorted(native))}) {ATTEMPTS} times; "
+                "its answer is not used"
+            )
     used = list((data.get("modelUsage") or {}).keys())
     return {
         "out": data["structured_output"],
@@ -100,7 +105,8 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
     }
 
 
-def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> dict:
+def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> tuple[dict, set[str]]:
+    """One CLI run → (the final `result` event, names of native tools the model reached for)."""
     with _slots:
         try:
             proc = subprocess.run(
@@ -108,13 +114,27 @@ def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> dict:
             )
         except subprocess.TimeoutExpired as err:
             raise BridgeError(f"claude -p timed out after {timeout:g} s") from err
-    try:
-        data = json.loads(proc.stdout)
-    except json.JSONDecodeError as err:
-        raise BridgeError(f"claude -p: {(proc.stderr or proc.stdout).strip()[:300]}") from err
+    data, native = None, set()
+    for line in proc.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            data = event
+        elif event.get("type") == "assistant":
+            for block in (event.get("message") or {}).get("content") or []:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != STRUCTURED:
+                    native.add(str(block.get("name")))
+    if data is None:
+        raise BridgeError(f"claude -p: {(proc.stderr or proc.stdout).strip()[:300]}")
     if data.get("is_error") or not isinstance(data.get("structured_output"), dict):
         raise BridgeError(f"claude -p: {str(data.get('result') or data.get('subtype'))[:300]}")
-    return data
+    return data, native
 
 
 def _turn(system: str, turns: list[str], tools: list[dict], model: str, effort: str, timeout: float) -> dict:
