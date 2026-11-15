@@ -181,6 +181,9 @@ contexts) and the ADL anomaly kinds (CASAS: temporal, spatial), what this add-on
 | Noise and cost | `flaky_network_sensors`, `motion_storm`, `calm_house` |
 | Kill switch | `kill_switch_holds` (an `input_boolean` helper held on: no run, no action) |
 
+Stories that need an agent to watch a lock, the garage, a battery or a fridge give
+`suggested_agents: [room]`: the owner keeps the wake rules the editor suggests for that room.
+
 Not covered by stories (covered by unit, integration or polygon tests): chat, T2 approvals in live
 mode and their expiry, rollback after an owner's undo (the fake HA fires state triggers only, so a deployed time-triggered habit never runs),
 the cloud budget stop (`daily_budget_eur` is an add-on option, not a runtime setting).

@@ -109,6 +109,35 @@ paths:
         "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
         "409": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+  /api/agents/suggest-rules:
+    get:
+      tags: [agents]
+      operationId: suggestWakeRules
+      x-milestone: M3
+      summary: Wake rules suggested from the devices of a room; nothing is saved
+      description: >-
+        Deterministic, no model. One event rule per kind found in the room (smoke / gas / leak as
+        alarm, doors and windows, locks and garage doors (T3: report, never act), motion, cold,
+        low batteries, fridges losing power, problem sensors), each with exact entity ids and a
+        reason. The editor fills a new agent's wake rules with them; the owner keeps or edits them.
+        422 when HA is connected and the room is not one of its areas.
+      parameters:
+        - {name: room, in: query, required: true, schema: {type: string}, description: area_id}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room, rules]
+                properties:
+                  room: {type: string}
+                  rules:
+                    type: array
+                    description: "items as wake_rules.events in schemas/agent_config.schema.json"
+                    items: {type: object, required: [entities, reason]}
+        "422": {$ref: "#/components/responses/Error"}
   /api/agents/{agent_id}:
     parameters: [{$ref: "#/components/parameters/agent_id"}]
     get:

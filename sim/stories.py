@@ -98,9 +98,9 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
         extra.append(household.Event(t.timestamp(), eid, inc["state"], "physical", inc["tag"]))
         if inc.get("back_after_min"):
             back = inc.get("back_state") or ("off" if inc["state"] == "on" else "on")
-            extra.append(
-                household.Event(t.timestamp() + 60 * inc["back_after_min"], eid, back, "physical", inc["tag"])
-            )
+            end = t.timestamp() + 60 * inc["back_after_min"]
+            # note "back": the end of the incident, never an anchor of report_about
+            extra.append(household.Event(end, eid, back, "physical", inc["tag"], "back"))
     return sorted(events + extra), names
 
 
@@ -263,7 +263,8 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             anchors = [
                 e
                 for e in events
-                if (exp.get("after_tag") and e["tag"] == exp["after_tag"] and e["state"] != "off")
+                # an incident's own state (a fridge going "off" too), never its end
+                if (exp.get("after_tag") and e["tag"] == exp["after_tag"] and e["note"] != "back")
                 or (exp.get("after_note") and e["note"] == exp["after_note"] and e["state"] != "off")
             ]
             anchors = _first_per_hour(anchors)
@@ -644,6 +645,8 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
             r = app.send("POST", "/api/council/mode-helper", {})
             if r.status_code >= 300:
                 raise polygon.SetupError(f"mode helper: {r.status_code} {r.text[:200]}")
+        for room in story.get("suggested_agents") or []:  # the owner keeps the editor's suggestions
+            accept_suggested_rules(app, room)
         for h in story.get("helpers") or []:  # e.g. the kill switch input_boolean the story flips
             attrs = {"friendly_name": h.get("name", h["entity"])}
             stack.on_ha(lambda h=h, a=attrs: stack.ha.set_state(h["entity"], h.get("state", "off"), a))
@@ -679,6 +682,21 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
         "proposals": len(result["proposals"]),
         "data_dir": str(out_dir / f"{sid}-{seed}" / "data"),
     }
+
+
+def accept_suggested_rules(app: polygon.App, room: str) -> None:
+    """What the owner gets by keeping the editor's suggested wake rules (GET api/agents/suggest-rules)
+    for `room`: the room's agent takes exactly those rules; a room without an agent gets one."""
+    rules = app.get("/api/agents/suggest-rules", room=room)["rules"]
+    agent = next((a for a in app.get("/api/agents") if a["room"] == room), None)
+    if agent is None:
+        r = app.send("POST", "/api/agents", {"room": room, "wake_rules": {"events": rules}})
+    else:
+        config = app.get(f"/api/agents/{agent['id']}")
+        config["wake_rules"] = {**(config.get("wake_rules") or {}), "events": rules}
+        r = app.send("PUT", f"/api/agents/{agent['id']}", config)
+    if r.status_code >= 300:
+        raise polygon.SetupError(f"suggested rules for {room}: {r.status_code} {r.text[:200]}")
 
 
 def cmd_run(args) -> int:

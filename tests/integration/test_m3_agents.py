@@ -341,3 +341,20 @@ def test_diagnostics_include_agents_and_the_action_log(base, ha_state):
     assert json.loads(archive.read("agents.json"))[0]["id"] == "living_room"
     assert json.loads(archive.read("actions.json"))[0]["verdict"] == "shadow"
     assert json.loads(archive.read("policy.json"))["t3_whitelist"] == []
+
+
+def test_suggested_wake_rules_come_from_the_rooms_devices(base):
+    """Stories 2026-11-15: nothing watched the front door lock or the garage. A new agent is offered
+    rules for what its room has; nothing is saved until the owner posts the agent."""
+    hall = httpx.get(f"{base}/api/agents/suggest-rules", params={"room": "hallway"}).json()
+    by_entity = {e: r for r in hall["rules"] for e in r["entities"]}
+    assert hall["room"] == "hallway"
+    assert by_entity["lock.front_door"]["to"] == ["unlocked", "open", "jammed"]
+    assert "never act" in by_entity["cover.garage_door"]["reason"]
+    assert by_entity["binary_sensor.front_door_contact"]["to"] == ["on"]
+    assert "binary_sensor.hallway_motion" in by_entity
+    assert httpx.get(f"{base}/api/agents").json() == [], "a suggestion saves nothing"
+    created = httpx.post(f"{base}/api/agents", json={"room": "hallway", "wake_rules": {"events": hall["rules"]}})
+    assert created.status_code == 201, created.text
+    typo = httpx.get(f"{base}/api/agents/suggest-rules", params={"room": "halway"})
+    assert typo.status_code == 422 and "hallway" in typo.json()["detail"]

@@ -135,6 +135,9 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## House manager, accuracy metrics, AI testers — `docs/POLYGON.md`
 
+- [x] Suggested wake rules for a new agent from its room's devices (alarms, openings, locks and
+  garage as report-only T3, motion, cold, low batteries, fridges) → `core/wake_suggest.py`,
+  `GET api/agents/suggest-rules`, editor fills them in; stories `suggested_agents`
 - [x] House manager: prefilter sweep, escalations, manual wake, scope = unowned switchables,
       shadow by `orchestrator_mode`, caps, proposals for new automations and changes to ours
       → `core/manager.py`, `GET /api/manager`, `POST /api/manager/wake`, Settings, D27

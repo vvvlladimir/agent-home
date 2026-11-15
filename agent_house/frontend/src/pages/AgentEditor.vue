@@ -19,7 +19,7 @@ const emit = defineEmits<{ close: []; wake: [id: string] }>();
 // Wake rules are edited as comma-separated text and turned back into lists on save.
 interface EventRule {
   _entities: string; _to: string; _from: string; debounce_s?: number | string; cooldown_s?: number | string;
-  priority?: string; reason?: string; [k: string]: unknown;
+  priority?: string; reason?: string; above?: number | string; below?: number | string; [k: string]: unknown;
 }
 type Form = Omit<AgentConfig, 'wake_rules' | 'limits' | 'entities' | 'tier_overrides' | 'mode'> & {
   entities: string[];
@@ -37,6 +37,9 @@ const previewError = ref('');
 const error = ref('');
 
 const join = (v: unknown) => (Array.isArray(v) ? v.join(', ') : '');
+const toForm = (r: Record<string, unknown>): EventRule => ({
+  priority: 'routine', ...r, _entities: join(r.entities), _to: join(r.to), _from: join(r.from),
+});
 function load(config: AgentConfig) {
   const wr = config.wake_rules || {};
   form.value = {
@@ -49,9 +52,7 @@ function load(config: AgentConfig) {
     wake_rules: {
       ...wr,
       cron: (wr.cron || []).map((c) => ({ ...c })),
-      events: (wr.events || []).map((r) => ({
-        ...r, _entities: join(r.entities), _to: join(r.to), _from: join(r.from),
-      })),
+      events: (wr.events || []).map(toForm),
     },
   };
   error.value = '';
@@ -67,6 +68,7 @@ onMounted(async () => {
       wake_rules: { events: [], cron: [], max_wakes_per_hour: 12 },
       limits: { max_steps: 5, timeout_s: 45, context_budget_tokens: 3000 },
     });
+    suggestRules();
   } else {
     try { load(await api.get<AgentConfig>(`api/agents/${enc(props.id)}`)); } catch (e) { fail(e); emit('close'); }
   }
@@ -113,7 +115,33 @@ const shownEntities = computed(() => {
   return list.sort(by);
 });
 
-function changeRoom() { form.value!.entities = []; loadRoomEntities(); }
+function changeRoom() {
+  form.value!.entities = [];
+  loadRoomEntities();
+  if (isNew.value && rulesAreSuggested()) suggestRules();
+}
+
+// Wake rules suggested from the room's devices (GET api/agents/suggest-rules, no model). A new agent
+// starts with them while the owner has not edited them; "Suggest" adds those still missing later.
+const suggested = ref('');
+const rulesKey = () => JSON.stringify(form.value?.wake_rules.events.map((r) => [r._entities, r._to, r.reason]) || []);
+const rulesAreSuggested = () => !form.value?.wake_rules.events.length || rulesKey() === suggested.value;
+async function suggestRules(addOnly = false) {
+  const f = form.value;
+  if (!f?.room) return;
+  let rules: Record<string, unknown>[] = [];
+  try { rules = (await api.get<{ rules: Record<string, unknown>[] }>(`api/agents/suggest-rules?room=${enc(f.room)}`)).rules; } catch (e) { if (addOnly) fail(e); return; }
+  if (!addOnly) {
+    f.wake_rules.events = rules.map(toForm);
+    suggested.value = rulesKey();
+  } else {
+    const have = new Set(f.wake_rules.events.flatMap((r) => r._entities.split(',').map((s) => s.trim())));
+    const fresh = rules.filter((r) => !(r.entities as string[]).every((e) => have.has(e)));
+    f.wake_rules.events.push(...fresh.map(toForm));
+    toast(fresh.length ? `${fresh.length} ${t('rules added from the room\'s devices')}` : t('Nothing new to suggest'));
+  }
+  schedulePreview();
+}
 function toggleEntity(id: string) {
   const list = form.value!.entities;
   const i = list.indexOf(id);
@@ -256,8 +284,9 @@ const MODES = [['shadow', 'Shadow'], ['live', 'Live']] as const;
         </article>
 
         <article class="card stack">
-          <div class="sec-h"><h2>{{ t('Wakes') }}</h2>
+          <div class="sec-h"><h2>{{ t('Wakes') }} <Info :tip="t('Suggested from the room\'s devices: alarms (smoke, gas, leak), doors and windows, locks and the garage (report only, never act), motion, cold, low batteries, fridges losing power. Keep, change or remove them; nothing wakes the agent until you save.')" /></h2>
             <div class="row">
+              <button class="btn sm" type="button" @click="suggestRules(true)"><Icon name="refresh" /><span>{{ t('Suggest') }}</span></button>
               <button class="btn sm" type="button" @click="addEventRule"><Icon name="plus" /><span>{{ t('State rule') }}</span></button>
               <button class="btn sm" type="button" @click="addCron"><Icon name="plus" /><span>{{ t('Schedule') }}</span></button>
             </div></div>
@@ -268,6 +297,8 @@ const MODES = [['shadow', 'Shadow'], ['live', 'Live']] as const;
               <label class="field"><span>{{ t('To') }}</span><input v-model="r._to" placeholder="on" /></label>
               <label class="field"><span>{{ t('Debounce s') }}</span><input v-model="r.debounce_s" type="number" min="0" /></label>
               <label class="field"><span>{{ t('Cooldown s') }}</span><input v-model="r.cooldown_s" type="number" min="0" /></label>
+              <label class="field"><span>{{ t('Below') }}</span><input v-model="r.below" type="number" step="any" /></label>
+              <label class="field"><span>{{ t('Above') }}</span><input v-model="r.above" type="number" step="any" /></label>
               <label class="field"><span>{{ t('Priority') }}</span><select v-model="r.priority"><option value="routine">routine</option><option value="alarm">alarm</option></select></label>
               <label class="field"><span>{{ t('Reason') }}</span><input v-model="r.reason" maxlength="120" /></label>
             </div>

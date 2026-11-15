@@ -138,6 +138,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/suggest-rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wake rules suggested from the devices of a room; nothing is saved
+         * @description Deterministic, no model. One event rule per kind found in the room (smoke / gas / leak as alarm, doors and windows, locks and garage doors (T3: report, never act), motion, cold, low batteries, fridges losing power, problem sensors), each with exact entity ids and a reason. The editor fills a new agent's wake rules with them; the owner keeps or edits them. 422 when HA is connected and the room is not one of its areas.
+         */
+        get: operations["suggestWakeRules"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/{agent_id}": {
         parameters: {
             query?: never;
@@ -1381,6 +1401,13 @@ export interface components {
                 relevant?: number;
                 /** @description relevant devices whose episodes follow no regularity */
                 irregular?: number;
+                /** @description regular devices seen only on workdays (or only at weekends) before a day of the other kind passed; drafted once the days are known (D34) */
+                waiting_for_weekdays?: string[];
+                /** @description devices the owner's own automations, scripts or programs already run (D34) */
+                covered_by_owner?: {
+                    entity_id?: string;
+                    by?: string[];
+                }[];
                 dossiers?: number;
                 /** @description reason → devices */
                 left_out?: {
@@ -1678,6 +1705,34 @@ export interface operations {
                 };
             };
             409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    suggestWakeRules: {
+        parameters: {
+            query: {
+                /** @description area_id */
+                room: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        room: string;
+                        /** @description items as wake_rules.events in schemas/agent_config.schema.json */
+                        rules: Record<string, never>[];
+                    };
+                };
+            };
             422: components["responses"]["Error"];
         };
     };

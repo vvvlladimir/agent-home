@@ -13,6 +13,7 @@ from ..core.actuator import ApprovalConflict
 from ..core.agents import AgentConfig, ConfigError, check_whitelist, parse_agent, parse_policy
 from ..core.policy import TIERS, resolve_tier
 from ..core.runtime import WakeRefused
+from ..core.wake_suggest import suggest
 
 router = APIRouter(prefix="/api")
 VERDICTS = ("executed", "shadow", "denied", "pending", "approved", "expired", "failed")
@@ -157,6 +158,16 @@ async def create_agent(request: Request):
         return _error("invalid", why, 422)
     _save(ctx, agent, "created")
     return JSONResponse(agent.dump(), status_code=201)
+
+
+@router.get("/agents/suggest-rules")
+async def suggest_rules(request: Request, room: str = Query(min_length=1)):
+    """Wake rules from the room's devices (core/wake_suggest.py); the editor shows them to the owner."""
+    ctx = request.app.state.ctx
+    areas = ctx.ha.registry.areas
+    if ctx.ha.connected and areas and room not in areas:
+        return _error("invalid", _unknown_room(room, areas), 422)
+    return {"room": room, "rules": suggest(ctx.ha, room)}
 
 
 @router.get("/agents/{agent_id}")

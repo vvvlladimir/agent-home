@@ -215,15 +215,17 @@ def resolve_scope(
         return pinned, []
     usage = usage or {}
     registry = ha.registry
-    candidates = [
-        e
-        for e in registry.entities_in(agent.room)
-        if e in ha.states
-        and not registry.is_hidden(e)
-        and not registry.entity_meta.get(e, {}).get("entity_category")
-        and not is_noise(ha, e)
-    ]
     watched = {e for rule in agent.wake_rules.events for e in rule.entities}
+
+    def visible(e: str) -> bool:
+        if e not in ha.states or registry.is_hidden(e):
+            return False
+        if not registry.entity_meta.get(e, {}).get("entity_category") and not is_noise(ha, e):
+            return True
+        # a sensor the owner's wake rule names (a leak sensor's low battery, wake_suggest) is seen,
+        # or the rule could never fire; only read-only ones, so no setting becomes an actuator
+        return e in watched and e.split(".", 1)[0] in READ_ONLY_DOMAINS
+    candidates = [e for e in registry.entities_in(agent.room) if visible(e)]
 
     def order(entity_id: str) -> tuple[int, int, str]:
         if entity_id in watched:

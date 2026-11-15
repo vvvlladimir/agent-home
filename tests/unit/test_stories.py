@@ -218,3 +218,16 @@ def test_habit_and_incident_states_for_covers_and_locks():
     events, _ = given(story, START, 1, HOUSE + ["cover.garage_door", "lock.front_door"])
     assert {e.state for e in events if e.tag == "habit"} == {"open", "closed"}
     assert [e.state for e in events if e.tag == "incident:u"] == ["unlocked", "locked"]
+
+
+def test_report_about_anchors_on_the_incident_not_on_its_end():
+    """A fridge going off is the incident; the power coming back (or a garage closing) is not."""
+    story = {"days": 3, "incidents": [{"entity": "light.kitchen_counter", "state": "off", "day": 1, "at": "13:00",
+                                       "back_after_min": 240, "tag": "incident:off"}],
+             "expect": [{"report_about": "light.kitchen_counter", "after_tag": "incident:off", "within_min": 120}]}  # fmt: skip
+    events, _ = given({**story, "chaos": "calm"}, START, 1, HOUSE)
+    rows = [{"ts": e.ts, "entity_id": e.entity_id, "state": e.state, "tag": e.tag, "note": e.note}
+            for e in events if e.tag == "incident:off"]  # fmt: skip
+    report = {"kind": "report", "ts": rows[0]["ts"] + 600, "entity_id": "light.kitchen_counter", "summary": "x"}
+    out = then(story, _trace(events=rows, feed=[report]), {}, True)
+    assert out[0]["ok"] is True and "1/1" in out[0]["detail"], out
