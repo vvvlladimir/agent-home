@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0
+
+- **Habits are predictions now (D35).** Instead of "you switched it at about 19:57 on 10 days, so
+  switch it at 19:57", the add-on learns *in which situation* you switch a device (motion, another
+  device, people, sun, helpers, time of day as one of many signals), checks every rule on days it had
+  not seen, and only then proposes: **act** when it is right often enough for what a mistake costs,
+  **ask first** (a phone notification with a button) when it is fairly sure, else nothing. A TV you
+  switch on when you feel like it is never proposed; nothing is blocked by device type.
+- What a mistake costs is learnt from how fast you undo our automations; an ask you keep accepting
+  becomes an automation that acts and replaces the ask. At most about 3 asks a day.
+- Habit proposals are built without a model, from the counted rule; the rationale says how often it
+  was right. History scanned by default: 14 days.
+- A question you ignore and then do yourself disappears from the phone and counts as a right guess,
+  so it comes back surer next time.
+- Agents are woken less by events you never react to (motion that never leads to anything you do):
+  at most every 30 minutes. Alarms are never slowed.
+- **Unusual states** in the inbox: a device in a state it is almost never in at this time of day
+  (the lamp on at 03:00), after 30 minutes. Nothing is switched.
+- Your own house-mode switches (away when you leave) can become proposals too.
+
 ## 0.2.0
 
 - **GUI rewritten** in Vue 3 + TypeScript: six tabs, an overview of decisions, rooms and today,

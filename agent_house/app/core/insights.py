@@ -14,8 +14,9 @@ what caused a change (field names [UNVERIFIED-ON-HW], docs/OWNER_CHECKLIST.md M5
 - no context at all → a physical switch (or the device itself; HA cannot tell these apart).
 "Manual" = UI/app or physical.
 
-1. Habits: `core/habits.py` (D31) picks the devices worth a look, builds a dossier of what the
-   owner does with each by hand and how regular it is; the regular ones become findings.
+1. Habits: `core/habits.py` picks the devices worth a look; `core/predict.py` (D35) predicts, per
+   device and state, whether the owner would set it now, checks each rule out of sample and decides
+   act / ask / wait; the rules worth it become findings with a ready automation.
 2. Feedback: a change made by one of our `agent_house_` automations that the owner reverts by hand
    within `UNDO_S`. `UNDO_MIN` undos and a rate of `UNDO_RATE` or more → a fix is drafted; a rate of
    `ROLLBACK_RATE` or more suggests a rollback (the owner decides, nothing is rolled back here).
@@ -33,8 +34,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ..ha.client import AUTOMATION_PREFIX
-from . import clock, habits
+from . import clock, predict
 from .habits import ACT_DOMAINS
+from .lifecycle import to_yaml
 
 log = logging.getLogger(__name__)
 
@@ -95,6 +97,19 @@ def classify(
     return "physical", None
 
 
+def fires_from_logbook(entries: list[dict]) -> dict[str, list[float]]:
+    """automation entity → when it was triggered: logbook entries of an automation carry no state,
+    only "triggered by …" [UNVERIFIED-ON-HW]."""
+    out: dict[str, list[float]] = defaultdict(list)
+    for entry in entries:
+        entity_id = entry.get("entity_id")
+        if isinstance(entity_id, str) and entity_id.startswith("automation.") and entry.get("state") is None:
+            ts = _ts(entry.get("when"))
+            if ts is not None:
+                out[entity_id].append(ts)
+    return dict(out)
+
+
 def changes_from_logbook(
     entries: list[dict], own_user: str | None, actions: list[dict], programs: dict | None = None
 ) -> list[Change]:
@@ -140,6 +155,7 @@ def find_undos(changes: list[Change], ours: dict[str, dict]) -> list[dict]:
         by_entity[change.entity_id].append(change)
     stats: dict[str, dict] = {}
     for entity_id, rows in by_entity.items():
+        limits = predict.undo_limits(rows)  # switched off after its usual two minutes is use, not an undo
         for index, change in enumerate(rows):
             info = ours.get(change.ref or "") if change.cause == "automation" else None
             if info is None or change.ts < info["since"]:
@@ -151,7 +167,7 @@ def find_undos(changes: list[Change], ours: dict[str, dict]) -> list[dict]:
             if (
                 following is not None
                 and following.manual
-                and following.ts - change.ts <= UNDO_S
+                and following.ts - change.ts <= limits.get(change.state, UNDO_S)
                 and following.state != change.state
             ):
                 item["undone"] += 1
@@ -268,6 +284,7 @@ class Insights:
             )
         ]
         own = getattr(self.ha, "own_user_id", None)
+        self.fires = fires_from_logbook(entries)  # when our asks asked (D35)
         return changes_from_logbook(entries, own, actions, await self.programs(own))
 
     async def programs(self, own: str | None = None) -> dict[str, str]:
@@ -290,37 +307,47 @@ class Insights:
         return out
 
     def ours(self) -> dict[str, dict]:
-        """automation entity → {ha_id, version, since, title} for our deployed automations."""
+        """automation entity → {ha_id, version, since, title, yaml} for our deployed automations."""
         out = {}
         for row in self.store.query(
-            "SELECT d.ha_id, d.title, d.current_version, v.created FROM deployed d "
+            "SELECT d.ha_id, d.title, d.current_version, v.created, v.yaml FROM deployed d "
             "JOIN automation_versions v ON v.ha_id=d.ha_id AND v.version=d.current_version WHERE d.removed=0"
         ):
             entity = self.ha.automation_entity(row["ha_id"])
             if entity and row["ha_id"].startswith(AUTOMATION_PREFIX):
                 out[entity] = {"ha_id": row["ha_id"], "version": row["current_version"],
-                               "since": row["created"], "title": row["title"]}  # fmt: skip
+                               "since": row["created"], "title": row["title"],
+                               "yaml": row["yaml"]}  # fmt: skip
         return out
 
     async def scan(self, now: datetime | None = None) -> dict:
-        days = int(getattr(self.settings, "habit_days", 10))
+        days = int(getattr(self.settings, "habit_days", 14))
         min_days = int(getattr(self.settings, "habit_min_repeats", 3))
         changes = await self.changes(days, now)
         area_of = self.ha.registry.area_of
-        ours = self.ours()
+        with_yaml = self.ours()
+        ours = {e: {k: v for k, v in i.items() if k != "yaml"} for e, i in with_yaml.items()}
         recent = (now or clock.now(UTC)).timestamp() - FEEDBACK_DAYS * 86400
         latest = [c for c in changes if c.ts >= recent]
-        automated = {e for info in ours.values() for e in _targets(self.lifecycle, info["ha_id"])}
         policy = getattr(getattr(self.lifecycle, "safety", None), "policy", None)
-        today = (now or clock.now(UTC)).astimezone().date()
-        dossiers, funnel = habits.build(changes, self.ha, days=days, min_days=min_days, policy=policy,
-                                        skip=frozenset(automated), today=today)  # fmt: skip
+        mine = {
+            entity: {"ha_id": info["ha_id"], "targets": predict.acted_states(info.get("yaml") or ""),
+                     "ask": predict.ASK_EVENT in (info.get("yaml") or "")}
+            for entity, info in with_yaml.items()
+        }  # fmt: skip
+        end = (now or clock.now(UTC)).timestamp()
+        preds, funnel = predict.scan(changes, self.ha, days=days, min_days=min_days, policy=policy,
+                                     ours=mine, end=end, fires=getattr(self, "fires", {}))  # fmt: skip
+        self.store.set("event_relevance", predict.event_relevance(changes, self.ha))  # for the event gate
+        self.store.set("usual_states", predict.usual_states(changes, self.ha, days=days, min_days=min_days,
+                                                            policy=policy, end=end))  # fmt: skip
         found = []
-        for dossier in dossiers:
-            title = f"{dossier['name'] or dossier['entity_id']}: {habits.summary(dossier)}"[:200]
-            data = {k: v for k, v in dossier.items() if k != "samples"}
-            key = f"habit:{dossier['entity_id']}"
-            found.append(self._save(key, "habit", title, habits.request(dossier), data, dossier["room"]))
+        for p in preds:
+            title = f"{p['name'] or p['entity_id']} {predict.summary(p)}"[:200]
+            config = p.pop("yaml_config")
+            data = {**p, "yaml": to_yaml(config)}
+            key = f"habit:{p['entity_id']}:{p['state']}:{p['mode']}"
+            found.append(self._save(key, "habit", title, predict.request(p), data, p["room"]))
         undos = find_undos(latest, ours)
         for item in undos:
             if item["flagged"]:
@@ -341,14 +368,15 @@ class Insights:
             "manual": sum(c.manual for c in changes),
             "findings": [f for f in found if f],
             "feedback": [{k: i[k] for k in ("ha_id", "acted", "undone", "rate", "flagged")} for i in undos],
-            "habits": {**funnel, "days": days, "min_days": min_days},
+            "habits": {**funnel, "days": days, "min_days": min_days},  # D35 predictions
             "scanned": clock.time(),
         }
         self.store.set("insights_last_scan", {k: v for k, v in summary.items() if k != "findings"})
         self.feed.add(
             "council",
             f"History scan: {summary['changes']} changes ({summary['manual']} by hand); habits: "
-            f"{funnel['relevant']} of {funnel['entities']} entities relevant, {funnel['dossiers']} regular; "
+            f"{funnel['relevant']} of {funnel['entities']} entities relevant, {funnel['predictions']} worth "
+            "acting on or asking; "
             f"{len(summary['findings'])} findings",
         )
         return summary

@@ -45,7 +45,7 @@ async function create() {
   } catch (e) { error.value = (e as Error).message; }
   drafting.value = false;
 }
-type Funnel = { days: number; min_days: number; entities: number; relevant: number; dossiers: number; left_out?: Record<string, number>; near?: { entity_id: string; days: number; needed: number }[] };
+type Funnel = { days: number; min_days: number; entities: number; relevant: number; dossiers: number; predictions?: number; asks_per_day?: number; left_out?: Record<string, number>; near?: { entity_id: string; days: number; needed: number }[] };
 const funnel = ref<Funnel | null>(null);
 async function loadFunnel() {
   try { funnel.value = ((await api.get<{ last_scan?: { habits?: Funnel } | null }>('api/council')).last_scan?.habits) || null; } catch { funnel.value = null; }
@@ -55,7 +55,7 @@ const funnelText = computed(() => {
   if (!f) return '';
   const near = (f.near || []).slice(0, 3).map((n) => `${n.entity_id} (${n.days}/${n.needed} ${t('days')})`).join(', ');
   const left = Object.entries(f.left_out || {}).slice(0, 3).map(([why, n]) => `${n} ${t(why)}`).join('; ');
-  return `${t('Last')} ${f.days} ${t('days')}: ${f.relevant} ${t('of')} ${f.entities} ${t('entities are devices you switch by hand on')} ≥ ${f.min_days} ${t('days')}, ${f.dossiers} ${t('regularly')}.`
+  return `${t('Last')} ${f.days} ${t('days')}: ${f.relevant} ${t('of')} ${f.entities} ${t('entities are devices you switch by hand on')} ≥ ${f.min_days} ${t('days')}, ${f.predictions ?? f.dossiers} ${t('with a situation that predicts what you do (act or ask first)')}.`
     + (left ? ` ${t('Left out')}: ${left}.` : '') + (near ? ` ${t('Almost')}: ${near}.` : '');
 });
 async function scan() {

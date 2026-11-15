@@ -3,12 +3,15 @@
 #
 # entity: an id, or a glob resolved against the house ("binary_sensor.*_water_leak"); a story whose
 #   entity the house lacks is skipped, not failed.
-# habits: a person's own routine on top of the household (what the add-on should learn).
+# habits: a person's own routine on top of the household (what the add-on should learn). D35: a
+#   habit has a cause, `anchor: {entity, state, after_s}` (the hand follows that household event; the
+#   off side: `anchor_off`); a habit with only "on"/"off" clock times has none, and must not become an
+#   automation.
 # incidents: one-off events with a tag (what the add-on should react to, or ignore).
 # owner_automations: the owner's own HA automation does a household change instead of the hand
 #   (the logbook shows `automation_triggered`); `days: workdays` leaves the weekend to the hand.
-# expect: checks on the lived trace (schedule_fits: the deployed automation's time triggers and
-#   weekday condition do the habit); needs_model: the fakes cannot pass it (they write no drafts).
+# expect: checks on the lived trace (triggers_on: the deployed automation for an entity triggers on
+#   the habit's cause); needs_model: agents' answers matter (habit drafts need no model since D35).
 #
 # More given: habits take on_state / off_state (covers open/closed, locks locked/unlocked);
 #   incidents take back_state; helpers create an HA helper first (the kill switch input_boolean);
@@ -26,29 +29,31 @@
 # anomaly kinds of the ADL literature (CASAS: temporal and spatial), turned to what this add-on does
 # by itself: learn habits, react to incidents, keep quiet on noise, never touch T3, stay cheap.
 stories:
-  morning_counter_habit:
-    about: A workday habit becomes a proposal with the right days, and the owner can approve it.
-    # the days are known once a weekend passed after the habit's first workday (core/habits.py):
-    # by day 9 whatever weekday the run starts on
+  counter_follows_ceiling:
+    about: >-
+      The counter light goes on right after the ceiling light and off with it (D35: a cause). It
+      becomes an automation that triggers on the ceiling light, never on a clock.
     days: 10
-    needs_model: true
     habits:
-      - {entity: light.kitchen_counter, "on": "06:50", "off": "07:35", sd_min: 15, days: workdays}
+      - {entity: light.kitchen_counter, anchor: {entity: light.kitchen_ceiling, state: "on", after_s: 40},
+         anchor_off: {entity: light.kitchen_ceiling, state: "off", after_s: 20}}
     expect:
       - {proposal_for: light.kitchen_counter, by_day: 9}
       - {deployed_for: light.kitchen_counter}
-      - {schedule_fits: light.kitchen_counter}
+      - {triggers_on: light.kitchen_counter, cause: light.kitchen_ceiling}
+      - {max_proposals_for: light.kitchen_counter, count: 2}
       - {max_reports_per_day: 8}
 
-  evening_reading_lamp:
-    about: An evening habit with a late, irregular bedtime still becomes one proposal, not several.
-    days: 9
-    needs_model: true
+  clock_only_habit_waits:
+    about: >-
+      A lamp switched at about the same time every evening, with nothing that causes it, is not
+      automated by the clock (D35): people do not need a lamp at 21:30, they need it when something
+      happens.
+    days: 10
     habits:
-      - {entity: light.bedroom_lamp, "on": "21:30", "off": "23:40", sd_min: 40, days: all}
+      - {entity: light.kitchen_counter, "on": "21:30", "off": "23:40", sd_min: 40, days: all}
     expect:
-      - {proposal_for: light.bedroom_lamp, by_day: 8}
-      - {max_proposals_for: light.bedroom_lamp, count: 2}
+      - {max_proposals_for: light.kitchen_counter, count: 0}
 
   owner_automation_covers_part:
     about: >-
@@ -183,29 +188,34 @@ stories:
       - {never_actuated: lock.front_door}
 
   # --- habits on T2: drafted, approved, deployed right ------------------------------------------
-  blinds_morning_habit:
-    about: Blinds opened at 07:10 and closed at 22:30 on workdays (a T2 cover) become one fitting automation.
-    days: 10
-    needs_model: true
+  blinds_close_at_bedtime:
+    about: >-
+      The bedroom blinds (a T2 cover) close when the bedroom lamp goes on at bedtime; they open in the
+      morning after the kitchen light, which the bedroom does not see (another room). One automation
+      closes them on the lamp; none opens them by the clock.
+    # once a day: a rule needs 4 right fires on days it had not seen, so about a week and a half
+    days: 14
     habits:
-      - {entity: cover.bedroom_blinds, "on": "07:10", "off": "22:30", sd_min: 10, days: workdays,
-         on_state: open, off_state: closed}
+      - {entity: cover.bedroom_blinds, on_state: open, off_state: closed,
+         anchor: {entity: light.kitchen_ceiling, state: "on", after_s: 300},
+         anchor_off: {entity: light.bedroom_lamp, state: "on", after_s: 30}}
     expect:
-      - {proposal_for: cover.bedroom_blinds, by_day: 9}
+      - {proposal_for: cover.bedroom_blinds, by_day: 13}
       - {deployed_for: cover.bedroom_blinds}
-      - {schedule_fits: cover.bedroom_blinds}
-      - {max_proposals_for: cover.bedroom_blinds, count: 2}
+      - {triggers_on: cover.bedroom_blinds, cause: light.bedroom_lamp}
+      - {max_proposals_for: cover.bedroom_blinds, count: 1}
 
   owner_says_no:
     about: An owner who rejects a draft is not asked again for the same thing.
     days: 12
-    needs_model: true
     owner: {approve: none}
     habits:
-      - {entity: light.kitchen_counter, "on": "06:50", "off": "07:35", sd_min: 10, days: workdays}
+      - {entity: light.kitchen_counter, anchor: {entity: light.kitchen_ceiling, state: "on", after_s: 40},
+         anchor_off: {entity: light.kitchen_ceiling, state: "off", after_s: 20}}
     expect:
       - {proposal_for: light.kitchen_counter, by_day: 9}
-      - {max_proposals_for: light.kitchen_counter, count: 1}
+      # on and off are two proposals; each is asked once, never again after a no
+      - {max_proposals_for: light.kitchen_counter, count: 2}
 
   # --- deviations a person makes are not habits ---------------------------------------------------
   guests_and_sick_days:

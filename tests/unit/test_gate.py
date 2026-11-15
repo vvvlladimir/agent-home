@@ -239,3 +239,62 @@ async def test_flush_settles_the_debounce_at_once(tmp_path):
     assert g.gate.flush() == 1
     assert g.gate.pending() == 0 and len(g.wakes) == 1
     assert g.gate.flush() == 0, "nothing left to settle"
+
+
+async def test_a_quiet_event_kind_wakes_now_and_then_and_an_alarm_never_slows(tmp_path):
+    """D35: motion that the owner never follows with anything (40 of 40 times nothing) wakes the
+    agent at most every QUIET_COOLDOWN_S; a 2-minute cooldown alone would wake it on every pulse."""
+    from app.core.gate import QUIET_COOLDOWN_S
+
+    g = Gate(tmp_path, {"events": [{"entities": [MOTION], "debounce_s": 0, "cooldown_s": 120}]})
+    g.gate.manual_debounce = True
+    g.gate.relevance = lambda: {f"{MOTION}|on": [0, 40]}
+    for _ in range(4):
+        g.change(MOTION, "off", "on")
+        g.gate.flush()
+        g.now[0] += 500  # pulses over the rule's cooldown, all inside the quiet one
+    assert len([w for w in g.wakes if w["entity_id"] == MOTION]) == 1
+    assert any("rarely followed by anything you do (0 of 40)" in d for d in g.drops())
+    g.now[0] += QUIET_COOLDOWN_S
+    g.change(MOTION, "off", "on")
+    g.gate.flush()
+    assert len([w for w in g.wakes if w["entity_id"] == MOTION]) == 2, "now and then it still wakes"
+    g.gate.relevance = lambda: {f"{MOTION}|on": [10, 40]}  # followed a quarter of the time: not quiet
+    g.now[0] += 200
+    g.change(MOTION, "off", "on")
+    g.gate.flush()
+    assert len([w for w in g.wakes if w["entity_id"] == MOTION]) == 3
+    alarm = Gate(tmp_path / "alarm", {"events": [{"entities": [MOTION], "debounce_s": 0, "cooldown_s": 0,
+                                                  "priority": "alarm"}]})  # fmt: skip
+    alarm.gate.manual_debounce = True
+    alarm.gate.relevance = lambda: {f"{MOTION}|on": [0, 40]}
+    for _ in range(2):
+        alarm.change(MOTION, "off", "on")
+        alarm.gate.flush()
+        alarm.now[0] += 10
+    assert len(alarm.wakes) == 2, "alarm rules are never slowed"
+
+
+def test_event_relevance_counts_what_the_owner_did_after_an_event():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from app.core import predict
+    from app.core.insights import Change
+    from app.ha.registry import Registry
+
+    reg = Registry.build([{"area_id": "room"}], [], [{"entity_id": e, "area_id": "room"}
+                         for e in (MOTION, "light.room_lamp", "binary_sensor.room_door")])  # fmt: skip
+    ha = SimpleNamespace(registry=reg, states={})
+    t0 = datetime(2026, 11, 2).timestamp()
+    ch = []
+    for i in range(30):
+        t = t0 + i * 3600
+        ch.append(Change(t, MOTION, "on", "physical"))
+        ch.append(Change(t + 5, "binary_sensor.room_door", "on", "physical"))
+        if i % 3 == 0:
+            ch.append(Change(t + 60, "light.room_lamp", "on" if i % 2 else "off", "user"))
+    rel = predict.event_relevance(sorted(ch, key=lambda c: c.ts), ha)
+    assert rel[f"{MOTION}|on"] == [10, 30] and "light.room_lamp|on" not in rel
+    assert predict.quiet(rel, MOTION, "on") is None
+    assert predict.quiet({f"{MOTION}|on": [1, 30]}, MOTION, "on") == (1, 30)

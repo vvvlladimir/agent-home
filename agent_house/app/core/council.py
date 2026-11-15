@@ -217,7 +217,7 @@ class Council:
         self.clock = clock
         self.board = Board(store, feed, clock)
         self.ownership = Ownership(agents, ha)
-        self.rt = self.actuator = self.gate = self.review = self.manager = None
+        self.rt = self.actuator = self.gate = self.review = self.manager = self.unusual = None
         self._asks: dict[str, deque[float]] = {}
         self._requested: str | None = None  # last mode asked for, so shadow mode does not repeat it
         self._task: asyncio.Task | None = None
@@ -265,6 +265,8 @@ class Council:
         if self.review is not None:
             self.review.maybe_first_look()
             await self.review.maybe_run(now)
+        if self.unusual is not None:
+            self.unusual.check()  # D35: a device in a state it is almost never in now
         if self.manager is not None:
             await self.manager.tick()
 

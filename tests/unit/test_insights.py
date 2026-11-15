@@ -136,3 +136,17 @@ async def test_program_users_come_from_the_user_list_and_the_setting():
         None, None, NoAdmin(), None, SimpleNamespace(automation_users="Node-RED")
     ).programs()
     assert found == {}  # a name needs the user list; ids from the setting still count
+
+
+def test_a_light_the_owner_always_switches_off_after_two_minutes_is_used_not_undone():
+    """D35: ours switches the hall light on at motion; the owner switches it off after its usual two
+    minutes, as they do when they switch it on themselves. That is use, not an undo."""
+    rows = []
+    for day in range(4):  # by hand: on, off two minutes later
+        rows += [entry(at(day, 21, 0), "light.hall", "on", context_user_id="owner"),
+                 entry(at(day, 21, 2), "light.hall", "off", context_user_id="owner")]  # fmt: skip
+    for day in range(4, 8):  # ours: on; the owner: off two minutes later, as always
+        rows += [entry(at(day, 21, 0), "light.hall", "on", **AUTO, context_entity_id="automation.agent_house_hall"),
+                 entry(at(day, 21, 2), "light.hall", "off", context_user_id="owner")]  # fmt: skip
+    [item] = find_undos(changes_from_logbook(rows, None, []), OURS)
+    assert (item["acted"], item["undone"]) == (4, 0) and not item["flagged"]

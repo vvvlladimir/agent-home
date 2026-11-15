@@ -184,3 +184,24 @@ From developers.openai.com (fetched 2026-11-13):
   Reasoning items returned with tool calls must be passed back.
 - [UNVERIFIED] `store: false` + `include: ["reasoning.encrypted_content"]` against the real API: the
   fake (`sim/fake_openai.py`) mirrors the documented shapes only.
+
+## Habits as predictions (D35), 2026-11-15
+
+- Act / ask / wait by expected utility, two thresholds on P(goal | evidence): Horvitz, *Principles
+  of Mixed-Initiative User Interfaces*, CHI '99 — https://www.erichorvitz.com/chi99horvitz.pdf
+- Manual overrides as the "discomfort" cost of an automated home: Mozer, *The Neural Network
+  House*, AAAI 1998 — https://www.aaai.org/Papers/Symposia/Spring/1998/SS-98-02/SS98-02-017.pdf
+- Predicting the next user–device interaction from context and routines (the learning problem we
+  solve with a small tree): SmartSense (arXiv 2208.06089), DeepUDI (AAMAS 2023), SmartUDI (IMWUT 2023).
+- Notifications at home: urgency is the main predictor of acceptability (Vastenburg et al., Personal
+  and Ubiquitous Computing) — https://link.springer.com/content/pdf/10.1007/s00779-007-0176-x.pdf;
+  even conservative suggested rules were accepted 56 % of the time (PrefMiner, cited in GI 2018,
+  https://graphicsinterface.org/wp-content/uploads/gi2018-19.pdf); proactive smart-home voice
+  assistants: acceptance and liking differ, adapt per person (CHI 2024, doi 10.1145/3613904.3642193).
+  → an ask budget, and asks only above a precision threshold.
+- "Not acted on yet" is unlabeled, not negative (delayed feedback / PU learning in CTR prediction):
+  arXiv 1907.06558, 1910.01847, 2009.13092. → our own changes the owner kept count as positives.
+- HA: actionable notifications send `mobile_app_notification_action` with the button's `action`
+  (https://companion.home-assistant.io/docs/notifications/actionable-notifications); the logbook
+  leaves out sensors with a unit, state class or numeric device class
+  (https://www.home-assistant.io/integrations/logbook/) — illuminance needs the history API.

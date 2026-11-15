@@ -15,6 +15,10 @@
    An undone automation that should rather be rolled back says so in its inbox line; nothing is
    rolled back or deployed here.
 
+Habits (D35, core/predict.py) come with their automation already built from the rule: they become a
+proposal directly, no model involved; the rationale is the counted evidence. An ask that climbs to
+act supersedes the ask automation it replaces.
+
 First look (D31): the owner should not wait a day. Once Home Assistant is connected, the add-on
 scans the history once (`habit_days`) and drafts up to `FIRST_DRAFTS` proposals from it right
 away; failures retry every `FIRST_RETRY_S`. After that, the daily review does the same each day.
@@ -26,7 +30,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-from . import clock, habits
+from . import clock
 from .insights import _targets
 from .lifecycle import action_entities
 from .llm import Priority
@@ -87,8 +91,9 @@ class Review:
         self.store.set(FIRST_KEY, {"ts": clock.time(), "drafted": len(drafted), "habits": funnel})
         text = (
             f"First look at your last {funnel.get('days', '?')} days: {funnel.get('relevant', 0)} of "
-            f"{funnel.get('entities', 0)} entities are devices you switch by hand often enough, "
-            f"{funnel.get('dossiers', 0)} of them regularly."
+            f"{funnel.get('entities', 0)} entities are devices you switch by hand often enough; for "
+            f"{funnel.get('predictions', 0)} of them a situation predicts what you do well enough to act "
+            "or ask first."
         )
         if drafted:
             text += " Proposed: " + "; ".join(d["title"] for d in drafted) + ". See Proposals."
@@ -248,6 +253,17 @@ class Review:
                 out.append({"finding": finding["id"], "title": finding["title"], "status": result["status"]})
         return out
 
+    async def _built(self, finding: dict, supersedes: list[str]) -> dict:
+        """A D35 habit: the automation is built from the rule; the rationale is the evidence."""
+        if self.orch.safety.kill_engaged:
+            raise OrchestratorError("kill_switch", "the kill switch is engaged")
+        data = finding["data"]
+        return await self.lifecycle.create(
+            data["yaml"], title=finding["title"][:120], rationale=finding["request"],
+            expected_triggers=f"about {data['per_day']} times a day: {data['rule']}"[:300],
+            origin_agent="orchestrator", supersedes=supersedes or None,
+        )  # fmt: skip
+
     async def draft(self, finding_id: str) -> dict | None:
         """One finding → one proposal (the finding remembers it, so it is never drafted twice)."""
         finding = self.insights.get(finding_id)
@@ -259,14 +275,17 @@ class Review:
             ha_id = None
         supersedes = [
             sid for sid in finding["data"].get("supersedes") or []
-            if finding["kind"] == "conflict" and sid != ha_id and self.lifecycle.deployed(sid)
+            if finding["kind"] in ("conflict", "habit") and sid != ha_id and self.lifecycle.deployed(sid)
         ]  # fmt: skip
         try:
-            proposal = await self.orch.draft(
-                finding["request"], room=finding["room"] if finding["kind"] == "habit" else None,
-                origin_agent="orchestrator", ha_id=ha_id, priority=Priority.BACKGROUND, task=finding["kind"],
-                supersedes=supersedes or None,
-            )  # fmt: skip
+            if finding["kind"] == "habit" and finding["data"].get("yaml"):
+                proposal = await self._built(finding, supersedes)
+            else:
+                proposal = await self.orch.draft(
+                    finding["request"], room=finding["room"] if finding["kind"] == "habit" else None,
+                    origin_agent="orchestrator", ha_id=ha_id, priority=Priority.BACKGROUND,
+                    task=finding["kind"], supersedes=supersedes or None,
+                )  # fmt: skip
         except Exception as err:  # noqa: BLE001 - OrchestratorError, LifecycleError, …
             self.feed.add(
                 "council", f"finding not drafted: {finding['title']} ({err})"[:300], level="warning"
@@ -287,8 +306,6 @@ class Review:
 
 def _evidence_text(finding: dict, supersedes: list[str] | None = None) -> str:
     data = finding["data"]
-    if finding["kind"] == "habit" and data.get("states"):
-        return f"by hand in the last {data['days_scanned']} days {habits.summary(data)}"
     if finding["kind"] == "undo":
         return f"undone by hand {data['undone']} of {data['acted']} times ({int(data['rate'] * 100)}%)"
     if finding["kind"] == "conflict":

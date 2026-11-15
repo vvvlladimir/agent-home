@@ -69,7 +69,7 @@ def test_mode_helper_ownership_and_auto_mode_in_shadow(app, ha_state):
 def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app, ha_state, llm_sim):
     base = app.base
     now = datetime.now(UTC).replace(microsecond=0)
-    for back in range(1, 7):  # six evenings: motion, then the hallway light by the wall switch
+    for back in range(6, 0, -1):  # six evenings, oldest first: motion, then the hallway light by hand
         moment = now - timedelta(days=back, hours=1)
         ha_state.physical_change("binary_sensor.hallway_motion", "on", ts=moment)
         ha_state.physical_change("light.hallway", "on", ts=moment + timedelta(seconds=20))
@@ -92,10 +92,9 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     kinds = {f["kind"]: f for f in scan["findings"]}
     assert set(kinds) == {"habit", "undo"}, scan
     habit, undo = kinds["habit"], kinds["undo"]
-    habit = next(f for f in scan["findings"] if f["id"] == "habit:light.hallway")
-    on = next(s for s in habit["data"]["states"] if s["state"] == "on")
-    assert on["after"][0]["signal"] == "binary_sensor.hallway_motion" and on["days"] == 6
-    assert scan["habits"]["dossiers"] >= 1 and "binary_sensor.hallway_motion" in habit["request"]
+    habit = next(f for f in scan["findings"] if f["id"].startswith("habit:light.hallway:on:"))
+    assert "Hallway Motion is on" in habit["data"]["rule"] and habit["data"]["right_days"] >= 3
+    assert scan["habits"]["predictions"] >= 1 and "binary_sensor.hallway_motion" in habit["data"]["yaml"]
     assert undo["ha_id"] == "agent_house_bedroom_lamp_at_dusk" and undo["data"]["undone"] == 3
     assert [f["ha_id"] for f in scan["feedback"]] == ["agent_house_bedroom_lamp_at_dusk"]
     assert not any("agent" == f["data"].get("cause") for f in scan["findings"])
@@ -110,8 +109,8 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     [drafted] = httpx.get(f"{base}/api/findings", params={"status": "drafted"}).json()
     validate([drafted], "/api/findings")
     proposal = httpx.get(f"{base}/api/proposals/{drafted['proposal_id']}").json()
-    assert proposal["status"] == "draft" and "→ on 6× on 6 days" in proposal["rationale"]
-    assert proposal["evidence"]["would_fire"] == 6
+    assert proposal["status"] == "draft" and "Situation: " in proposal["rationale"]
+    assert proposal["evidence"]["would_fire"] >= 5  # the oldest evening: the light has no state before it
     assert httpx.post(f"{quoted}/draft").status_code == 409, "a finding is drafted once"
     dismissed = httpx.post(f"{base}/api/findings/{quote(undo['id'], safe='')}/dismiss").json()
     assert dismissed["status"] == "dismissed"

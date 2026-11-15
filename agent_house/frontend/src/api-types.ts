@@ -1391,7 +1391,7 @@ export interface components {
                 flagged?: boolean;
             }[];
             scanned: number;
-            /** @description How the habit dossiers (D31) narrowed the house down, so "no proposal" explains itself: entities in HA → switchable → changed by hand → relevant → regular (dossiers). */
+            /** @description How the habit predictions (D35) narrowed the house down, so "no proposal" explains itself: entities in HA → switchable → changed by hand → relevant → a rule worth acting on or asking. */
             habits?: {
                 days?: number;
                 min_days?: number;
@@ -1399,15 +1399,21 @@ export interface components {
                 switchable?: number;
                 changed_by_hand?: number;
                 relevant?: number;
-                /** @description relevant devices whose episodes follow no regularity */
+                /** @description device states with a rule proven out of sample (act or ask) */
+                predictions?: number;
+                /** @description device states no situation predicts well enough (they wait) */
                 irregular?: number;
-                /** @description regular devices seen only on workdays (or only at weekends) before a day of the other kind passed; drafted once the days are known (D34) */
-                waiting_for_weekdays?: string[];
-                /** @description devices the owner's own automations, scripts or programs already run (D34) */
+                /** @description "entity → state" that wait: no rule proven yet, or over the ask budget */
+                waiting?: string[];
+                /** @description expected asks a day of the proposed ask automations */
+                asks_per_day?: number;
+                /** @description device states the owner's own automations, scripts or programs already run (D34) */
                 covered_by_owner?: {
                     entity_id?: string;
+                    state?: string;
                     by?: string[];
                 }[];
+                /** @description same as predictions (kept for older GUIs) */
                 dossiers?: number;
                 /** @description reason → devices */
                 left_out?: {

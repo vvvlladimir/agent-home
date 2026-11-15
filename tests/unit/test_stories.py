@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sim.stories import given, load, resolve, schedule_misfit, then
+from sim.stories import given, load, resolve, then
 
 START = datetime(2026, 10, 5, tzinfo=UTC)  # a Monday
 HOUSE = ["light.kitchen_counter", "binary_sensor.kitchen_leak_sensor_water_leak", "light.bedroom_lamp",
@@ -55,7 +55,7 @@ def test_expectations_read_the_trace():
     assert [e["ok"] for e in out] == [True, True, True, True], out
     late = {**story, "expect": [{"proposal_for": "light.kitchen_counter", "by_day": 2}]}
     assert then(late, result, {}, has_model=True)[0]["ok"] is False
-    assert then(story, result, {}, has_model=False)[0]["ok"] is None, "n/a without a model"
+    assert then(story, result, {}, has_model=False)[0]["ok"] is True, "D35: habit drafts need no model"
 
 
 def test_mentions_is_exact_and_a_night_habit_from_ghost_motion_is_caught():
@@ -72,24 +72,33 @@ def test_mentions_is_exact_and_a_night_habit_from_ghost_motion_is_caught():
     assert hits == ["p"] and judged == 1
 
 
-def test_schedule_fits_needs_the_habits_times_and_exactly_its_days():
-    """Stories run 2026-11-14 #2: a Mon–Fri habit deployed as Mon–Wed passed every check."""
-    habit = {"on": "06:50", "off": "07:35", "days": "workdays"}
+def test_a_habit_with_a_cause_follows_it_and_the_deployed_automation_must_trigger_on_it():
+    story = {"days": 4, "habits": [{"entity": "light.kitchen_counter",
+             "anchor": {"entity": "light.kitchen_ceiling", "state": "on", "after_s": 40}}]}  # fmt: skip
+    events, names = given(story, START, 1, HOUSE + ["light.kitchen_ceiling"])
+    ceiling = [e.ts for e in events if e.entity_id == "light.kitchen_ceiling" and e.state == "on"]
+    counter = [e.ts for e in events if e.entity_id == "light.kitchen_counter" and e.state == "on"]
+    assert ceiling and [t + 40 for t in ceiling] == counter
+    t0 = START.timestamp()
 
-    def draft(days: str, on: str = "06:51:00") -> str:
-        cond = f"conditions:\n- condition: time\n  weekday: [{days}]\n" if days else ""
-        return (f"triggers:\n- trigger: time\n  at: '{on}'\n- trigger: time\n  at: '07:36:00'\n"
-                f"{cond}actions: []\n")  # fmt: skip
+    def deployed(trigger: str) -> dict:
+        text = (f"triggers:\n- trigger: state\n  entity_id: {trigger}\nactions:\n- action: light.turn_on\n"
+                "  target: {entity_id: light.kitchen_counter}\n")  # fmt: skip
+        return {"id": "p1", "created": t0, "status": "deployed", "yaml": text}
 
-    assert schedule_misfit(draft("mon, tue, wed, thu, fri"), habit) is None
-    assert (
-        schedule_misfit(draft("mon, tue, wed"), habit) == "runs on mon,tue,wed, habit is mon,tue,wed,thu,fri"
-    )
-    assert "runs on mon,tue,wed,thu,fri,sat,sun" in schedule_misfit(draft(""), habit)
-    assert schedule_misfit(draft("mon, tue, wed, thu, fri", on="09:00"), habit) == (
-        "no time trigger near 06:50 (on)"
-    )
-    assert schedule_misfit(draft(""), {**habit, "days": "all"}) is None
+    exp = {"days": 4, "expect": [{"triggers_on": "light.kitchen_counter", "cause": "light.kitchen_ceiling"}]}
+    base = {
+        "plan_start": t0,
+        "house_days": 4,
+        "entities": [*HOUSE, "light.kitchen_ceiling"],
+        "inbox": [],
+        "runs": [],
+        "events": [],
+        "feed": [],
+    }
+    ok = then(exp, {**base, "proposals": [deployed("light.kitchen_ceiling")]}, names, has_model=False)
+    clock = then(exp, {**base, "proposals": [deployed("sun.sun")]}, names, has_model=False)
+    assert ok[0]["ok"] is True and clock[0]["ok"] is False
 
 
 def test_the_owners_automation_takes_over_the_workday_tv_off():
@@ -178,7 +187,9 @@ def test_never_actuated_fails_on_any_action_that_was_not_denied_or_a_deployed_au
 
 def test_house_mode_and_manager_runs_per_day_read_actions_and_runs():
     t = START.timestamp() + 86400
-    events = [{"ts": t, "entity_id": "person.owner", "state": "not_home", "tag": "human", "note": "trip starts"}]
+    events = [
+        {"ts": t, "entity_id": "person.owner", "state": "not_home", "tag": "human", "note": "trip starts"}
+    ]
     mode = {"ts": t + 600, "entity_ids": ["input_select.agent_house_mode"], "data": {"option": "away"},
             "service": "select_option", "verdict": "shadow"}  # fmt: skip
     story = {"days": 3, "expect": [{"house_mode": "away", "after_note": "trip starts", "within_min": 30},
@@ -192,7 +203,9 @@ def test_house_mode_and_manager_runs_per_day_read_actions_and_runs():
 
 def test_report_severity_floor_and_quiet_while_a_helper_is_on():
     t = START.timestamp() + 86400
-    smoke = [{"ts": t, "entity_id": "binary_sensor.bedroom_window", "state": "on", "tag": "incident:x", "note": ""}]
+    smoke = [
+        {"ts": t, "entity_id": "binary_sensor.bedroom_window", "state": "on", "tag": "incident:x", "note": ""}
+    ]
     warn = {"kind": "report", "ts": t + 60, "entity_id": "binary_sensor.bedroom_window", "summary": "smoke",
             "data": {"severity": "warning"}}  # fmt: skip
     story = {"days": 3, "expect": [{"report_about": "binary_sensor.bedroom_window", "after_tag": "incident:x",
@@ -201,8 +214,10 @@ def test_report_severity_floor_and_quiet_while_a_helper_is_on():
     alarm = {**warn, "data": {"severity": "alarm"}}
     assert then(story, _trace(events=smoke, feed=[alarm]), {}, True)[0]["ok"] is True
 
-    kill = [{"ts": t, "entity_id": "input_boolean.k", "state": "on", "tag": "incident:kill", "note": ""},
-            {"ts": t + 7200, "entity_id": "input_boolean.k", "state": "off", "tag": "incident:kill", "note": ""}]
+    kill = [
+        {"ts": t, "entity_id": "input_boolean.k", "state": "on", "tag": "incident:kill", "note": ""},
+        {"ts": t + 7200, "entity_id": "input_boolean.k", "state": "off", "tag": "incident:kill", "note": ""},
+    ]
     quiet = {"days": 3, "expect": [{"quiet_while_tag": "incident:kill"}]}
     inside = [{"agent_id": "room", "started": t + 60, "wake_source": "event"}]
     assert then(quiet, _trace(events=kill, runs=inside), {}, True)[0]["ok"] is False
@@ -228,6 +243,11 @@ def test_report_about_anchors_on_the_incident_not_on_its_end():
     events, _ = given({**story, "chaos": "calm"}, START, 1, HOUSE)
     rows = [{"ts": e.ts, "entity_id": e.entity_id, "state": e.state, "tag": e.tag, "note": e.note}
             for e in events if e.tag == "incident:off"]  # fmt: skip
-    report = {"kind": "report", "ts": rows[0]["ts"] + 600, "entity_id": "light.kitchen_counter", "summary": "x"}
+    report = {
+        "kind": "report",
+        "ts": rows[0]["ts"] + 600,
+        "entity_id": "light.kitchen_counter",
+        "summary": "x",
+    }
     out = then(story, _trace(events=rows, feed=[report]), {}, True)
     assert out[0]["ok"] is True and "1/1" in out[0]["detail"], out

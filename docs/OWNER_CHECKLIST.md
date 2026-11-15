@@ -326,8 +326,17 @@ Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_CO
   open Settings → Apps → Agent House → Configuration, add `lock.front_door`, save, restart.
   Expected: the GUI's Settings page lists it under add-on options, the entity shows T2, and
   `PUT api/policy` with a different `t3_whitelist` answers 422.
-- `[UNVERIFIED-ON-HW]` Habit dossiers on the real house (D31, ~1900 entities): after install, wait
-  for the inbox line "First look at your last 10 days" (or Proposals → Scan). Expected: the scan
-  finishes within a minute or two, the line names how many devices were relevant and regular, and
-  the proposals are devices you really switch by hand. Note in `owner-reports/` any device that is
-  missing (and its "Almost"/"Left out" reason on the Proposals page) or that should not be there.
+- `[UNVERIFIED-ON-HW]` Habit predictions on the real house (D35, ~1900 entities): after install,
+  wait for the inbox line "First look at your last 14 days" (or Proposals → Scan). Expected: the
+  scan finishes within a minute or two; each proposal names a situation ("Hallway Motion is on and
+  from 17:00"), not a clock time, with how often it was right on days it had not seen. Note in
+  `owner-reports/` any proposal that would be wrong, and any device you would want that waits.
+- `[UNVERIFIED-ON-HW]` Asks (D35): an "asks first" proposal uses `notify.notify` with an actionable
+  button. Approve one, then check that the phone shows the button and that tapping it switches the
+  device (the event is `mobile_app_notification_action` with the button's `action`). If your
+  companion app needs `notify.mobile_app_<phone>` instead, edit the draft before approving.
+  Then ignore one question and switch the device yourself: the notification should disappear
+  (`clear_notification` with the same `tag`). In Settings → Logbook, check that the ask automation
+  shows "triggered" entries (no state): the next scan counts them (D36).
+- `[UNVERIFIED-ON-HW]` Unusual states (D36): after the first scan, leave a lamp on at night for
+  30+ min; the inbox should get one "Unusual: …" note, and none for lamps on at usual times.

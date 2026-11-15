@@ -163,6 +163,8 @@ class HAState:
             "context_entity_id": entity_id, "context_name": entity_id,
         }  # fmt: skip
         self.fire_event("automation_triggered", {"name": entity_id, "entity_id": entity_id})
+        row = {"when": _dt(ts).isoformat(), "entity_id": entity_id, "name": entity_id, "message": "triggered"}
+        self.logbook_rows.append({**row, "domain": "automation", **self._origins[context["id"]]})
         for target, state in changes:
             cur = self.states.get(target) or {"attributes": {}}
             self.set_state(target, state, cur["attributes"], ts=ts, context=context)

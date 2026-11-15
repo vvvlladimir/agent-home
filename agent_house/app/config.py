@@ -133,7 +133,7 @@ class RuntimeSettings(BaseModel):
         default="23:00-07:00", pattern=r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"
     )
     daily_review_at: str = Field(default="04:30", pattern=r"^(([01]\d|2[0-3]):[0-5]\d)?$")  # "" = off
-    habit_days: int = Field(default=10, ge=3, le=30)  # history the habit dossiers read (D31)
+    habit_days: int = Field(default=14, ge=3, le=30)  # history the habit predictions read (D35)
     habit_min_repeats: int = Field(default=3, ge=2, le=30)  # days a habit must show up on
     # HA users that are programs, not people (Node-RED, AppDaemon …): their changes count as an
     # automation, not as the owner's hand. Comma-separated user ids or names; users named like

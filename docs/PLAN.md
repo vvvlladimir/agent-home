@@ -158,12 +158,30 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## Predictive habits — D35 (prototype: branch `proto/predictive-habits`)
 
-- [ ] Context snapshots: every entity encoded the same way (state, time since change), sun, hour,
-      weekend; negatives are the minutes the owner did not act → `core/context.py`
-- [ ] Per device and state: shallow tree, leaves as rules mapped to HA triggers + conditions
-- [ ] Shadow track record per rule on the days after it was learnt; ladder shadow → ask → act → draft
-- [ ] Act / ask / wait by expected utility; cost of a wrong action learnt from undos; ask budget per day
-- [ ] Replace the D31 gate; dossier stays as the explanation; LLM only writes the YAML and the text
-- [ ] Polygon household with causes (dark, presence, choices) instead of clock-driven routines
-- [ ] Open: wants acted on late (lamp when it got dark): learn from undo/accept of asks, not only actions
-
+- [x] Context, the same recipe for every entity (state, time since change; area + people, sun,
+      helpers), samples on a 5-minute grid and after every context change; negatives are the moments
+      the owner did not act → `core/predict.py` (`context`, `evaluate`)
+- [x] Per device and state: shallow tree (pure Python), leaves as rules mapped to HA triggers +
+      conditions; a rule with no condition is a hold ("on for 2 min → off") → `predict.automation`
+- [x] Shadow record out of sample: k-fold by day, the fold tree decides, the final rule books it;
+      min. 4 fires right on 3 days → `predict.evaluate`, `_decide`
+- [x] Act / ask / wait by expected utility; cost of a wrong action learnt from undos faster than the
+      state usually lasts; ask budget 3 a day; asks are HA automations with an actionable
+      notification → `predict.feedback`, `cost_of`, `scan`
+- [x] Ladder: an ask's accepted changes are positives; once it earns acting, an act proposal
+      supersedes the ask → `scan(ours=…)`, `review._built`
+- [x] Replace the D31 gate: proposals built without a model (`review._built`), rationale = counts;
+      `habits.py` keeps relevance only; findings `habit:<entity>:<state>:<act|ask>`
+- [x] Polygon stories with causes (`anchor`, `anchor_off`), `triggers_on` instead of `schedule_fits`;
+      habit drafts need no model → `sim/stories.py`, `sim/stories.yaml`
+- [x] Ignored ask, done by hand: cleared from the phone, counted as right (D36) → `predict.ask_positives`
+- [x] Event gate: quiet event kinds get a 30-min cooldown, alarms never (D36) → `predict.event_relevance`, `gate.py`
+- [x] Unusual states in the inbox (D36) → `predict.usual_states`, `core/unusual.py`, council tick
+- [x] The house mode (input_select) predicted like any device (D36)
+- [ ] **Owner:** first scan on the real house (OWNER_CHECKLIST → Unverified, D35)
+- [ ] Ask answers from `mobile_app_notification_action` read directly (WS), so a "no" teaches too;
+      today a "yes" (the change our ask made) and "did it myself" are seen, a "no" looks like silence
+- [ ] Learn the tolerance per device (an ask accepted early widens `HORIZON_S`): clock routines with
+      no sensor (blinds at 07:10) are never proposed today
+- [ ] Numeric context (illuminance, power) from the history API: the logbook leaves them out
+- [ ] On and off of one device as one automation (`choose`), so one review drafts both

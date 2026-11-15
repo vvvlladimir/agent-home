@@ -61,12 +61,20 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
         names[h["entity"]] = eid
         if eid is None:
             continue
+        on_state, off_state = h.get("on_state", "on"), h.get("off_state", "off")  # cover: open/closed
+        for key, state in (("anchor", on_state), ("anchor_off", off_state)):  # D35: a habit with a cause
+            if key in h:
+                a = h[key]
+                cause = resolve(a["entity"], entities)
+                extra += [
+                    household.Event(e.ts + a.get("after_s", 30), eid, state, "user", "habit")
+                    for e in events if e.entity_id == cause and e.state == a.get("state", "on")
+                ]  # fmt: skip
         for d in range(story["days"]):
             day = start + timedelta(days=d)
-            if h.get("days", "all") == "workdays" and day.weekday() >= 5:
+            if "on" not in h or (h.get("days", "all") == "workdays" and day.weekday() >= 5):
                 continue
             on, off = (_clock_at(day, h[k], h.get("sd_min", 15), rng) for k in ("on", "off"))
-            on_state, off_state = h.get("on_state", "on"), h.get("off_state", "off")  # cover: open/closed
             extra += [
                 household.Event(on.timestamp(), eid, on_state, "user", "habit"),
                 household.Event(
@@ -195,20 +203,6 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
 
     for exp in story.get("expect") or []:
         kind = next(iter(exp))
-        if (
-            story.get("needs_model")
-            and not has_model
-            and kind
-            in (
-                "proposal_for",
-                "deployed_for",
-                "max_proposals_for",
-                "schedule_fits",
-                "owner_part_not_repeated",
-            )
-        ):
-            add(exp, None, "n/a with the fake models (they write no drafts)")
-            continue
         if kind == "proposal_for":
             eid, by = name(exp["proposal_for"]), start + exp.get("by_day", story["days"]) * 86400
             hits = [p for p in proposals if eid in targets(p) and (p.get("created") or 0) <= by]
@@ -222,17 +216,11 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             eid = name(exp["deployed_for"])
             hits = [p for p in proposals if eid in targets(p) and p.get("status") == "deployed"]
             add(exp, bool(hits), f"{len(hits)} deployed for {eid}")
-        elif kind == "schedule_fits":
-            eid = name(exp["schedule_fits"])
-            habit = next((h for h in story.get("habits") or [] if name(h["entity"]) == eid), None)
+        elif kind == "triggers_on":
+            eid, cause = name(exp["triggers_on"]), name(exp["cause"])
             hits = [p for p in proposals if eid in targets(p) and p.get("status") == "deployed"]
-            if habit is None or not hits:
-                add(exp, None if habit else False, "no deployed automation" if habit else "no such habit")
-                continue
-            misfits = [
-                f"{p['id']}: {why}" for p in hits if (why := schedule_misfit(p.get("yaml") or "", habit))
-            ]
-            add(exp, not misfits, "; ".join(misfits) or f"{len(hits)} deployed, schedule fits the habit")
+            fits = [p["id"] for p in hits if cause in _trigger_entities(p.get("yaml") or "")]
+            add(exp, bool(fits), f"{len(fits)} of {len(hits)} deployed for {eid} trigger on {cause}")
         elif kind == "owner_part_not_repeated":
             auto = next(a for a in story["owner_automations"] if a["ref"] == exp["owner_part_not_repeated"])
             eid = name(auto["entity"])
@@ -404,39 +392,17 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
 ALL_DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
-def schedule_misfit(text: str, habit: dict, band_min: int = 45) -> str | None:
-    """Why an automation's schedule does not do the habit (None: it does). Time triggers within
-    `band_min` of the habit's on and off times; the top-level weekday condition covers exactly the
-    habit's days (no condition = every day). Stories run 2026-11-14 #2: Mon–Fri drafted as Mon–Wed."""
+def _trigger_entities(text: str) -> set[str]:
     try:
         doc = yaml.safe_load(text) or {}
-    except yaml.YAMLError as err:
-        return f"yaml: {err}"
-    doc = doc[0] if isinstance(doc, list) and doc else doc
+    except yaml.YAMLError:
+        return set()
     triggers = doc.get("triggers") or doc.get("trigger") or []
-    times = []
+    out: set[str] = set()
     for t in triggers if isinstance(triggers, list) else [triggers]:
-        if isinstance(t, dict) and (t.get("trigger") or t.get("platform")) == "time":
-            for at in t["at"] if isinstance(t.get("at"), list) else [t.get("at")]:
-                if isinstance(at, str) and re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", at):
-                    h, m = at.split(":")[:2]
-                    times.append(int(h) * 60 + int(m))
-    problems = []
-    for key in ("on", "off"):
-        h, m = (int(x) for x in habit[key].split(":"))
-        if not any(abs((t - h * 60 - m + 720) % 1440 - 720) <= band_min for t in times):
-            problems.append(f"no time trigger near {habit[key]} ({key})")
-    conditions = doc.get("conditions") or doc.get("condition") or []
-    days = set(ALL_DAYS)
-    for c in conditions if isinstance(conditions, list) else [conditions]:
-        if isinstance(c, dict) and c.get("condition") == "time" and c.get("weekday"):
-            wd = c["weekday"]
-            days &= set(wd if isinstance(wd, list) else [wd])
-    want = set(ALL_DAYS[:5]) if habit.get("days", "all") == "workdays" else set(ALL_DAYS)
-    if days != want:
-        order = lambda ds: ",".join(d for d in ALL_DAYS if d in ds)  # noqa: E731
-        problems.append(f"runs on {order(days) or 'no day'}, habit is {order(want)}")
-    return "; ".join(problems) or None
+        ids = t.get("entity_id") if isinstance(t, dict) else None
+        out |= set(ids if isinstance(ids, list) else [ids] if ids else [])
+    return out
 
 
 def _minute_of(ts: float) -> int:

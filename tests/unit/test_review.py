@@ -39,28 +39,33 @@ def stack(tmp_path, *script, provider="local"):
     return s
 
 
-def habit_rows(days: int = 6) -> list[dict]:
+def habit_rows(days: int = 7) -> list[dict]:
+    """Each evening: the room's motion, the lamp by hand 30 s later; off by hand when they leave."""
     now = datetime.now().astimezone().replace(second=0, microsecond=0)
     rows = []
+
+    def row(moment, entity_id, state):
+        rows.append({"when": moment.isoformat(), "entity_id": entity_id, "state": state})
+
     for back in range(1, days + 1):
         moment = now - timedelta(days=back)
-        rows.append({"when": moment.isoformat(), "entity_id": "binary_sensor.room_motion", "state": "on"})
-        rows.append({"when": (moment + timedelta(seconds=30)).isoformat(), "entity_id": "light.room_lamp",
-                     "state": "on"})  # fmt: skip
-        rows.append({"when": (moment + timedelta(hours=1)).isoformat(), "entity_id": "binary_sensor.room_motion",
-                     "state": "off"})  # fmt: skip
+        row(moment, "binary_sensor.room_motion", "on")
+        row(moment + timedelta(seconds=30), "light.room_lamp", "on")
+        row(moment + timedelta(hours=1), "binary_sensor.room_motion", "off")
+        row(moment + timedelta(hours=1, seconds=40), "light.room_lamp", "off")
     return rows
 
 
 async def test_the_review_scans_summarises_and_drafts_one_proposal_per_finding(tmp_path):
-    s = stack(tmp_path, {"text": "Quiet day. One habit found."}, submit(GOOD), {"text": "Submitted."})
+    s = stack(tmp_path, {"text": "Quiet day. One habit found."})
     s.ha.logbook_rows = habit_rows()
     result = await s.review.run()
-    assert result["drafted"] and result["drafted"][0]["status"] == "draft"
-    [finding] = s.insights.list()
-    assert finding["kind"] == "habit" and finding["status"] == "drafted" and finding["proposal_id"]
+    assert result["drafted"] and all(d["status"] == "draft" for d in result["drafted"])
+    [finding] = s.insights.list("drafted")  # one proposal per entity per review: on or off of the lamp
+    assert finding["id"].startswith("habit:light.room_lamp:") and finding["proposal_id"]
     proposal = s.lifecycle.get(finding["proposal_id"])
-    assert proposal["origin_agent"] == "orchestrator" and "→ on 6× on 6 days" in proposal["rationale"]
+    assert proposal["origin_agent"] == "orchestrator" and "Situation: " in proposal["rationale"]
+    assert "light.room_lamp" in proposal["yaml"] and len(s.llm.requests) == 1, "built, not asked for"
     inbox = s.rt.inbox()[0]
     assert inbox["agent_id"] == "orchestrator" and inbox["summary"].startswith("Daily review: Quiet day.")
     summary_request = s.llm.requests[0]
@@ -200,13 +205,32 @@ async def test_one_proposal_per_entity_per_review_and_none_beside_an_open_one(tm
 
 async def test_the_first_look_drafts_right_away_and_only_once(tmp_path):
     """D31 / QA-002: the owner does not wait for the daily review; the inbox says what was found."""
-    s = stack(tmp_path, submit(GOOD), {"text": "Submitted."})
+    s = stack(tmp_path)
     s.ha.logbook_rows = habit_rows()
     result = await s.review.first_look()
-    assert [d["status"] for d in result["drafted"]] == ["draft"]
-    assert result["habits"]["dossiers"] == 1 and result["habits"]["relevant"] >= 1
+    assert result["drafted"] and all(d["status"] == "draft" for d in result["drafted"])
+    assert len(result["drafted"]) == 1 <= result["habits"]["predictions"], (
+        "on and off: one per entity per review"
+    )
+    assert result["habits"]["relevant"] >= 1
     [note] = [i for i in s.rt.inbox() if i["summary"].startswith("First look")]
     assert "Proposed:" in note["summary"] and "light.room_lamp" in note["summary"]
-    assert s.store.get("habits_first_look")["drafted"] == 1
+    assert s.store.get("habits_first_look")["drafted"] == len(result["drafted"])
     s.ha.connected = True
     assert s.review.maybe_first_look() is False, "once"
+
+
+async def test_an_ask_automation_passes_every_check_of_the_lifecycle(tmp_path):
+    """D35: the ask (notify, wait for the button or the owner's own hand, clear, act) is a normal draft."""
+    from app.core import predict
+    from app.core.lifecycle import to_yaml
+
+    s = stack(tmp_path)
+    p = {"entity_id": "light.room_lamp", "state": "on", "mode": "ask", "name": "Lamp",
+         "path": [{"f": ["is", "binary_sensor.room_motion", "on"], "k": 0, "left": False}]}  # fmt: skip
+    proposal = await s.lifecycle.create(to_yaml(predict.automation(p, s.ha)), origin_agent="orchestrator")
+    assert proposal["status"] == "draft", proposal["checks"]
+    act = await s.lifecycle.create(
+        to_yaml(predict.automation({**p, "mode": "act"}, s.ha)), origin_agent="orchestrator"
+    )
+    assert act["status"] == "draft", act["checks"]

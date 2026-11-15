@@ -6,6 +6,12 @@ min_change) → debounce (the timer restarts while the state keeps changing) →
 hourly cap per agent → `wake(...)`. Cron rules and the one-shot wakes agents schedule for
 themselves pass the same hourly cap. Every wake and every drop goes to the feed.
 
+Quiet event kinds (D35): the daily scan counts, per "entity → state", how often the owner did
+something by hand in that room within 10 minutes after it (`predict.event_relevance`). A routine
+rule on an event kind seen 20+ times and followed less than 5 % of the time gets a cooldown of at
+least `QUIET_COOLDOWN_S`: it still wakes the agent now and then, not on every pulse. Alarm rules
+are never slowed.
+
 Unwatched alarms (stories run 2026-11-14, bug 2): when a change matches an alarm-priority rule of
 any agent but is in the scope of no enabled agent with such a rule (a leak in a room without an
 agent, or with its agent off), no agent can be woken for it. The gate then calls `unwatched(...)`
@@ -25,11 +31,13 @@ from croniter import croniter
 
 from . import clock as house
 from .agents import AgentConfig, EventRule
+from .predict import quiet
 
 log = logging.getLogger(__name__)
 IGNORED_STATES = frozenset({"unavailable", "unknown"})
 MAX_SCHEDULED = 3  # one-shot wakes an agent may have outstanding
 TICK_S = 20.0
+QUIET_COOLDOWN_S = 1800.0
 
 
 def _number(value: object) -> float | None:
@@ -83,6 +91,7 @@ class EventGate:
         # the simulator (sim/days.py) jumps house time and settles debounces itself with `flush`;
         # a real-time timer would fire while it waits on a model call, before the next house event
         self.manual_debounce = False
+        self.relevance: Callable[[], dict] = lambda: {}  # "entity|state" → [followed, seen] (D35)
         self._last_rule_wake: dict[tuple[str, int], float] = {}
         self._last_value: dict[tuple[str, int, str], float] = {}
         self._wakes: dict[str, deque[float]] = {}
@@ -174,8 +183,17 @@ class EventGate:
             return self._drop(agent, why, entity_id)
         now = self.clock()
         last = self._last_rule_wake.get(key)
-        if last is not None and now - last < rule.cooldown_s:
-            return self._drop(agent, f"cooldown ({rule.cooldown_s:g} s) for {entity_id}", entity_id)
+        cooldown, why = rule.cooldown_s, ""
+        if rule.priority != "alarm":
+            try:
+                hit = quiet(self.relevance() or {}, entity_id, new_state)
+            except Exception:  # noqa: BLE001 - a broken count must never stop the gate
+                hit = None
+            if hit is not None and cooldown < QUIET_COOLDOWN_S:
+                cooldown = QUIET_COOLDOWN_S
+                why = f"; rarely followed by anything you do ({hit[0]} of {hit[1]})"
+        if last is not None and now - last < cooldown:
+            return self._drop(agent, f"cooldown ({cooldown:g} s) for {entity_id}{why}", entity_id)
         if rule.priority != "alarm" and not self._under_cap(agent):
             return self._drop(agent, f"hourly cap of {agent.wake_rules.max_wakes_per_hour} wakes", entity_id)
         self._last_rule_wake[key] = now

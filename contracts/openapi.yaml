@@ -1208,8 +1208,8 @@ components:
         habits:
           type: object
           description: >-
-            How the habit dossiers (D31) narrowed the house down, so "no proposal" explains itself:
-            entities in HA → switchable → changed by hand → relevant → regular (dossiers).
+            How the habit predictions (D35) narrowed the house down, so "no proposal" explains itself:
+            entities in HA → switchable → changed by hand → relevant → a rule worth acting on or asking.
           properties:
             days: {type: integer}
             min_days: {type: integer}
@@ -1217,22 +1217,23 @@ components:
             switchable: {type: integer}
             changed_by_hand: {type: integer}
             relevant: {type: integer}
-            irregular: {type: integer, description: relevant devices whose episodes follow no regularity}
-            waiting_for_weekdays:
+            predictions: {type: integer, description: device states with a rule proven out of sample (act or ask)}
+            irregular: {type: integer, description: device states no situation predicts well enough (they wait)}
+            waiting:
               type: array
               items: {type: string}
-              description: >-
-                regular devices seen only on workdays (or only at weekends) before a day of the
-                other kind passed; drafted once the days are known (D34)
+              description: '"entity → state" that wait: no rule proven yet, or over the ask budget'
+            asks_per_day: {type: number, description: expected asks a day of the proposed ask automations}
             covered_by_owner:
               type: array
-              description: devices the owner's own automations, scripts or programs already run (D34)
+              description: device states the owner's own automations, scripts or programs already run (D34)
               items:
                 type: object
                 properties:
                   entity_id: {type: string}
+                  state: {type: string}
                   by: {type: array, items: {type: string}}
-            dossiers: {type: integer}
+            dossiers: {type: integer, description: same as predictions (kept for older GUIs)}
             left_out: {type: object, additionalProperties: {type: integer}, description: reason → devices}
             near:
               type: array

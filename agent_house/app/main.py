@@ -36,6 +36,7 @@ from .core.orchestrator import Orchestrator
 from .core.review import Review
 from .core.runtime import AgentRuntime, WakeRefused
 from .core.safety import KILL_EVENT, Safety
+from .core.unusual import Unusual
 from .ha.client import HAClient
 from .logbuf import setup_logging
 from .store.db import Store
@@ -155,6 +156,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     agents_rt.council = orchestrator.council = council
     council.rt, council.actuator, council.gate = agents_rt, actuator, gate
     insights = Insights(store, feed, ha, lifecycle, runtime)
+    gate.relevance = lambda: store.get("event_relevance") or {}  # quiet event kinds wake less (D35)
+    council.unusual = Unusual(store, ha, agents_rt)  # unusual-state notes (D35)
     council.review = Review(store, feed, orchestrator, insights, council, agents_rt, runtime, lifecycle)
     metrics = council.review.metrics = Metrics(store, insights, lifecycle)
     council.manager = Manager(orchestrator, council, actuator, metrics, runtime)

@@ -1,5 +1,4 @@
-"""D31 habit dossiers: which devices are relevant, what the owner does by hand, how regular it is,
-and the text the orchestrator gets. Pure functions over Change lists and a registry."""
+"""Which devices are worth a habit prediction (relevance; the predictions: test_predict.py)."""
 
 from __future__ import annotations
 
@@ -61,97 +60,6 @@ def kitchen(days: int = 10) -> list[Change]:
     return out
 
 
-def build(changes, **kw):
-    kw = {"days": 10, "min_days": 3, "policy": DEFAULT_POLICY, **kw}
-    return habits.build(sorted(changes, key=lambda c: c.ts), house(), **kw)
-
-
-def test_workday_and_weekend_times_are_one_habit_with_two_bands():
-    [dossier], funnel = build(kitchen())
-    assert dossier["entity_id"] == "light.kitchen" and dossier["days"] == 10
-    on = next(s for s in dossier["states"] if s["state"] == "on")
-    bands = {t["days"]: t for t in on["time"]}
-    assert set(bands) == {"Mon–Fri", "Sat–Sun"}
-    assert bands["Mon–Fri"]["at"].startswith("06:4") and bands["Mon–Fri"]["on_time"] == 8
-    # one weekend is not stable yet (MIN_WEEKS): the workdays explain 8 of 10, the weekend waits
-    assert bands["Sat–Sun"]["at"].startswith("08:") and not bands["Sat–Sun"]["stable"] and on["support"] == 0.8
-    two_weekends = next(s for s in build(kitchen(14))[0][0]["states"] if s["state"] == "on")
-    assert two_weekends["support"] == 1.0
-    text = habits.request(dossier)
-    assert "Mon–Fri median 06:4" in text and "Sat–Sun median 08:" in text and "ONE automation" in text
-    assert "samples: Mon 11-02 06:40" in text
-    assert funnel["relevant"] == 1 and funnel["dossiers"] == 1
-
-
-def test_a_workdays_only_habit_says_so_and_a_short_scan_does_not_guess():
-    """Stories run 2026-11-14, bug 3: a Mon–Fri habit was summarised as 'every day'."""
-    workdays = [c for c in kitchen() if datetime.fromtimestamp(c.ts).weekday() < 5]
-    [dossier], _ = build(workdays)
-    on = next(s for s in dossier["states"] if s["state"] == "on")
-    assert [t["days"] for t in on["time"]] == ["Mon–Fri"]
-    assert "Mon–Fri median 06:4" in habits.request(dossier)
-    assert "Mon–Fri about 06:4" in habits.summary(dossier)
-
-    monday_to_friday = [c for c in workdays if c.ts < at(5, 0, 0)]  # never saw a weekend
-    dossiers, funnel = build(monday_to_friday)
-    assert dossiers == [] and funnel["waiting_for_weekdays"] == ["light.kitchen"]
-
-
-def test_weekdays_wait_until_a_day_of_the_other_kind_has_passed():
-    """Stories run 2026-11-14 #2: three episodes Mon–Wed became `weekday: [mon, tue, wed]`. The
-    days are known once a weekend day passed without the habit (or with it), not before."""
-    monday_to_wednesday = [c for c in kitchen() if c.ts < at(3, 0, 0)]
-    for today in (3, 5):  # Thursday, Saturday: no weekend day is over yet
-        dossiers, funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=today)).date())
-        assert dossiers == [] and funnel["waiting_for_weekdays"] == ["light.kitchen"]
-    dossiers, funnel = build(monday_to_wednesday, today=(BASE + timedelta(days=6)).date())  # Sunday
-    assert dossiers == [] and funnel["waiting_for_weekdays"] == [], "days known, but one week is a burst"
-    and_monday = monday_to_wednesday + [c for c in kitchen(8) if c.ts >= at(7, 0, 0)]
-    [dossier], funnel = build(and_monday, today=(BASE + timedelta(days=8)).date())  # Tuesday, week 2
-    on = next(s for s in dossier["states"] if s["state"] == "on")
-    assert [t["days"] for t in on["time"]] == ["Mon–Fri"] and funnel["waiting_for_weekdays"] == []
-
-
-def test_the_prompt_takes_weekdays_from_the_time_lines_only():
-    [dossier], _ = build(kitchen())
-    assert "never from the weekdays of the samples" in habits.request(dossier)
-
-
-def test_the_house_mode_helper_is_offered_only_when_the_house_has_it():
-    """Stories run 2026-11-14, bug 1: drafts conditioned on a helper the house did not have."""
-    [dossier], _ = build(kitchen())
-    assert "agent_house_mode" not in habits.request(dossier)
-    ha = house()
-    ha.states["input_select.agent_house_mode"] = {"state": "home", "attributes": {}}
-    [dossier], _ = habits.build(sorted(kitchen(), key=lambda c: c.ts), ha, days=10, min_days=3,
-                                policy=DEFAULT_POLICY)  # fmt: skip
-    assert "input_select.agent_house_mode" in habits.request(dossier)
-
-
-def test_a_lamp_after_the_rooms_sensor_is_a_signal_with_its_precision():
-    changes = []
-    for day in range(6):  # evenings at varying times: the time says little, the sensor says it all
-        t = at(day, 18 + day % 4, 7 * day % 50)
-        changes += [sensor(t, "binary_sensor.desk_zone", "on"), hand(t + 40, "light.desk", "on"),
-                    sensor(t + 3600, "binary_sensor.desk_zone", "off")]  # fmt: skip
-    for day in range(2):  # the sensor also turns on without the lamp
-        changes += [sensor(at(day, 10, 0), "binary_sensor.desk_zone", "on"),
-                    sensor(at(day, 10, 30), "binary_sensor.desk_zone", "off")]  # fmt: skip
-    changes.append(sensor(at(0, 0, 1), "binary_sensor.hall_motion", "on"))  # another room: no signal
-    [dossier], _ = build(changes)
-    on = next(s for s in dossier["states"] if s["state"] == "on")
-    [after] = on["after"]
-    assert (after["signal"], after["state"], after["before"], after["of"]) == (
-        "binary_sensor.desk_zone",
-        "on",
-        6,
-        6,
-    )
-    assert after["median_delay_s"] == 40 and after["precision"] == 0.75
-    assert "followed 75% of the time" in habits.request(dossier)
-    assert "after binary_sensor.desk_zone → on (6/6)" in habits.summary(dossier)
-
-
 def test_relevance_leaves_out_noise_settings_t3_and_self_switching_and_says_why():
     changes = kitchen()
     for day in range(10):
@@ -162,8 +70,10 @@ def test_relevance_leaves_out_noise_settings_t3_and_self_switching_and_says_why(
             changes.append(sensor(at(day, 12, minute), "switch.plug", "on" if minute % 4 else "off"))
     changes += [hand(at(0, 20, 0), "light.porch", "on"), hand(at(1, 20, 0), "light.porch", "on")]
     changes += [Change(at(d, 7, 0), "light.desk", "on", "automation", "automation.x") for d in range(10)]
-    dossiers, funnel = build(changes, skip=frozenset({"light.kitchen"}))
-    assert dossiers == [] and funnel["relevant"] == 0
+    candidates, funnel = habits.relevant(
+        sorted(changes, key=lambda c: c.ts), house(), min_days=3, policy=DEFAULT_POLICY, skip={"light.kitchen"}
+    )
+    assert candidates == [] and funnel["relevant"] == 0
     left = funnel["left_out"]
     assert left["one of our automations already acts on it"] == 1
     assert left["hidden or disabled"] == 1 and left["a device setting or diagnostic"] == 1
@@ -171,83 +81,3 @@ def test_relevance_leaves_out_noise_settings_t3_and_self_switching_and_says_why(
     assert left["changes too often to be a person (it switches itself)"] == 1
     assert funnel["near"] == [{"entity_id": "light.porch", "days": 2, "needed": 3}]
     assert "light.desk" not in str(funnel), "automated changes are never habits"
-
-
-def test_an_irregular_device_is_relevant_but_no_dossier():
-    times = [(0, 3, 10), (1, 14, 0), (2, 22, 40), (3, 9, 15), (4, 18, 5), (5, 1, 0)]
-    dossiers, funnel = build([hand(at(d, h, m), "light.random", "on") for d, h, m in times])
-    assert dossiers == [] and funnel["relevant"] == 1 and funnel["irregular"] == 1
-
-
-def auto(ts: float, entity_id: str, state: str, ref: str = "automation.kitchen_off") -> Change:
-    return Change(ts, entity_id, state, "automation", ref)
-
-
-def test_what_the_owners_automation_already_does_is_counted_not_drafted_again():
-    """The owner switches the kitchen light on by hand; their own automation switches it off. The
-    'off' is the automation's, not a habit: the dossier says so and asks for the rest only."""
-    changes = []
-    for c in kitchen():
-        changes.append(c if c.state == "on" else auto(c.ts, c.entity_id, "off"))
-    [dossier], funnel = build(changes)
-    assert [s["state"] for s in dossier["states"]] == ["on"]
-    [b] = dossier["by_owner"]
-    assert (
-        b["state"] == "off"
-        and b["count"] == 10
-        and b["by"] == ["automation.kitchen_off"]
-        and b["share"] == 1.0
-    )
-    text = habits.request(dossier)
-    assert "Already automated → off: 10 times by the owner's automation.kitchen_off" in text
-    assert "Do not repeat it" in text
-    assert "already automated → off 10× by automation.kitchen_off" in habits.summary(dossier)
-    assert funnel["covered_by_owner"] == []
-
-
-def test_a_device_the_owners_automation_mostly_runs_is_left_out_as_covered():
-    """Node-RED (a program user, see insights.classify) does the on and off on 17 of 20 days; the
-    owner did it by hand on the other three: covered, no draft. At 7 of 10 it is a partial cover:
-    a dossier that names the automation."""
-    changes = []
-    for c in kitchen(20):
-        day = int((c.ts - BASE.timestamp()) // 86400)
-        changes.append(c if day in {0, 7, 14} else auto(c.ts, c.entity_id, c.state, "user:Node-RED"))
-    dossiers, funnel = build(changes, days=20)
-    assert dossiers == []
-    assert funnel["covered_by_owner"] == [{"entity_id": "light.kitchen", "by": ["user:Node-RED"]}]
-    assert funnel["left_out"]["the owner's own automation already does it"] == 1
-
-    changes = []
-    for c in kitchen():
-        day = int((c.ts - BASE.timestamp()) // 86400)
-        changes.append(c if day in {0, 4, 8} else auto(c.ts, c.entity_id, c.state, "user:Node-RED"))
-    [dossier], funnel = build(changes)
-    assert {b["state"]: b["share"] for b in dossier["by_owner"]} == {"on": 0.7, "off": 0.7}
-    assert funnel["covered_by_owner"] == []
-
-
-def test_a_burst_of_late_nights_is_not_a_habit():
-    """Stories 2026-11-15: three late nights became "hallway light off at 00:40". On time on 3 of
-    10 days is a burst, not a habit; the same time every day for two weeks is."""
-    late = [hand(at(day, 0, 40 + day % 3), "light.porch", "off") for day in (2, 3, 6)]
-    late += [hand(at(day - 1, 22, 0), "light.porch", "on") for day in (2, 3, 6)]
-    dossiers, funnel = build(late)
-    assert dossiers == [] and funnel["irregular"] == 1
-    daily = [hand(at(day, 0, 40 + day % 3), "light.porch", "off") for day in range(1, 10)]
-    daily += [hand(at(day - 1, 22, 5), "light.porch", "on") for day in range(1, 10)]
-    [dossier], _ = build(daily)
-    assert dossier["entity_id"] == "light.porch"
-
-
-def test_episodes_while_guests_are_in_are_left_out():
-    """Guest evenings (the guest helper on, or house mode guests) are not the owner's routine."""
-    guests = []
-    for day in (1, 2, 4, 7, 8):
-        guests += [hand(at(day, 19, 55), "input_boolean.guest_mode", "on"),
-                   hand(at(day, 20, 0), "light.porch", "on"), hand(at(day, 23, 50), "light.porch", "off"),
-                   hand(at(day, 23, 55), "input_boolean.guest_mode", "off")]  # fmt: skip
-    dossiers, funnel = build(guests)
-    assert dossiers == [] and funnel["guest_episodes_left_out"] == 10
-    [dossier], funnel = build(kitchen() + guests)
-    assert dossier["entity_id"] == "light.kitchen" and funnel["guest_episodes_left_out"] == 10
