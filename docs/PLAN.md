@@ -185,3 +185,13 @@ steps are written down in `OWNER_CHECKLIST.md`.
       no sensor (blinds at 07:10) are never proposed today
 - [ ] Numeric context (illuminance, power) from the history API: the logbook leaves them out
 - [ ] On and off of one device as one automation (`choose`), so one review drafts both
+
+## Model choice and the flow editor — D37
+
+- [x] Provider per request (draft, revise, explain), `orchestrator.choices` in status → `orchestrator.choice`, `providers(provider=…)`
+- [x] Change in words: open drafts edited in place, deployed → draft with its id, rejected → new draft → `orchestrator.revise`, `POST /proposals/{id}/revise`
+- [x] Plain words by a model, cached per YAML + language, free on open (`cached_only`) → `orchestrator.explain`
+- [x] Flow editor (When → Only if → Do, forks for if / choose / parallel, drag to move, "+" palette, forms + YAML per part, switch off, undo/redo, zoom/pan) → `frontend/src/flow.ts`, `components/flow/*`, `POST /automation-yaml`
+- [x] Deployed: "Edit" opens a draft of the current version in the editor → `DeployedPage.vue`
+- [ ] Show a run's real path on the chart (HA traces via WS `trace/get`)
+- [ ] Entity picker with search by name and area (today: a datalist of ids)

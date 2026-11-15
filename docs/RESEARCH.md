@@ -205,3 +205,18 @@ From developers.openai.com (fetched 2026-11-13):
   (https://companion.home-assistant.io/docs/notifications/actionable-notifications); the logbook
   leaves out sensors with a unit, state class or numeric device class
   (https://www.home-assistant.io/integrations/logbook/) — illuminance needs the history API.
+
+## Automation flow editors (D37), 2026-11-16
+
+- Visual workflow builders read top to bottom, insert with "+" between connected steps, show drop
+  zones while dragging, delete a branch without losing what follows (Celigo, customer.io, Latenode
+  write-ups): https://www.celigo.com/blog/improved-ux-for-branching-and-filters/ ·
+  https://docs.customer.io/journeys/campaigns-and-workflows/workflows-and-journeys ·
+  https://latenode.com/blog/drag-and-drop-workflow-builder
+- Home Assistant shows runs as a trace graph with the path taken; the community asks for that graph
+  to be editable ("WTH why isn't there a flow editor for automations?"):
+  https://community.home-assistant.io/t/wth-why-isn-t-there-a-flow-editor-for-automations/802484
+- Third-party HA editors that keep plain YAML as storage: C.A.F.E. / FLODE (flow cards, trace beside
+  the canvas) and Oquanta (When / If / Do cards):
+  https://community.home-assistant.io/t/flode-visual-flow-node-editor-for-home-assistant-automations-scripts/1013664 ·
+  https://community.home-assistant.io/t/oquanta-visual-when-if-do-editor-for-home-assistant-work-in-progress/1025672

@@ -1,12 +1,13 @@
 <!-- Deployed: automations Agent House put into HA (agent_house_*): on/off, versions, roll back, remove. -->
 <script setup lang="ts">
 import { onActivated, ref } from 'vue';
-import { api, type DeployedAutomation } from '../api';
+import { api, type DeployedAutomation, type Proposal } from '../api';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
 import { dateTime } from '../format';
 import { agentName } from '../labels';
-import { killed, refresh, t, toast } from '../store';
+import { go } from '../router';
+import { killed, nav, refresh, t, toast } from '../store';
 
 const list = ref<DeployedAutomation[]>([]);
 const selId = ref('');
@@ -32,6 +33,16 @@ function remove(d: DeployedAutomation) {
   if (!confirm(t('Remove this automation from Home Assistant? Its versions stay here.'))) return;
   if (selId.value === d.ha_id) selId.value = '';
   act(() => api.del(`api/automations/${d.ha_id}`), t('Removed.'));
+}
+/** Edit a deployed one: a draft of its current version (same id), opened in the flow editor. */
+async function edit(d: DeployedAutomation) {
+  error.value = '';
+  const current = d.versions.find((v) => v.version === d.current_version) ?? d.versions[0];
+  try {
+    const draft = await api.post<Proposal>('api/proposals', { yaml: current.yaml, ha_id: d.ha_id, title: d.title });
+    nav.proposalId = draft.id;
+    go('proposals');
+  } catch (e) { error.value = (e as Error).message; }
 }
 onActivated(load);
 </script>
@@ -62,7 +73,9 @@ onActivated(load);
     <p v-else class="card empty">{{ t('Nothing deployed yet. Approve a draft first.') }}</p>
 
     <article v-if="sel()" class="card stack">
-      <div class="sec-h"><h2>{{ sel()!.title }}</h2><span class="mono faint">{{ sel()!.ha_id }}</span></div>
+      <div class="sec-h"><h2>{{ sel()!.title }}</h2>
+        <div class="row"><span class="mono faint">{{ sel()!.ha_id }}</span>
+          <button class="btn sm" :disabled="killed()" :data-tip="t('Opens a draft of the current version in the flow editor; the deployed one keeps running until you approve the change.')" @click="edit(sel()!)">{{ t('Edit') }}</button></div></div>
       <div>
         <details v-for="v in sel()!.versions" :key="v.version" :open="v.version === sel()!.current_version">
           <summary><b>v{{ v.version }}</b>

@@ -3,11 +3,12 @@ Contract: contracts/openapi.yaml (tag `automations`)."""
 
 from __future__ import annotations
 
+import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from ..core.lifecycle import LifecycleError
-from ..core.orchestrator import OrchestratorError
+from ..core.lifecycle import LifecycleError, normalize, to_yaml
+from ..core.orchestrator import CHOICES, OrchestratorError
 from ..ha.client import NotOurs
 
 router = APIRouter(prefix="/api")
@@ -33,6 +34,12 @@ async def _body(request: Request) -> dict:
 def _text(body: dict, key: str, limit: int = 20000) -> str | None:
     value = body.get(key)
     return value[:limit] if isinstance(value, str) and value.strip() else None
+
+
+def _provider(body: dict) -> str | None:
+    """The owner's pick of a model for one request; anything else means the setting."""
+    value = body.get("provider")
+    return value if value in CHOICES else None
 
 
 # --- proposals --------------------------------------------------------------------------------
@@ -64,7 +71,7 @@ async def create_proposal(request: Request):
             )
         else:
             room = _text(body, "room", 64)
-            proposal = await ctx.orchestrator.draft(wish, room=room, ha_id=ha_id)
+            proposal = await ctx.orchestrator.draft(wish, room=room, ha_id=ha_id, provider=_provider(body))
     except (LifecycleError, OrchestratorError) as err:
         return _error(err.code, str(err))
     except NotOurs as err:
@@ -118,6 +125,56 @@ async def proposal_evidence(proposal_id: str, request: Request):
         return _error(err.code, str(err))
     except Exception as err:  # noqa: BLE001 - history unavailable is an answer, not a 500
         return _error("ha_error", f"history: {type(err).__name__}: {err}"[:300])
+
+
+@router.post("/proposals/{proposal_id}/revise")
+async def revise_proposal(proposal_id: str, request: Request):
+    """A model changes the automation as the owner asks, on the model the owner picks."""
+    body = await _body(request)
+    instruction = _text(body, "instruction", 2000)
+    if instruction is None:
+        return _error("bad_request", "`instruction` is required")
+    try:
+        proposal = await request.app.state.ctx.orchestrator.revise(proposal_id, instruction, _provider(body))
+    except (LifecycleError, OrchestratorError) as err:
+        return _error(err.code, str(err))
+    except NotOurs as err:
+        return _error("not_found", str(err))
+    return proposal
+
+
+@router.post("/proposals/{proposal_id}/explain")
+async def explain_proposal(proposal_id: str, request: Request):
+    body = await _body(request)
+    language = body.get("language") if isinstance(body.get("language"), str) else "en"
+    try:
+        return await request.app.state.ctx.orchestrator.explain(
+            proposal_id, _provider(body), language[:8], fresh=body.get("fresh") is True,
+            cached_only=body.get("cached_only") is True,
+        )  # fmt: skip
+    except (LifecycleError, OrchestratorError) as err:
+        return _error(err.code, str(err))
+
+
+@router.post("/automation-yaml")
+async def convert_yaml(request: Request):
+    """The flow editor works on the automation as an object: `yaml` → `config`, `config` → `yaml`.
+    Nothing is stored or checked here; saving goes through PUT /proposals/{id} as before."""
+    body = await _body(request)
+    part = body.get("part") is True  # one trigger, condition or step: not normalized as an automation
+    if isinstance(body.get("config"), dict):
+        return {"yaml": to_yaml(body["config"]), "config": body["config"]}
+    text = _text(body, "yaml")
+    if text is None:
+        return _error("bad_request", "send `yaml` or `config`")
+    try:
+        config = yaml.safe_load(text)
+    except yaml.YAMLError as err:
+        return _error("bad_request", f"YAML: {err}"[:300])
+    if not isinstance(config, dict):
+        return _error("bad_request", "the YAML must be a mapping (key: value lines)")
+    config = config if part else normalize(config)
+    return {"yaml": to_yaml(config), "config": config}
 
 
 # --- deployed automations -------------------------------------------------------------------

@@ -448,6 +448,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/proposals/{proposal_id}/revise": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: components["parameters"]["proposal_id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A model changes the automation as the owner asks in words, on the model the owner picks. An open proposal is edited in place; a deployed one gets a new draft that changes it; a rejected one a new draft that starts from its YAML. Never deploys. */
+        post: operations["reviseProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/proposals/{proposal_id}/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: components["parameters"]["proposal_id"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** A short plain-language description of the automation by a model (cached per YAML and language; empty text when `cached_only` finds none) */
+        post: operations["explainProposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/automation-yaml": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** For the flow editor: `yaml` → `config` (normalized object) or `config` → `yaml`. Stores nothing. */
+        post: operations["convertAutomationYaml"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/automations": {
         parameters: {
             query?: never;
@@ -1045,6 +1100,12 @@ export interface components {
              * @enum {string}
              */
             effective?: "anthropic" | "openai" | "local" | "none";
+            /** @description which models the owner can pick per request (local reachable, cloud key set) */
+            choices?: {
+                local?: boolean;
+                anthropic?: boolean;
+                openai?: boolean;
+            };
             model?: string | null;
             budget?: {
                 daily_limit_eur?: number;
@@ -1172,6 +1233,11 @@ export interface components {
             /** @enum {string} */
             status: "new" | "seen" | "handled";
         };
+        /**
+         * @description the model for this one request; absent = the add-on setting orchestrator_provider
+         * @enum {string}
+         */
+        ProviderChoice: "local" | "anthropic" | "openai" | "auto";
         Proposal: {
             id: string;
             created: number;
@@ -2129,6 +2195,7 @@ export interface operations {
                     room?: string;
                     /** @description one of our deployed automations to change */
                     ha_id?: string;
+                    provider?: components["schemas"]["ProviderChoice"];
                 };
             };
         };
@@ -2276,6 +2343,113 @@ export interface operations {
                     "application/json": components["schemas"]["Evidence"];
                 };
             };
+        };
+    };
+    reviseProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: components["parameters"]["proposal_id"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    instruction: string;
+                    provider?: components["schemas"]["ProviderChoice"];
+                };
+            };
+        };
+        responses: {
+            /** @description the revised or new proposal */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Proposal"];
+                };
+            };
+            400: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    explainProposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                proposal_id: components["parameters"]["proposal_id"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    provider?: components["schemas"]["ProviderChoice"];
+                    /** @description UI language code, e.g. en, ru */
+                    language?: string;
+                    /** @description ask again instead of the cached text */
+                    fresh?: boolean;
+                    /** @description the cached text or an empty one; never calls a model (the page asks on open) */
+                    cached_only?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        text: string;
+                        provider: string;
+                        run_id?: string | null;
+                        cached?: boolean;
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    convertAutomationYaml: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    yaml?: string;
+                    config?: Record<string, never>;
+                    /** @description one trigger, condition or step: parsed as is, not normalized as an automation */
+                    part?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        yaml: string;
+                        config: Record<string, never>;
+                    };
+                };
+            };
+            400: components["responses"]["Error"];
         };
     };
     listDeployed: {

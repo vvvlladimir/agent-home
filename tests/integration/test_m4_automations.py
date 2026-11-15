@@ -338,3 +338,82 @@ def test_the_orchestrator_searches_before_it_may_decline(base, llm_sim):
     run = httpx.get(f"{base}/api/runs", params={"agent": "orchestrator"}).json()[0]
     trace = httpx.get(f"{base}/api/runs/{run['id']}").json()["trace"]
     assert [s["data"]["name"] for s in trace if s["type"] == "tool"] == ["find_entities"]
+
+
+def test_the_owner_picks_the_model_revises_and_asks_what_it_does(settings, cloud, llm_sim):
+    """The setting says `auto` (local first); the owner picks Claude for one request, then asks the
+    local model to change the draft in words (edited in place), then asks what it does."""
+    app = serve(settings, orchestrator_provider="auto", anthropic_api_key=cloud.sim.api_key,
+                anthropic_base_url=cloud.url)  # fmt: skip
+    try:
+        orch = status(app.base)["orchestrator"]
+        assert orch["choices"] == {"local": True, "anthropic": True, "openai": False}
+        submit = {"name": "submit_automation", "input": {"title": "Lamp on motion", "rationale": "r",
+                                                          "expected_triggers": "motion", "yaml": GOOD}}  # fmt: skip
+        cloud.sim.script[:] = [{"tool_use": [submit]}, {"text": "Done."}]
+        llm_sim.requests.clear()
+        created = httpx.post(f"{app.base}/api/proposals", json={"request": "lamp at motion", "provider": "anthropic"},
+                             timeout=30)  # fmt: skip
+        assert created.status_code == 201, created.text
+        proposal = created.json()
+        assert httpx.get(f"{app.base}/api/runs/{proposal['run_id']}").json()["provider"] == "anthropic"
+        assert llm_sim.requests == [], "the owner's pick, not the setting's local-first"
+
+        night = GOOD.replace("actions:", "conditions:\n  - condition: sun\n    after: sunset\nactions:")
+        llm_sim.script[:] = [
+            {"tool_calls": [{"name": "submit_automation", "arguments": {**submit["input"], "yaml": night}}]},
+            {"text": "Changed."},
+        ]
+        revised = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/revise",
+                             json={"instruction": "only after sunset", "provider": "local"}, timeout=30)  # fmt: skip
+        assert revised.status_code == 200, revised.text
+        validate(revised.json(), "/api/proposals/{proposal_id}/revise", "post")
+        assert revised.json()["id"] == proposal["id"] and "sunset" in revised.json()["yaml"]
+        asked = str(llm_sim.requests[0])
+        assert "only after sunset" in asked and "light.living_room_lamp" in asked, "the current YAML is sent"
+
+        before = len(llm_sim.requests)
+        nothing = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
+                             json={"language": "ru", "cached_only": True}, timeout=30).json()  # fmt: skip
+        assert nothing["text"] == "" and len(llm_sim.requests) == before, "no model call"
+        llm_sim.requests.clear()
+        llm_sim.script[:] = [{"text": "When motion is seen after sunset, the lamp goes on."}]
+        explained = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
+                               json={"provider": "local", "language": "ru"}, timeout=30)  # fmt: skip
+        assert explained.status_code == 200, explained.text
+        validate(explained.json(), "/api/proposals/{proposal_id}/explain", "post")
+        assert explained.json()["text"].startswith("When motion") and not explained.json()["cached"]
+        again = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
+                           json={"provider": "local", "language": "ru"}, timeout=30).json()  # fmt: skip
+        assert again["cached"] and again["text"] == explained.json()["text"], "not paid twice"
+        assert len(llm_sim.requests) == 1
+        assert "Russian" in str(llm_sim.requests[-1])
+
+        rejected = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/reject", json={}).json()
+        llm_sim.script[:] = [
+            {"tool_calls": [{"name": "submit_automation", "arguments": {**submit["input"], "yaml": GOOD}}]},
+            {"text": "ok"},
+        ]
+        fresh = httpx.post(f"{app.base}/api/proposals/{rejected['id']}/revise",
+                           json={"instruction": "any time again", "provider": "local"}, timeout=30).json()  # fmt: skip
+        assert fresh["id"] != rejected["id"] and fresh["status"] == "draft", (
+            "a rejected one starts a new draft"
+        )
+    finally:
+        app.close()
+
+
+def test_the_flow_editor_converts_yaml_and_back(base):
+    out = httpx.post(f"{base}/api/automation-yaml", json={"yaml": GOOD.replace("triggers:", "trigger:")})
+    assert out.status_code == 200, out.text
+    validate(out.json(), "/api/automation-yaml", "post")
+    config = out.json()["config"]
+    assert config["triggers"][0]["entity_id"] == "binary_sensor.living_room_motion", (
+        "normalized to plural keys"
+    )
+    back = httpx.post(f"{base}/api/automation-yaml", json={"config": config}).json()
+    assert "light.living_room_lamp" in back["yaml"]
+    part = httpx.post(f"{base}/api/automation-yaml", json={"yaml": "delay: '00:01:00'", "part": True}).json()
+    assert part["config"] == {"delay": "00:01:00"}, "one step stays one step"
+    bad = httpx.post(f"{base}/api/automation-yaml", json={"yaml": "- a list"})
+    assert bad.status_code == 400

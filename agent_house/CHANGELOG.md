@@ -19,6 +19,14 @@
 - **Unusual states** in the inbox: a device in a state it is almost never in at this time of day
   (the lamp on at 03:00), after 30 minutes. Nothing is switched.
 - Your own house-mode switches (away when you leave) can become proposals too.
+- **Pick the model** for each request: a new automation, a change, an explanation can each run on
+  the Jetson or a cloud (Claude, OpenAI), whatever the default in Settings is.
+- **Change it in words**: on any automation, write what should change; the chosen model edits the
+  draft (or drafts a changed copy of a deployed or rejected one). Nothing is deployed by it.
+- **In plain words**: a model explains what an automation does in a few sentences, in your language.
+- **Flow editor**: every automation as a chart, top to bottom — when / only if / do, with forks for
+  if-else and choose. Click a card to edit it, drag it to move it, "+" to add a trigger, condition or
+  step anywhere, switch a part off, undo, zoom. Deployed automations get an "Edit" button.
 
 ## 0.2.0
 

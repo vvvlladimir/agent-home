@@ -23,6 +23,7 @@ checked like any other and deployed only when the owner approves it.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -32,7 +33,7 @@ from ..ha.client import MODE_HELPER
 from . import clock
 from .actuator import new_id
 from .agents import is_noise, is_room_sensor
-from .lifecycle import LifecycleError
+from .lifecycle import OPEN, LifecycleError, named_entities
 from .llm import LLMError, Priority
 from .policy import READ_ONLY_DOMAINS, resolve_tier
 from .redact import Redactor
@@ -152,6 +153,14 @@ CHAT_HISTORY_TURNS = 8
 
 
 EXPERT_TASKS = frozenset({"draft", "habit", "undo", "conflict"})
+CHOICES = ("local", "anthropic", "openai", "auto")  # the owner may pick one per request
+EXPLAIN_SYSTEM = """You explain one Home Assistant automation to the owner of the home, who is not \
+a programmer. Plain text, no YAML, no entity ids when a name is given, at most 5 short sentences, \
+written in {language}. Say when it starts, what must be true, what it does (with every branch), and \
+anything surprising (it asks first on the phone, it waits, it can fire often). No tool calls. Do not \
+invent anything that is not in the automation."""
+LANGUAGES = {"en": "English", "ru": "Russian", "de": "German", "fr": "French", "es": "Spanish",
+             "it": "Italian", "nl": "Dutch", "pl": "Polish", "uk": "Ukrainian"}  # fmt: skip
 REVIEW_SYSTEM = """You are the orchestrator of Agent House. Once a day you write the owner a short \
 review of the house: what the room agents reported, what was escalated, what the history scan found \
 and which proposals are being drafted. Plain text, at most 8 short lines, in English, no tool calls. \
@@ -597,25 +606,30 @@ class Orchestrator:
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     # --- status -----------------------------------------------------------------------------
-    def providers(self, task: str = "draft", expert: bool = False) -> list:
+    def choice(self, provider: str | None = None) -> str:
+        """The provider mode for one request: the owner's pick on the page, else the setting."""
+        return provider if provider in CHOICES else self.settings.orchestrator_provider
+
+    def providers(self, task: str = "draft", expert: bool = False, provider: str | None = None) -> list:
         """The providers to try for one kind of task, in order. `routine` stays on the local model;
-        `expert` (a retry after the local model gave up) uses the clouds only."""
+        `expert` (a retry after the local model gave up) uses the clouds only. `provider`: the
+        owner's pick for this one request (local / anthropic / openai / auto)."""
         configured = {
             "local": [self.local],
             "anthropic": [self.cloud],
             "openai": [self.openai],
-        }.get(self.settings.orchestrator_provider, [self.local, self.cloud, self.openai])
+        }.get(self.choice(provider), [self.local, self.cloud, self.openai])
         if task == "routine":
             return [self.local]
         if expert:
             return [p for p in configured if p is not self.local and p.has_key]
         return configured
 
-    def can_ask_expert(self, task: str) -> bool:
+    def can_ask_expert(self, task: str, provider: str | None = None) -> bool:
         return (
-            self.settings.orchestrator_provider == "auto"
+            self.choice(provider) == "auto"
             and task in EXPERT_TASKS
-            and any(p.available for p in self.providers(task, expert=True))
+            and any(p.available for p in self.providers(task, expert=True, provider=provider))
         )
 
     def status(self) -> dict:
@@ -629,6 +643,11 @@ class Orchestrator:
             "effective": effective,
             "model": model,
             "budget": self.budget.today(),
+            "choices": {
+                "local": self.local.available,
+                "anthropic": self.cloud.has_key,
+                "openai": self.openai.has_key,
+            },
         }
 
     def budget_notice(self) -> None:
@@ -649,14 +668,14 @@ class Orchestrator:
     # --- one model turn, with fallback ------------------------------------------------------
     async def turn(
         self, system: str, transcript: list[dict], tools: list[dict], priority: Priority, redactor: Redactor,
-        task: str = "draft", expert: bool = False,
+        task: str = "draft", expert: bool = False, choice: str | None = None,
     ) -> Turn:  # fmt: skip
         errors = []
-        for provider in self.providers(task, expert):
+        for provider in self.providers(task, expert, choice):
             if self.safety.kill_engaged:
                 raise OrchestratorError("kill_switch", "the kill switch is engaged")
             cloud = provider is not self.local
-            if cloud and self.settings.orchestrator_provider == "auto" and not provider.has_key:
+            if cloud and self.choice(choice) == "auto" and not provider.has_key:
                 continue  # `auto` uses only the clouds the owner gave a key for
             if cloud and self.settings.redact_cloud:
                 sent_system = redactor.redact(system)
@@ -811,14 +830,17 @@ class Orchestrator:
         """Ask the model for an automation; return the proposal (draft or blocked). Never deploys.
         With `auto`, a local attempt that ends without a passing draft is retried once by the cloud
         (the expert); the blocked local proposal is then rejected in favour of the expert's."""
+        choice = kwargs.get("provider")
         try:
             proposal = await self._draft(request, task=task, **kwargs)
         except OrchestratorError as err:
-            if err.code != "failed" or not self._local_tried or not self.can_ask_expert(task):
+            if err.code != "failed" or not self._local_tried or not self.can_ask_expert(task, choice):
                 raise
             kwargs.pop("new_run_id", None)
             return await self._draft(request, task=task, expert=True, **kwargs)
-        if proposal["status"] == "blocked" and self._local_tried and self.can_ask_expert(task):
+        if kwargs.get("edit") is not None:
+            return proposal  # a revision stays one proposal: no second draft to replace it with
+        if proposal["status"] == "blocked" and self._local_tried and self.can_ask_expert(task, choice):
             kwargs.pop("new_run_id", None)
             try:
                 better = await self._draft(request, task=task, expert=True, **kwargs)
@@ -843,9 +865,14 @@ class Orchestrator:
         new_run_id: str | None = None,
         task: str = "draft",
         expert: bool = False,
+        provider: str | None = None,
+        base_yaml: str | None = None,
+        edit: dict | None = None,
     ) -> dict:
         """One drafting conversation. `new_run_id`: the id this draft's run gets (a caller that
-        answers before the draft is done)."""
+        answers before the draft is done). `provider`: the owner's pick for this request.
+        `base_yaml`: an automation to start from. `edit`: an open proposal the model revises in
+        place (its submissions edit it instead of creating a new one)."""
         self._local_tried = False
         if self.safety.kill_engaged:
             raise OrchestratorError("kill_switch", "the kill switch is engaged")
@@ -855,6 +882,8 @@ class Orchestrator:
         if ha_id:
             deployed = self.lifecycle.get_deployed(ha_id)
             current = "\n\nChange this deployed automation:\n" + deployed["versions"][0]["yaml"]
+        if base_yaml:
+            current = "\n\nChange this automation (keep what the request does not mention):\n" + base_yaml
         areas = ", ".join(sorted(self.ha.registry.areas)) or "none"
         user = f"Request: {request}{current}\n\nAreas: {areas}\nEntities (id, name, area, tier, state):\n" + (
             "\n".join(lines) or "(none)"
@@ -870,11 +899,13 @@ class Orchestrator:
         )
         trace.step("context", {"system": self._system(), "user": user, "entities": len(lines)})
         redactor = Redactor.for_home(self.ha)
-        proposal = None
-        searched, pushed_back = 0, False
+        proposal = edit
+        searched, submitted, pushed_back = 0, 0, False
         try:
             for _ in range(MAX_TURNS):
-                turn = await self.turn(self._system(), transcript, TOOLS, priority, redactor, task, expert)
+                turn = await self.turn(
+                    self._system(), transcript, TOOLS, priority, redactor, task, expert, provider
+                )
                 self._local_tried = self._local_tried or turn.provider == "local"
                 trace.llm(turn)
                 if not turn.calls:
@@ -924,6 +955,7 @@ class Orchestrator:
                         reason = str(call["input"].get("reason") or "no reason given")[:300]
                         trace.finish("escalated", error=f"declined: {reason}")
                         raise OrchestratorError("declined", reason)
+                    submitted += 1
                     proposal, failed = await self._submit(
                         call["input"],
                         proposal,
@@ -961,7 +993,7 @@ class Orchestrator:
         except LifecycleError as err:
             trace.finish("error", error=str(err))
             raise OrchestratorError("failed", str(err)) from err
-        if proposal is None:
+        if proposal is None or not submitted:
             trace.finish("escalated", error="the model never submitted an automation")
             raise OrchestratorError("failed", "the model never submitted an automation")
         trace.finish(
@@ -969,6 +1001,60 @@ class Orchestrator:
             summary=f"proposal {proposal['id']} ({proposal['status']}): {proposal['title']}",
         )
         return proposal
+
+    async def revise(self, proposal_id: str, instruction: str, provider: str | None = None) -> dict:
+        """The owner asks a model to change an automation in words. An open proposal (draft,
+        blocked) is edited in place; a deployed one gets a new draft that changes it; any other
+        (rejected, superseded) a new draft that starts from its YAML. Never deploys."""
+        current = self.lifecycle.get(proposal_id)
+        kwargs: dict = {"provider": provider, "base_yaml": current["yaml"]}
+        if current["status"] in OPEN:
+            kwargs |= {"edit": current, "origin_agent": current["origin_agent"]}
+        elif current["status"] == "deployed" and self.lifecycle.deployed(current["ha_id"]):
+            kwargs["ha_id"] = current["ha_id"]
+        return await self.draft(instruction, **kwargs)
+
+    async def explain(self, proposal_id: str, provider: str | None = None, language: str = "en",
+                      fresh: bool = False, cached_only: bool = False) -> dict:  # fmt: skip
+        """A short plain-language description of a proposal's automation by a model → {text,
+        provider, run_id, cached}. Cached per YAML and language (kv), so opening the page twice
+        does not pay twice; `fresh` asks again; `cached_only` never calls a model."""
+        proposal = self.lifecycle.get(proposal_id)
+        language = LANGUAGES.get(language, LANGUAGES["en"])
+        key = "explain:" + hashlib.sha1(f"{language}\n{proposal['yaml']}".encode()).hexdigest()
+        cached = self.store.get(key)
+        if cached and not fresh:
+            return {**cached, "cached": True}
+        if cached_only:  # the page asks on open: a free answer or nothing, never a model call
+            return {"text": "", "provider": "", "run_id": None, "cached": False}
+        names = sorted(
+            f"{e} = {name}"
+            for e in named_entities(self.lifecycle.parse(proposal["yaml"])[0] or {})
+            if (name := ((self.ha.states.get(e) or {}).get("attributes") or {}).get("friendly_name"))
+        )
+        user = f"Automation:\n{proposal['yaml']}" + ("\n\nNames:\n" + "\n".join(names) if names else "")
+        system = EXPLAIN_SYSTEM.replace("{language}", language)
+        trace = _Trace(self, f"owner asks what {proposal['title']} does", "manual")
+        trace.step("context", {"system": system, "user": user})
+        redactor = Redactor.for_home(self.ha)
+        try:
+            turn = await self.turn(
+                system, [{"role": "user", "text": user}], [], Priority.INTERACTIVE,
+                redactor, "explain", choice=provider,
+            )  # fmt: skip
+        except OrchestratorError as err:
+            trace.finish("error", error=str(err))
+            raise
+        trace.llm(turn)
+        text = str(redactor.restore(turn.text) if turn.provider != "local" else turn.text)
+        text = text.strip()[:1500]
+        if not text:
+            trace.finish("escalated", error="empty")
+            raise OrchestratorError("failed", "the model gave no explanation")
+        trace.finish("ok", summary=text[:300])
+        out = {"text": text, "provider": turn.provider, "run_id": trace.run_id}
+        self.store.set(key, out)
+        return {**out, "cached": False}
 
     # --- chat -------------------------------------------------------------------------------
     def house_summary(self) -> str:

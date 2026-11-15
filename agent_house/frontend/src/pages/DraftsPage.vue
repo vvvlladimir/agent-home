@@ -6,6 +6,7 @@ import Chips from '../components/Chips.vue';
 import Icon from '../components/Icon.vue';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
+import ProviderPick from '../components/ProviderPick.vue';
 import Seg from '../components/Seg.vue';
 import { ago } from '../format';
 import { agentName, areaName, findingKind } from '../labels';
@@ -23,7 +24,7 @@ const INPUT_MODES = [['request', 'Describe'], ['yaml', 'YAML']] as const;
 const status = ref<StatusFilter>('draft');
 const proposals = ref<Proposal[]>([]);
 const selId = ref('');
-const draft = ref({ mode: 'request' as 'request' | 'yaml', request: '', room: '', yaml: '' });
+const draft = ref({ mode: 'request' as 'request' | 'yaml', request: '', room: '', yaml: '', provider: '' });
 const drafting = ref(false);
 const error = ref('');
 const scanning = ref(false);
@@ -34,7 +35,7 @@ async function load() {
 }
 async function create() {
   const d = draft.value;
-  const body = d.mode === 'yaml' ? { yaml: d.yaml } : { request: d.request, room: d.room || undefined };
+  const body = d.mode === 'yaml' ? { yaml: d.yaml } : { request: d.request, room: d.room || undefined, provider: d.provider || undefined };
   drafting.value = true; error.value = '';
   try {
     const created = await api.post<Proposal>('api/proposals', body);
@@ -86,7 +87,7 @@ onActivated(() => {
 
 <template>
   <section class="page">
-    <DraftDetail v-if="selId" :id="selId" @close="closeDetail" />
+    <DraftDetail v-if="selId" :id="selId" :key="selId" @close="closeDetail" @open="selId = $event" />
 
     <div v-else class="cols side">
       <div class="sec">
@@ -115,12 +116,13 @@ onActivated(() => {
             <label class="field"><span>{{ t('Room') }}</span>
               <select v-model="draft.room"><option value="">{{ t('Whole house') }}</option>
                 <option v-for="a in state.areas" :key="a.area_id" :value="a.area_id">{{ a.name }}</option></select></label>
+            <ProviderPick v-model="draft.provider" />
           </div>
           <textarea v-else v-model="draft.yaml" rows="8" class="mono" :aria-label="t('Automation YAML')" :placeholder="'alias: …\ntriggers: …\nactions: …'" />
           <div class="row">
             <button class="btn primary" :aria-busy="drafting || undefined"
                     :disabled="drafting || !(draft.mode === 'yaml' ? draft.yaml.trim() : draft.request.trim())" @click="create">{{ t('Draft') }}</button>
-            <Info v-if="draft.mode === 'request'" :tip="draftedBy()" />
+            <Info v-if="draft.mode === 'request'" :tip="draft.provider === 'local' ? t('Runs on the Jetson; nothing leaves the house.') : draft.provider ? t('Cloud models get a redacted request and are paid from the daily budget.') : draftedBy()" />
           </div>
           <p v-if="error" class="error">{{ error }}</p>
         </article>

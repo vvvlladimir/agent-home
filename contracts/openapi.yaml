@@ -310,6 +310,7 @@ paths:
                 request: {type: string, maxLength: 2000}
                 room: {type: string, description: "area id: limits the orchestrator to that room's entities"}
                 ha_id: {type: string, description: "one of our deployed automations to change"}
+                provider: {$ref: "#/components/schemas/ProviderChoice"}
       responses:
         "201": {description: drafted (status draft or blocked), content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
         "400": {$ref: "#/components/responses/Error"}
@@ -361,6 +362,92 @@ paths:
       requestBody: {content: {application/json: {schema: {type: object, properties: {days: {type: integer, default: 7, maximum: 30}}}}}}
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Evidence"}}}}
+  /api/proposals/{proposal_id}/revise:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    post:
+      tags: [automations]
+      operationId: reviseProposal
+      x-milestone: M5
+      summary: >-
+        A model changes the automation as the owner asks in words, on the model the owner picks. An
+        open proposal is edited in place; a deployed one gets a new draft that changes it; a rejected
+        one a new draft that starts from its YAML. Never deploys.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instruction]
+              properties:
+                instruction: {type: string, maxLength: 2000}
+                provider: {$ref: "#/components/schemas/ProviderChoice"}
+      responses:
+        "200": {description: the revised or new proposal, content: {application/json: {schema: {$ref: "#/components/schemas/Proposal"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "422": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/proposals/{proposal_id}/explain:
+    parameters: [{$ref: "#/components/parameters/proposal_id"}]
+    post:
+      tags: [automations]
+      operationId: explainProposal
+      x-milestone: M5
+      summary: A short plain-language description of the automation by a model (cached per YAML and language; empty text when `cached_only` finds none)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: {$ref: "#/components/schemas/ProviderChoice"}
+                language: {type: string, description: "UI language code, e.g. en, ru"}
+                fresh: {type: boolean, description: ask again instead of the cached text}
+                cached_only: {type: boolean, description: "the cached text or an empty one; never calls a model (the page asks on open)"}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [text, provider]
+                properties:
+                  text: {type: string}
+                  provider: {type: string}
+                  run_id: {type: [string, "null"]}
+                  cached: {type: boolean}
+        "409": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /api/automation-yaml:
+    post:
+      tags: [automations]
+      operationId: convertAutomationYaml
+      x-milestone: M5
+      summary: "For the flow editor: `yaml` → `config` (normalized object) or `config` → `yaml`. Stores nothing."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                yaml: {type: string}
+                config: {type: object}
+                part: {type: boolean, description: "one trigger, condition or step: parsed as is, not normalized as an automation"}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [yaml, config]
+                properties:
+                  yaml: {type: string}
+                  config: {type: object}
+        "400": {$ref: "#/components/responses/Error"}
   /api/automations:
     get:
       tags: [automations]
@@ -834,6 +921,13 @@ components:
       properties:
         provider: {type: string, enum: [anthropic, openai, local, auto]}
         effective: {type: string, enum: [anthropic, openai, local, none], description: what a request would use right now}
+        choices:
+          type: object
+          description: which models the owner can pick per request (local reachable, cloud key set)
+          properties:
+            local: {type: boolean}
+            anthropic: {type: boolean}
+            openai: {type: boolean}
         model: {type: [string, "null"]}
         budget:
           type: object
@@ -973,6 +1067,10 @@ components:
         severity: {type: string, enum: [info, warning, alarm]}
         summary: {type: string}
         status: {type: string, enum: [new, seen, handled]}
+    ProviderChoice:
+      type: string
+      enum: [local, anthropic, openai, auto]
+      description: the model for this one request; absent = the add-on setting orchestrator_provider
     Proposal:
       type: object
       required: [id, created, status, title, yaml]
