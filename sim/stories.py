@@ -69,7 +69,9 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
             on_state, off_state = h.get("on_state", "on"), h.get("off_state", "off")  # cover: open/closed
             extra += [
                 household.Event(on.timestamp(), eid, on_state, "user", "habit"),
-                household.Event(max(off, on + timedelta(minutes=5)).timestamp(), eid, off_state, "user", "habit"),
+                household.Event(
+                    max(off, on + timedelta(minutes=5)).timestamp(), eid, off_state, "user", "habit"
+                ),
             ]
     for auto in story.get("owner_automations") or []:  # the owner's automation does it, not the hand
         eid = resolve(auto["entity"], entities)
@@ -340,14 +342,20 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             add(
                 exp,
                 not acted and not deployed,
-                f"{eid}: {len(acted)} action(s) not denied {acted[:3]}, {len(deployed)} deployed automation(s)"
-                f" {deployed[:3]}",
+                f"{eid}: {len(acted)} action(s) not denied {acted[:3]}, "
+                f"{len(deployed)} deployed automation(s) {deployed[:3]}",
             )
         elif kind == "house_mode":
-            anchors = _first_per_hour([e for e in events if e["note"] == exp.get("after_note")
-                                       or (exp.get("after_tag") and e["tag"] == exp["after_tag"])])  # fmt: skip
-            sets = [a for a in result["actions"] if MODE_HELPER in (a.get("entity_ids") or [])
-                    and (a.get("data") or {}).get("option") == exp[kind] and a.get("verdict") != "denied"]  # fmt: skip
+            anchors = _first_per_hour([
+                e for e in events
+                if e["note"] == exp.get("after_note")
+                or (exp.get("after_tag") and e["tag"] == exp["after_tag"])
+            ])  # fmt: skip
+            sets = [
+                a for a in result["actions"]
+                if MODE_HELPER in (a.get("entity_ids") or []) and a.get("verdict") != "denied"
+                and (a.get("data") or {}).get("option") == exp[kind]
+            ]  # fmt: skip
             got = [
                 a for a in anchors if any(0 <= m["ts"] - a["ts"] <= 60 * exp["within_min"] for m in sets)
             ]
@@ -376,8 +384,10 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             for on, off in _windows(events, exp[kind]):
                 bad += [f"run {hm(r['started'])} {r.get('agent_id')}" for r in result["runs"]
                         if on < r["started"] < off]  # fmt: skip
-                bad += [f"action {hm(a['ts'])} {a.get('entity_ids')} ({a['verdict']})" for a in result["actions"]
-                        if on < a["ts"] < off and a.get("verdict") != "denied"]  # fmt: skip
+                bad += [
+                    f"action {hm(a['ts'])} {a.get('entity_ids')} ({a['verdict']})" for a in result["actions"]
+                    if on < a["ts"] < off and a.get("verdict") != "denied"
+                ]  # fmt: skip
             windows = _windows(events, exp[kind])
             add(
                 exp,
@@ -631,8 +641,8 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
             if r.status_code >= 300:
                 raise polygon.SetupError(f"settings: {r.status_code} {r.text[:200]}")
         for h in story.get("helpers") or []:  # e.g. the kill switch input_boolean the story flips
-            stack.on_ha(lambda h=h: stack.ha.set_state(h["entity"], h.get("state", "off"),
-                                                       {"friendly_name": h.get("name", h["entity"])}))  # fmt: skip
+            attrs = {"friendly_name": h.get("name", h["entity"])}
+            stack.on_ha(lambda h=h, a=attrs: stack.ha.set_state(h["entity"], h.get("state", "off"), a))
         entities = stack.on_ha(lambda: sorted(stack.ha.states))
         stack.on_ha(lambda: owner_history(story, stack.ha, entities))
         start = days_mod.first_midnight()
