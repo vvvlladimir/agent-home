@@ -203,3 +203,20 @@ def test_only_the_actuator_calls_ha_call_service():
     assert actuator.count("self.ha.call_service(") == 1, "one send site, behind the kill switch re-check"
     client = (ROOT / "agent_house/app/ha/client.py").read_text()
     assert '"call_service"' not in client.split("READ_COMMANDS = frozenset(")[1].split(")")[0]
+
+
+async def test_actions_count_house_time_stamps_and_rate(stack):
+    """On the polygon days pass in seconds: the stamp and the per-minute limit follow the house
+    clock (stories 2026-11-15: the house mode's away/home were denied as a burst)."""
+    from app.core import clock
+
+    go_live(stack)
+    try:
+        verdicts = [(await request(stack))["verdict"] for _ in range(5)]
+        assert verdicts == ["executed"] * 4 + ["denied"]
+        clock.advance(3600)  # an hour of house life, a moment of wall time
+        action = await request(stack)
+        assert action["verdict"] == "executed"
+        assert abs(action["ts"] - clock.time()) < 5, "stamped in house time"
+    finally:
+        clock.reset()

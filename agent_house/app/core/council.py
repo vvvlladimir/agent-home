@@ -291,7 +291,9 @@ class Council:
         if not getattr(self.settings, "auto_house_mode", False) or self.actuator is None:
             return None
         desired = self.desired_mode(now or clock.local())
-        if desired is None or desired == self.mode or desired == self._requested:
+        # compare with what we last asked for: in shadow the helper never changes, and comparing with
+        # it hid every way back (away was recorded, home after the trip never was; stories 2026-11-15)
+        if desired is None or desired == (self._requested or self.mode):
             return None
         self._requested = desired
         return await self.set_mode(desired, f"{why}: people and the night window say {desired}")

@@ -129,6 +129,18 @@ async def test_auto_mode_goes_through_the_actuator_in_shadow_by_default(tmp_path
     assert await s.council.evaluate_mode("again", datetime(2026, 11, 13, 12)) is None, "asked once only"
 
 
+async def test_in_shadow_the_way_back_is_recorded_too(tmp_path):
+    """The helper stays `home` in shadow; away after leaving and home after coming back are both
+    recorded, each once (stories 2026-11-15: only away ever showed)."""
+    s = stack(tmp_path, auto_house_mode=True)
+    s.ha.states["person.owner"]["state"] = "not_home"
+    assert (await s.council.evaluate_mode("left", datetime(2026, 11, 13, 12)))["data"] == {"option": "away"}
+    s.ha.states["person.owner"]["state"] = "home"
+    back = await s.council.evaluate_mode("back", datetime(2026, 11, 13, 18))
+    assert back["verdict"] == "shadow" and back["data"] == {"option": "home"}
+    assert await s.council.evaluate_mode("again", datetime(2026, 11, 13, 18)) is None
+
+
 async def test_auto_mode_live_switches_the_helper_and_never_leaves_owner_modes(tmp_path):
     s = stack(tmp_path, auto_house_mode=True, orchestrator_mode="live")
     s.safety.set_mode("live")

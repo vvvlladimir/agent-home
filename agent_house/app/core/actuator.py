@@ -11,11 +11,11 @@ from __future__ import annotations
 import json
 import logging
 import secrets
-import time
 from collections import deque
 from collections.abc import Callable
 
 from . import clock
+from .clock import monotonic as house_monotonic
 from .policy import Decision, decide
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class Actuator:
         agents,
         scope_of: Callable[[object], set[str]],
         protected: Callable[[], set[str]] = lambda: set(),
-        clock: Callable[[], float] = time.time,
+        clock: Callable[[], float] = clock.time,  # house time: action timestamps, approval expiry
         owner_of: Callable[[str], str | None] = lambda entity_id: None,
         pseudo: Callable[[str], object] = lambda agent_id: None,
     ) -> None:
@@ -77,7 +77,10 @@ class Actuator:
         self.store, self.feed, self.ha, self.safety, self.agents = store, feed, ha, safety, agents
         self.scope_of, self.protected, self.clock = scope_of, protected, clock
         self.owner_of, self.pseudo = owner_of, pseudo
-        self.rates = RateWindow(time.monotonic)
+        # actions per minute of the house's life, like the gate's cooldowns and hourly caps; in
+        # production the same as time.monotonic. On the polygon days pass in seconds, and wall time
+        # denied the house mode's away/home as a burst (stories 2026-11-15)
+        self.rates = RateWindow(house_monotonic)
         # An approval that was being sent when the add-on stopped: nobody knows if HA got it.
         self.store.execute(
             "UPDATE actions SET verdict='failed', reason='interrupted by a restart while sending' "

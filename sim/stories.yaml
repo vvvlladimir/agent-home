@@ -12,7 +12,8 @@
 #
 # More given: habits take on_state / off_state (covers open/closed, locks locked/unlocked);
 #   incidents take back_state; helpers create an HA helper first (the kill switch input_boolean);
-#   owner: {approve: none} says no to every draft (default: approve drafts on the story's habits).
+#   owner: {approve: none} says no to every draft (default: approve drafts on the story's habits);
+#   mode_helper: true creates the house mode helper through the add-on's API, as the owner does.
 # More expect: report_about takes severity (warning / alarm: at least that); never_actuated (no
 #   action that was not denied, no deployed automation acting on it); house_mode (the mode was set
 #   within N min after a note or tag); max_manager_runs_per_day; max_fault_wakes (share of a sensor
@@ -217,6 +218,7 @@ stories:
     about: With automatic modes on, the house goes to away when the owner leaves for a trip and back to home.
     days: 9
     settings: {auto_house_mode: true}
+    mode_helper: true  # the owner creates input_select.agent_house_mode first (POST api/council/mode-helper)
     chaos: {trip_days: 3}
     expect:
       - {house_mode: away, after_note: "trip starts", within_min: 30}

@@ -5,8 +5,10 @@ live weeks of a household in minutes, in jumps between events, like a discrete-e
 fake HA reads the same clock, so both sides agree on the date.
 
 Only wall-clock meaning goes through here: timestamps, "today", daily slots, undo windows, history
-ranges. Durations of real work (timeouts, latency, rate windows, back-off) keep `time.monotonic()`
-and `asyncio.sleep()`, so a slow model call is never "hours long" in house time.
+ranges, and how often things happen in the house (the gate's cooldowns and hourly caps, the
+actuator's actions per minute: `monotonic()` below). Durations of real work (timeouts, latency,
+back-off) keep `time.monotonic()` and `asyncio.sleep()`, so a slow model call is never "hours long"
+in house time.
 
 The offset only ever grows: the house never goes back in time, so ordering in the store holds.
 """

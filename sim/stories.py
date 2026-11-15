@@ -640,6 +640,10 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
             r = app.send("PUT", "/api/settings", story["settings"])
             if r.status_code >= 300:
                 raise polygon.SetupError(f"settings: {r.status_code} {r.text[:200]}")
+        if story.get("mode_helper"):  # what the owner does first: Settings → House mode → create helper
+            r = app.send("POST", "/api/council/mode-helper", {})
+            if r.status_code >= 300:
+                raise polygon.SetupError(f"mode helper: {r.status_code} {r.text[:200]}")
         for h in story.get("helpers") or []:  # e.g. the kill switch input_boolean the story flips
             attrs = {"friendly_name": h.get("name", h["entity"])}
             stack.on_ha(lambda h=h, a=attrs: stack.ha.set_state(h["entity"], h.get("state", "off"), a))
