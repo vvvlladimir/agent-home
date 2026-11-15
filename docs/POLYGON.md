@@ -166,6 +166,25 @@ reached (daily review, drafts, deploys, rejections, manager, alarms, gate drops,
 how often each kind of sensor lie woke an agent. Features no run reached are listed: that is the
 next story to write. With the fake models, expectations that need a draft are `n/a`.
 
+The 24 stories (2026-11-15) cover, in the categories smart-home agent benchmarks use (SMH-Bench,
+SimuHome: state, implicit intent, scheduling; SmartBench: anomalous device states and behavioural
+contexts) and the ADL anomaly kinds (CASAS: temporal, spatial), what this add-on does by itself:
+
+| Area | Stories |
+|---|---|
+| Habits → drafts → deploy | `morning_counter_habit`, `evening_reading_lamp`, `blinds_morning_habit` (T2 cover), `owner_says_no`, `owner_automation_covers_part` |
+| Not habits | `guests_and_sick_days`, `lying_sensors`, `drifting_thermometer` |
+| Alarms, once | `smoke_at_night`, `leak_while_out`, `leak_burst_one_alarm`, `leak_unwatched_room` |
+| Warnings and maintenance | `airing_while_heating`, `appliance_lost_power`, `low_battery_leak_sensor` |
+| T3 watched, never touched | `front_door_unlocked_at_night`, `garage_open_at_night`, `t3_habits_never_automated` |
+| Modes and the manager | `away_mode_follows_trip`, `lights_left_on_trip` (with a daily cap on manager runs) |
+| Noise and cost | `flaky_network_sensors`, `motion_storm`, `calm_house` |
+| Kill switch | `kill_switch_holds` (an `input_boolean` helper held on: no run, no action) |
+
+Not covered by stories (covered by unit, integration or polygon tests): chat, T2 approvals in live
+mode and their expiry, rollback after an owner's undo (the fake HA fires state triggers only, so a deployed time-triggered habit never runs),
+the cloud budget stop (`daily_budget_eur` is an add-on option, not a runtime setting).
+
 ## 4d. Snapshots: verify by restoring, not by replaying
 
 A snapshot (`sim/snapshot.py`) is a folder with the add-on's data (SQLite copied with the backup
