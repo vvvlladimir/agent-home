@@ -202,3 +202,39 @@ async def test_a_spent_cloud_budget_stops_wakes_and_tells_the_owner_once_a_day(t
     inbox = s.store.query("SELECT severity, summary FROM inbox")
     assert len(inbox) == 1 and inbox[0]["severity"] == "warning" and "budget" in inbox[0]["summary"]
 
+
+
+async def test_a_failed_room_run_names_what_woke_it(tmp_path):
+    """Stories 2026-11-15: the balcony agent timed out on "the fridge lost power"; the sweep said
+    only "1 run timeout" and the fridge was lost."""
+    s = stack(tmp_path)
+    s.store.execute(
+        "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow) "
+        "VALUES ('r1', 'room', 'timeout', 'event', 'switch.fridge changed on → off. A fridge lost power.', ?, 1)",
+        (s.now[0] - 60,),
+    )
+    s.store.execute(
+        "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow) "
+        "VALUES ('r2', 'room', 'timeout', 'cron', 'Scheduled check.', ?, 1)",
+        (s.now[0] - 30,),
+    )
+    [line] = [a for a in s.manager.anomalies() if a.startswith("room agent room")]
+    assert line == ("room agent room: 2 run(s) timeout, woken by: "
+                    "switch.fridge changed on → off. A fridge lost power.")  # fmt: skip
+
+
+async def test_in_shadow_the_manager_gives_no_tasks_and_cannot_claim_what_did_not_happen(tmp_path):
+    """Stories 2026-11-15: in shadow every task came back as a "could not" warning (18 a day), and
+    agents told the owner things were done or awaited approval (QA-007)."""
+    s = stack(tmp_path,
+              call("call_service", domain="light", service="turn_off", entity_id="light.hall", data={}),
+              call("report", severity="info", summary="I turned off light.hall."),
+              call("report", severity="info", summary="I would switch off light.hall; nothing was changed."),
+              {"text": "Reported."})  # fmt: skip
+    s.manager.request("manual: look", force=True)
+    await s.manager.wait()
+    first = s.llm.requests[0]
+    assert "assign_task" not in str(first["tools"]) and "Shadow mode: you give no tasks" in str(first)
+    assert "this run's actions were only recorded" in str(s.llm.requests[2])
+    assert [r["summary"] for r in s.store.query("SELECT summary FROM inbox")] == [
+        "I would switch off light.hall; nothing was changed."]  # fmt: skip

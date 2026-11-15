@@ -24,6 +24,8 @@ from datetime import datetime
 
 import yaml
 
+from app.core.claims import APPROVAL, DENIAL, DONE_CLAIM  # the add-on's own patterns
+
 ENTITY = re.compile(r"\b([a-z][a-z0-9_]*)\.([a-z0-9_]+)\b")
 # HA domains an automation can name; anything else that looks like `a.b` (templates, services) is skipped
 DOMAINS = {
@@ -66,19 +68,6 @@ T3_DOMAINS = {"lock", "alarm_control_panel", "valve", "siren", "camera"}
 T3_GLOBS = (re.compile(r"^cover\..*garage.*$"),)
 LIVE_PROPOSALS = {"draft", "approved", "deployed", "rejected", "superseded", "rolled_back"}  # not "blocked":
 # the add-on stopped those itself; a rejected draft still passed its checks and reached the owner
-# a claim that something now waits for the owner ("was sent for owner approval"), not a rule ("T2 needs
-# owner approval") and not a denial ("none is waiting for approval")
-APPROVAL = re.compile(
-    r"\b(?:sent|submitted|queued|forwarded|passed) (?:to you |to the owner )?for (?:your |owner )?approv"
-    r"|\b(?:is|are|now) (?:waiting|awaiting) (?:for )?(?:your |owner )?approv",
-    re.I,
-)
-DENIAL = re.compile(r"\b(?:none|nothing|no \w+|not|neither|nor|never)\b[^.]{0,30}$", re.I)
-DONE_CLAIM = re.compile(
-    r"\b(?:I (?:have |'ve )?(?:turned|switched|closed|opened|locked|unlocked|stopped)"
-    r"|(?:was|has been|have been) (?:turned|switched|closed|opened|locked|unlocked|stopped))\b",
-    re.I,
-)
 ALARM_MERGE_S = 1800.0
 # keys whose text is prose or a service name, not an entity reference (notify messages mention entities)
 PROSE_KEYS = {"service", "action", "alias", "description", "message", "title", "name", "text", "note"}

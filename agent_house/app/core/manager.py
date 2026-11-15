@@ -18,6 +18,7 @@ What the manager may do, and through what (nothing reaches HA any other way):
   as agent `orchestrator`: policy (tiers, ownership, service allowlist), shadow unless
   `orchestrator_mode: live` and the global mode is live, action log, trace;
 - `assign_task` to the room agent that owns an entity → `council.assign_task` (depth 1, hourly cap);
+  live only: in shadow a room could only record, so the manager reports what it would ask instead;
 - `propose_automation`: a new automation, or a change to one of ours (`ha_id`) → a draft through
   `orchestrator.draft`: checked, and deployed only when the owner (or a tester) approves it;
 - `report` to the owner's inbox.
@@ -35,6 +36,7 @@ from collections import deque
 
 from . import clock
 from .agents import NEVER_OWNED, is_noise
+from .claims import false_claim
 from .council import MODE_ENTITY, ORCHESTRATOR
 from .insights import ACT_DOMAINS
 from .llm import Priority
@@ -52,6 +54,7 @@ MAX_TASKS_PER_RUN = 3
 MAX_CALLS_PER_RUN = 6
 MAX_PROPOSALS_PER_RUN = 1
 TEXT_MAX = 500
+MAX_FAILED_REASONS = 3  # event wakes named per failed room agent in a sweep finding
 ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b")
 OWNED_NOTE = (
     "Owned: switchable devices that no room agent looks after (no area, or an area without a room "
@@ -62,6 +65,12 @@ OWNED_NOTE = (
     "report to you. On: it is also woken by the sweep and may switch these, through the safety "
     "policy, in {mode} mode (shadow: recorded, not done). Give a room "
     "an agent, or set its area in Home Assistant, to hand an entity to that room."
+)
+
+SHADOW_NOTE = (
+    "Shadow mode: you give no tasks to room agents (they could only record). Your call_service is "
+    "recorded, not done. For what a room should do, report it to the owner as what you would do, in "
+    "one report: never say it is done or waits for approval."
 )
 
 SYSTEM = """You are the house manager of Agent House, the orchestrator of a smart home. Room agents \
@@ -78,8 +87,10 @@ the safety policy; the result tells you if it ran, ran in shadow, waits for the 
 - find_entities to look entities up.
 The context lists what the deterministic check found. Each finding must be handled: act on what \
 is yours, assign_task to the room agent that owns the room, or report it to the owner when nobody \
-can act on it (for example lights on in a room without an agent while nobody is home). Never leave \
-a finding unmentioned in your final sentence.
+can act on it (for example lights on in a room without an agent while nobody is home). A room \
+agent that failed on an event ("woken by: …") never handled it: look at that entity now and handle \
+the event yourself, give the room a task, or report it. Never leave a finding unmentioned in your \
+final sentence.
 Rules: act only on what the data shows; never invent entity ids or states. Prefer the smallest \
 action. Do not repeat what a room agent is already doing. When done, answer with one short sentence \
 and no tool call."""
@@ -182,12 +193,22 @@ class Manager:
         # a task run that escalates is the answer to a task (ours, or a room's question): it is on
         # the board already, and counting it would wake the manager about its own request again
         rows = self.store.query(
-            "SELECT agent_id, status, COUNT(*) AS n FROM runs WHERE started>=? AND agent_id<>? "
+            "SELECT agent_id, status, wake_source, wake_reason FROM runs WHERE started>=? AND agent_id<>? "
             "AND status IN ('error', 'escalated', 'timeout') "
-            "AND NOT (status='escalated' AND wake_source='task') GROUP BY agent_id, status",
+            "AND NOT (status='escalated' AND wake_source='task') ORDER BY started",
             (since, ORCHESTRATOR),
         )
-        out += [f"room agent {r['agent_id']}: {r['n']} run(s) {r['status']}" for r in rows]
+        failed: dict[tuple[str, str], list[str]] = {}
+        for r in rows:
+            failed.setdefault((r["agent_id"], r["status"]), []).append(
+                str(r["wake_reason"] or "") if r["wake_source"] == "event" else ""
+            )
+        for (agent_id, status), reasons in failed.items():
+            # what woke it, so the change is not lost with the run (stories 2026-11-15: a fridge
+            # losing power, the run timed out, and the sweep only said "1 run timeout")
+            woke = list(dict.fromkeys(r for r in reasons if r))[:MAX_FAILED_REASONS]
+            line = f"room agent {agent_id}: {len(reasons)} run(s) {status}"
+            out.append(line + (f", woken by: {' | '.join(w[:160] for w in woke)}" if woke else ""))
         out += [
             f"our automation {w['ha_id']} ({w.get('title')}): precision {w['precision']['value']}, "
             f"coverage {w['coverage']['value']} "
@@ -332,8 +353,11 @@ class Manager:
         user = self.context(reasons, found)
         trace = _Trace(self.orch, "manager: " + "; ".join(reasons), "manage")
         self._last_run_id = trace.run_id
-        shadow = getattr(self.settings, "orchestrator_mode", "shadow") != "live" or self.safety.mode != "live"
+        shadow = self.shadow
         self.store.execute("UPDATE runs SET shadow=? WHERE id=?", (int(shadow), trace.run_id))
+        tools = [t for t in TOOLS if not (shadow and t["name"] == "assign_task")]
+        if shadow:  # no tasks: a room can only record, and its "could not" answers were noise
+            user += "\n" + SHADOW_NOTE
         trace.step("context", {"system": SYSTEM, "user": user})
         redactor = Redactor.for_home(self.ha)
         transcript: list[dict] = [{"role": "user", "text": user}]
@@ -342,7 +366,7 @@ class Manager:
         try:
             for _ in range(MAX_TURNS):
                 turn = await self.orch.turn(
-                    SYSTEM, transcript, TOOLS, Priority.BACKGROUND, redactor, "manage"
+                    SYSTEM, transcript, tools, Priority.BACKGROUND, redactor, "manage"
                 )
                 trace.llm(turn)
                 if not turn.calls:
@@ -367,6 +391,10 @@ class Manager:
         trace.finish("ok", summary=final[:300])
         self.feed.add("council", f"manager: {final}"[:300], agent_id=ORCHESTRATOR, run_id=trace.run_id)
         return trace.run_id
+
+    @property
+    def shadow(self) -> bool:
+        return getattr(self.settings, "orchestrator_mode", "shadow") != "live" or self.safety.mode != "live"
 
     async def _call(self, call: dict, used: dict, trace) -> dict:
         def answer(content, error: bool = False) -> dict:
@@ -399,6 +427,8 @@ class Manager:
             return answer(
                 {"verdict": action["verdict"], "reason": action["reason"]}, action["verdict"] == "denied"
             )
+        if name == "assign_task" and self.shadow:
+            return answer("shadow mode: no tasks are given; report what the room should do instead", True)
         if name == "assign_task":
             agent_id, text = str(args.get("agent_id") or ""), str(args.get("task") or "").strip()[:300]
             if not text:
@@ -423,6 +453,10 @@ class Manager:
                     "or find_entities, or describe them in words",
                     True,
                 )
+            verdicts = [r["verdict"] for r in self.store.query(
+                "SELECT verdict FROM actions WHERE run_id=?", (trace.run_id,))]  # fmt: skip
+            if why := false_claim(summary, verdicts):  # QA-007
+                return answer(f"not sent: {why}. Rewrite it: say what you would have done.", True)
             self.orch.agents_rt.inbox_add(ORCHESTRATOR, trace.run_id, severity, summary)
             return answer("in the owner's inbox")
         return answer(f"unknown tool {name}", True)

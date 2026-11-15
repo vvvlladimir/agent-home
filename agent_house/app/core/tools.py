@@ -11,6 +11,7 @@ from datetime import UTC, timedelta
 from . import clock
 from .benchkit import TOOLS as BASE_TOOLS
 from .benchkit import _tool, normalize_call
+from .claims import false_claim
 
 LIST_LIMIT = 25  # rows per list_entities answer; more are announced, not sent
 
@@ -230,7 +231,10 @@ class ToolBox:
             if verdict == "executed":
                 results.append({"ok": True, "status": "executed"})
             elif verdict == "shadow":
-                note = "shadow mode: logged, not sent. Treat it as done; do not retry."
+                # QA-007, stories 2026-11-15: "treat it as done" became "I turned it off" and "awaiting
+                # approval" in reports; say exactly what happened and how to tell the owner
+                note = ("shadow mode: recorded, not sent. Nothing changed and nothing waits for the "
+                        "owner's approval. Do not retry; tell the owner what you would have done.")
                 results.append({"ok": True, "status": "recorded", "note": note})
             elif verdict == "pending":
                 results.append({"ok": True, "status": "pending_approval", "note": "the owner has been asked"})
@@ -248,12 +252,21 @@ class ToolBox:
             return {"ok": False, "error": "severity must be info, warning or escalate"}
         if not isinstance(summary, str) or not summary.strip():
             return {"ok": False, "error": "summary must be a short sentence"}
+        verdicts = [r["verdict"] for r in self.rt.store.query(
+            "SELECT verdict FROM actions WHERE run_id=?", (self.run["id"],))]  # fmt: skip
+        if why := false_claim(summary, verdicts):
+            return {"ok": False, "error": f"not sent: {why}. Rewrite it: say what you would have done."}
         self.run["reported"] = summary.strip()[:300]
         if severity == "escalate":
             self.run["escalated"] = True
+        level = SEVERITY[severity]
+        if self.run["wake_source"] == "task":
+            # the answer to a task is for whoever asked (the board, the house manager); in the inbox it
+            # is a note, or every "could not switch it off" became a warning (stories 2026-11-15)
+            level = "info"
         if not self.dry:
             self.rt.inbox_add(
-                self.agent.id, self.run["id"], SEVERITY[severity], summary.strip()[:500],
+                self.agent.id, self.run["id"], level, summary.strip()[:500],
                 entity_id=self.run.get("entity_id"),
             )  # fmt: skip
             council = getattr(self.rt, "council", None)

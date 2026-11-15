@@ -516,3 +516,27 @@ def test_a_second_alarm_about_the_same_entity_updates_the_first(tmp_path):
         ("kitchen", "info"),
     ]
     assert rows[0]["summary"].endswith("after the kitchen's call")
+
+
+async def test_a_report_that_claims_what_did_not_happen_goes_back_to_the_model(tmp_path):
+    """QA-007, stories 2026-11-15: in shadow "I turned it off" and "awaiting approval" reached the owner."""
+    stack = stack_with(
+        tmp_path,
+        turn_on("light.room_ceiling"),
+        call("report", severity="warning", summary="I turned on light.room_ceiling."),
+        call("report", severity="warning", summary="The heater change is awaiting your approval."),
+        call("report", severity="warning", summary="I would turn on light.room_ceiling; it was only recorded."),
+        {"text": "Done."},
+    )
+    result = await run(stack)
+    errors = [s["result"].get("error", "") for s in steps(result, "tool") if s["name"] == "report"]
+    assert "only recorded (shadow mode)" in errors[0] and "waits for the owner's approval" in errors[1]
+    assert [i["summary"] for i in stack.rt.inbox()] == ["I would turn on light.room_ceiling; it was only recorded."]
+    note = steps(result, "tool")[0]["result"]["note"]
+    assert "nothing waits for the owner's approval" in note and "Treat it as done" not in note
+
+
+async def test_the_answer_to_a_task_is_a_note_in_the_inbox(tmp_path):
+    stack = stack_with(tmp_path, call("report", severity="warning", summary="Could not switch the lamp off."))
+    await run(stack, source="task", reason="Task from the orchestrator: switch the lamp off.")
+    assert [(i["severity"], i["summary"]) for i in stack.rt.inbox()] == [("info", "Could not switch the lamp off.")]
