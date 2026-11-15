@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+- **GUI rewritten** in Vue 3 + TypeScript: six tabs, an overview of decisions, rooms and today,
+  plus accuracy and house manager cards.
+- **House manager**: watches the board, stops re-sending unchanged findings and task-escalation
+  loops, stops on budget with a notice; failed runs name their event, reports cannot claim what
+  did not happen, no tasks in shadow.
+- **Habits**: habit dossiers and a first look before a proposal; recognizes who uses a program
+  and covered states; guest evenings and short bursts are no longer habits.
+- New agents get **suggested wake rules** from the room's devices.
+- New option **T3 exceptions** (`t3_whitelist`): exact entity ids from a T3 domain (locks,
+  alarms) that agents may act on as T2, every action waiting for your approval.
+- Fixed: referenced entities are validated; unwatched alarms are handled; debounces settle on
+  the last state; shadow mode records the way back; QA-001…QA-010 safety and UX findings.
+
 ## 0.1.0 — first release (prototype)
 
 - **Council** page: the house mode helper `input_select.agent_house_mode` (create it with one
