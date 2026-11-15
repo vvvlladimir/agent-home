@@ -251,3 +251,13 @@ def test_episodes_while_guests_are_in_are_left_out():
     assert dossiers == [] and funnel["guest_episodes_left_out"] == 10
     [dossier], funnel = build(kitchen() + guests)
     assert dossier["entity_id"] == "light.kitchen" and funnel["guest_episodes_left_out"] == 10
+
+
+def test_two_late_saturdays_are_not_yet_a_weekend_habit():
+    """Verify run 2026-11-15: three late nights (one Friday, two Saturdays) still became "hallway
+    light off at night": the weekend group had 2 of 3 days on time in two weeks."""
+    nights = [hand(at(day, 1, 42), "light.porch", "off") for day in (4,)]  # Friday night
+    nights += [hand(at(day, 0, 55 + day % 2), "light.porch", "off") for day in (5, 12)]  # Saturdays
+    nights += [hand(at(day, 21, 0), "light.porch", "on") for day in (3, 4, 11)]
+    dossiers, funnel = build(nights, days=14, today=(BASE + timedelta(days=14)).date())
+    assert dossiers == [] and funnel["irregular"] == 1

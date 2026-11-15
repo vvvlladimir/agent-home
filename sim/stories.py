@@ -515,6 +515,12 @@ def about(row: dict, eid: str | None) -> bool:
 def _built_on_lies(proposals: list[dict], events: list[dict], tag: str) -> tuple[list[str], int]:
     """Drafts triggered by a sensor that lied (`tag`), whose times fall in hours of the day when
     most of that sensor's events were lies (ghost motion at night): a habit learnt from noise."""
+    tagged = [e["ts"] for e in events if e["tag"] == tag]
+    if not tagged:
+        return [], 0
+    # a draft made before the first such event cannot have learnt from it (the first look at day 0
+    # drafts from the history before the story)
+    proposals = [p for p in proposals if (p.get("created") or 0) > min(tagged)]
     lies, total = Counter(), Counter()
     for e in events:
         hour = datetime.fromtimestamp(e["ts"]).hour

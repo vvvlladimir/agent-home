@@ -68,8 +68,10 @@ def test_mentions_is_exact_and_a_night_habit_from_ghost_motion_is_caught():
               for i in range(3)]  # fmt: skip
     ghost = "triggers:\n  - trigger: state\n    entity_id: binary_sensor.hall_motion\nconditions:\n" \
             "  - condition: time\n    after: '03:00'\n    before: '04:00'\n"  # fmt: skip
-    hits, judged = _built_on_lies([{"id": "p", "yaml": ghost}], events, "fault:ghost_motion")
+    hits, judged = _built_on_lies([{"id": "p", "yaml": ghost, "created": night + 86400}], events, "fault:ghost_motion")
     assert hits == ["p"] and judged == 1
+    before = [{"id": "p0", "yaml": ghost, "created": night - 86400}]  # drafted before any lie: not from it
+    assert _built_on_lies(before, events, "fault:ghost_motion") == ([], 0)
 
 
 def test_schedule_fits_needs_the_habits_times_and_exactly_its_days():

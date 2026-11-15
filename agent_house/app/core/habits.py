@@ -32,7 +32,8 @@ A real house has ~2000 entities and most say nothing about habits. So, in order:
    00:40"): episodes while guests are in (a `guest` helper on, or house mode `guests`) are left out
    and counted; and a time explains episodes only when it is stable over the scan: on time on at
    least `MIN_COVERAGE` of the eligible days since the first episode (workdays and weekends apart),
-   in at least `MIN_WEEKS` calendar weeks. A burst of a few days waits.
+   in at least `MIN_WEEKS` calendar weeks, and on at least `min_days` days of its own (workdays and
+   weekends are separate groups). A burst of a few days waits.
 
 The dossier is a compact text (counts and at most `MAX_EPISODES` sample episodes per state), not
 raw history: the model is asked to write one automation that captures the habit with its
@@ -252,7 +253,7 @@ def _by_owner(state: str, manual: int, done: list[dict], today: date) -> dict:
 
 
 # --- 3. regularities -----------------------------------------------------------------------------
-def _time_groups(eps: list[dict], today: date) -> list[dict]:
+def _time_groups(eps: list[dict], today: date, min_days: int = 1) -> list[dict]:
     workdays = [e for e in eps if e["weekday"] < 5]
     weekend = [e for e in eps if e["weekday"] >= 5]
     if not workdays or not weekend:
@@ -281,7 +282,8 @@ def _time_groups(eps: list[dict], today: date) -> list[dict]:
         eligible = _eligible_days(label, min(date.fromisoformat(e["day"]) for e in group), today)
         coverage = len(days_on) / max(eligible, 1)
         weeks = len({d.isocalendar()[:2] for d in days_on})
-        stable = coverage >= MIN_COVERAGE and weeks >= MIN_WEEKS
+        # and on enough days of its own: two late Saturdays in two weeks are not yet a weekend habit
+        stable = coverage >= MIN_COVERAGE and weeks >= MIN_WEEKS and len(days_on) >= min_days
         out.append({
             "days": label, "at": _hhmm(center), "spread_min": int(statistics.median(abs(o) for o in offsets)),
             "on_time": len(on_time), "of": len(group), "coverage": round(coverage, 2), "weeks": weeks,
@@ -316,9 +318,11 @@ def _circular_median(minutes: list[int]) -> float:
     return (anchor + statistics.median(_offset(m, anchor) for m in minutes)) % 1440
 
 
-def regularities(entity_id: str, state: str, eps: list[dict], timeline: _Timeline, today: date) -> dict:
+def regularities(
+    entity_id: str, state: str, eps: list[dict], timeline: _Timeline, today: date, min_days: int = 1
+) -> dict:
     n = len(eps)
-    times = _time_groups(eps, today)
+    times = _time_groups(eps, today, min_days)
     explained_by_time = set().union(*(t.pop("on_time_ids") for t in times)) if times else set()
     signal_hits: dict[tuple[str, str], list[int]] = defaultdict(list)
     for e in eps:
@@ -392,7 +396,9 @@ def build(
             by_state[e["state"]].append(e)
         theirs = automated(entity_id, changes)
         by_owner = {s: _by_owner(s, len(by_state.get(s, [])), done, today) for s, done in theirs.items()}
-        states = [regularities(entity_id, s, group, timeline, today) for s, group in by_state.items()]
+        states = [
+            regularities(entity_id, s, group, timeline, today, min_days) for s, group in by_state.items()
+        ]
         regular = [s for s in states if s["days"] >= min_days and s["regular"] >= MIN_SUPPORT]
         if regular and all(by_owner.get(s["state"], {}).get("share", 0) >= COVERED_SHARE for s in regular):
             refs = sorted({r for s in regular for r in by_owner[s["state"]]["by"]})
