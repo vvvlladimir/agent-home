@@ -252,7 +252,10 @@ class ToolBox:
         if severity == "escalate":
             self.run["escalated"] = True
         if not self.dry:
-            self.rt.inbox_add(self.agent.id, self.run["id"], SEVERITY[severity], summary.strip()[:500])
+            self.rt.inbox_add(
+                self.agent.id, self.run["id"], SEVERITY[severity], summary.strip()[:500],
+                entity_id=self.run.get("entity_id"),
+            )  # fmt: skip
             council = getattr(self.rt, "council", None)
             if severity == "escalate" and council is not None:
                 routed = council.escalate(

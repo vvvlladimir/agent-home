@@ -431,6 +431,9 @@ class Council:
         self.board.post(agent_id, summary, kind="escalation", target=target, run_id=run_id, ttl_s=6 * 3600)
         if recipient is None:
             if self.manager is not None and self.manager.enabled:
+                if source in NO_FORWARD_SOURCES:  # depth 1: a task's answer must not wake the one who
+                    # asked again (stories 2026-11-15: manager → task → escalation → manager, all day)
+                    return {"status": "on_board", "note": f"for the house manager's next run ({note})"}
                 self.manager.on_escalation(agent_id, summary)
                 return {"status": "on_board", "note": f"for the house manager ({note})"}
             return {"status": "on_board", "note": f"kept for the daily review ({note})"}

@@ -249,6 +249,7 @@ class AgentRuntime:
             "priority": priority,
             "context": replay["context"] if replay else None,
             "prompt_reason": prompt_reason,
+            "entity_id": entity_id,  # what woke it: its reports are about this entity (feed)
         }
         self.store.execute(
             "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow, replay_of) "
@@ -496,8 +497,11 @@ class AgentRuntime:
         )
 
     def inbox_add(
-        self, agent_id: str, run_id: str | None, severity: str, summary: str, dry: bool = False
+        self, agent_id: str, run_id: str | None, severity: str, summary: str, dry: bool = False,
+        entity_id: str | None = None,
     ) -> None:
+        """`entity_id`: the entity whose change woke the run, so a report is linked to it even when
+        the model names it in words ("Bedroom window") rather than by id (stories 2026-11-15)."""
         if dry:
             return
         same = self._open_alarm_about(summary) if severity == "alarm" else None
@@ -516,6 +520,7 @@ class AgentRuntime:
             f"{agent_id}: {summary}"[:300],
             level="info" if severity == "info" else "warning",
             agent_id=agent_id,
+            entity_id=entity_id,
             run_id=run_id,
             data={"severity": severity},
         )

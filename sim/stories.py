@@ -262,7 +262,7 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
             got = [
                 a
                 for a in anchors
-                if any(mentions(r, eid) and 0 <= r["ts"] - a["ts"] <= 60 * exp["within_min"] for r in reports)
+                if any(about(r, eid) and 0 <= r["ts"] - a["ts"] <= 60 * exp["within_min"] for r in reports)
             ]
             need = exp.get("share", 1.0)
             ok = bool(anchors) and len(got) >= need * len(anchors)
@@ -427,6 +427,12 @@ def mentions(row: dict, eid: str | None) -> bool:
     return (
         bool(eid) and re.search(rf"(?<![\w.]){re.escape(eid)}(?![\w])", row.get("summary") or "") is not None
     )
+
+
+def about(row: dict, eid: str | None) -> bool:
+    """A report about `eid`: woken by its change (the feed links it), or naming it. Models often
+    write "Bedroom window" rather than the id (stories 2026-11-15: two warnings counted as missed)."""
+    return bool(eid) and (row.get("entity_id") == eid or mentions(row, eid))
 
 
 def _built_on_lies(proposals: list[dict], events: list[dict], tag: str) -> tuple[list[str], int]:

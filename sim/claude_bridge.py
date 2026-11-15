@@ -37,6 +37,13 @@ PREAMBLE = (
 )
 
 
+# `--json-schema` answers through one structured-output turn: 2 turns in all. More means the model
+# reached for a native tool, got "No such tool available" from the CLI and wrote its answer about
+# that (stories 2026-11-15: an agent told the owner its call_service was broken before calling it).
+CLEAN_TURNS = 2
+ATTEMPTS = 2
+
+
 class BridgeError(Exception):
     pass
 
@@ -72,7 +79,28 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
            "--setting-sources", "", "--strict-mcp-config", "--system-prompt", system,
            "--output-format", "json", "--json-schema", json.dumps(schema)]  # fmt: skip
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}  # a nested session is fine here
-    started = time.monotonic()
+    started, n_in, n_out = time.monotonic(), 0, 0
+    for attempt in range(1, ATTEMPTS + 1):
+        data = _once(cmd, prompt, env, timeout)
+        usage = data.get("usage") or {}  # every attempt was paid for
+        n_in += sum(int(usage.get(k) or 0) for k in
+                    ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))  # fmt: skip
+        n_out += int(usage.get("output_tokens") or 0)
+        if int(data.get("num_turns") or CLEAN_TURNS) <= CLEAN_TURNS:
+            break
+        if attempt == ATTEMPTS:
+            raise BridgeError(f"claude -p reached for a native tool {ATTEMPTS} times; its answer is not used")
+    used = list((data.get("modelUsage") or {}).keys())
+    return {
+        "out": data["structured_output"],
+        "model": used[0] if used else model,
+        "tokens_in": n_in,
+        "tokens_out": n_out,
+        "ms": round((time.monotonic() - started) * 1000),
+    }
+
+
+def _once(cmd: list[str], prompt: str, env: dict, timeout: float) -> dict:
     with _slots:
         try:
             proc = subprocess.run(
@@ -84,20 +112,9 @@ def run(system: str, prompt: str, schema: dict, model: str, effort: str, timeout
         data = json.loads(proc.stdout)
     except json.JSONDecodeError as err:
         raise BridgeError(f"claude -p: {(proc.stderr or proc.stdout).strip()[:300]}") from err
-    out = data.get("structured_output")
-    if data.get("is_error") or not isinstance(out, dict):
+    if data.get("is_error") or not isinstance(data.get("structured_output"), dict):
         raise BridgeError(f"claude -p: {str(data.get('result') or data.get('subtype'))[:300]}")
-    usage = data.get("usage") or {}
-    n_in = sum(int(usage.get(k) or 0) for k in
-               ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))  # fmt: skip
-    used = list((data.get("modelUsage") or {}).keys())
-    return {
-        "out": out,
-        "model": used[0] if used else model,
-        "tokens_in": n_in,
-        "tokens_out": int(usage.get("output_tokens") or 0),
-        "ms": round((time.monotonic() - started) * 1000),
-    }
+    return data
 
 
 def _turn(system: str, turns: list[str], tools: list[dict], model: str, effort: str, timeout: float) -> dict:

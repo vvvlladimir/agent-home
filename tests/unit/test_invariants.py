@@ -129,6 +129,9 @@ def test_a_nearby_draft_does_not_excuse_an_action_awaiting_approval():
     assert not by_name(check_trace(trace(inbox=[claim], actions=shadow), "shadow"))["inbox_no_shadow_claims"][
         "ok"
     ]
+    honest = {**claim, "summary": "Both calls returned 'shadow mode: logged, not sent', so neither device "
+              "was turned off."}  # stories 2026-11-15: a negation is not a claim
+    assert by_name(check_trace(trace(inbox=[honest], actions=shadow), "shadow"))["inbox_no_shadow_claims"]["ok"]
 
 
 def test_a_review_about_drafts_made_days_earlier_is_true():

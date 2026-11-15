@@ -235,6 +235,15 @@ async def test_an_escalating_report_marks_the_run_and_reaches_the_inbox(tmp_path
     assert "severity" in steps(await run(bad), "tool")[0]["result"]["error"]
 
 
+async def test_a_report_is_linked_to_the_entity_that_woke_the_run(tmp_path):
+    """Stories 2026-11-15: the model wrote "Bedroom window", not the id; the feed links it anyway."""
+    stack = stack_with(tmp_path, call("report", severity="warning", summary="Window open, heater on."))
+    stack.rt.wake("room", source="event", reason="window opened", entity_id="light.room_lamp")
+    await settle(stack)
+    [row] = stack.store.query("SELECT entity_id FROM feed WHERE kind='report'")
+    assert row["entity_id"] == "light.room_lamp"
+
+
 # --- the other tools --------------------------------------------------------------------------
 
 

@@ -631,6 +631,21 @@ class Orchestrator:
             "budget": self.budget.today(),
         }
 
+    def budget_notice(self) -> None:
+        """Once a day: the owner learns that the cloud budget is spent, not only the feed
+        (stories 2026-11-15: the house manager went silent for days and the inbox said nothing)."""
+        day = self.budget.day()
+        if self.agents_rt is None or self.store.get("budget_notice_day") == day:
+            return
+        self.store.set("budget_notice_day", day)
+        state = self.budget.today()
+        self.agents_rt.inbox_add(
+            "orchestrator", None, "warning",
+            f"The cloud budget for today is spent ({state['spent_today_eur']:.2f} of "
+            f"{state['daily_limit_eur']:.2f} EUR). Until midnight the house manager is not woken and "
+            "drafts and reviews wait; room agents keep working. Raise the daily budget in Settings to go on.",
+        )  # fmt: skip
+
     # --- one model turn, with fallback ------------------------------------------------------
     async def turn(
         self, system: str, transcript: list[dict], tools: list[dict], priority: Priority, redactor: Redactor,
@@ -661,6 +676,7 @@ class Orchestrator:
                 turn.calls = [{**c, "input": redactor.restore(c["input"])} for c in turn.calls]
             return turn
         if errors and all("budget" in e for e in errors):
+            self.budget_notice()
             raise OrchestratorError("budget", "; ".join(errors))
         raise OrchestratorError("unavailable", "; ".join(errors) or "no provider is configured")
 

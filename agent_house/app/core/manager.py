@@ -4,11 +4,14 @@ Wakes are deterministic and cheap; the model is only called when one of them fin
 (CLAUDE.md: a prefilter decides whether any LLM is called):
 
 - an escalation that stayed on the board for the orchestrator (no room owner was named);
-- the sweep every `manager_sweep_min` minutes, and only if `anomalies()` is not empty:
-  nobody home (or night) and lights / media / fans still on; room runs that ended in error or
-  escalated; deployed automations of ours whose precision or coverage fell below `metrics.WEAK`;
+- the sweep every `manager_sweep_min` minutes, and only if `anomalies()` finds something it has
+  not handed to the model yet: nobody home (or night) and lights / media / fans still on; room
+  runs that ended in error or escalated (not the answers to its own tasks); deployed automations
+  of ours whose precision or coverage fell below `metrics.WEAK`. A finding that stays as it was
+  is not sent again (in shadow the lights it asked about stay on); one that clears and comes back is;
 - the owner or a tester: `POST /api/manager/wake`.
-At most `manager_max_wakes_per_hour`, one run at a time, never with the kill switch engaged.
+At most `manager_max_wakes_per_hour`, one run at a time, never with the kill switch engaged, and
+not while no model can answer (the cloud budget is spent): the owner is told once that day.
 
 What the manager may do, and through what (nothing reaches HA any other way):
 - `call_service` on entities it owns (no area, or an area without a room agent) → the actuator,
@@ -42,6 +45,7 @@ from .redact import Redactor
 
 log = logging.getLogger(__name__)
 
+STILL_ON = " and still on: "
 LEFT_ON = frozenset({"light", "media_player", "fan", "switch"})
 ON_STATES = frozenset({"on", "playing", "paused"})
 MAX_TASKS_PER_RUN = 3
@@ -134,6 +138,7 @@ class Manager:
         self._last_run = 0.0
         self._last_run_id: str | None = None
         self.weak: list[dict] = []  # automations flagged by the last metrics read
+        self._told: set[str] = set()  # finding keys already handed to the model (see `_keys`)
 
     # --- settings ---------------------------------------------------------------------------
     @property
@@ -173,10 +178,13 @@ class Manager:
             )  # fmt: skip
             if left:
                 why = "nobody is home" if nobody else f"house mode is {mode}"
-                out.append(f"{why} and still on: {', '.join(left[:12])}")
+                out.append(f"{why}{STILL_ON}{', '.join(left[:12])}")
+        # a task run that escalates is the answer to a task (ours, or a room's question): it is on
+        # the board already, and counting it would wake the manager about its own request again
         rows = self.store.query(
             "SELECT agent_id, status, COUNT(*) AS n FROM runs WHERE started>=? AND agent_id<>? "
-            "AND status IN ('error', 'escalated', 'timeout') GROUP BY agent_id, status",
+            "AND status IN ('error', 'escalated', 'timeout') "
+            "AND NOT (status='escalated' AND wake_source='task') GROUP BY agent_id, status",
             (since, ORCHESTRATOR),
         )
         out += [f"room agent {r['agent_id']}: {r['n']} run(s) {r['status']}" for r in rows]
@@ -214,11 +222,33 @@ class Manager:
         self.council.wake_fired("manager_sweep")
         await self.refresh_metrics()
         found = self.anomalies()
-        if found:
-            self.request("sweep: " + "; ".join(found))
+        keys = set().union(*map(self._keys, found))
+        self._told &= keys  # what cleared is forgotten: if it comes back, it is new again
+        new = [f for f in found if self._keys(f) - self._told]
+        if new:
+            self.request("sweep: " + "; ".join(new))
+        elif found:
+            self.feed.add("gate_drop", f"manager: sweep found only what it already handed over "
+                          f"({len(found)}), no model call", level="debug", agent_id=ORCHESTRATOR)  # fmt: skip
         else:
             self.feed.add("gate_drop", "manager: sweep found nothing, no model call", level="debug",
                           agent_id=ORCHESTRATOR)  # fmt: skip
+
+    @staticmethod
+    def _keys(finding: str) -> set[str]:
+        """What a finding is about: each entity of a "still on" list (so one more light left on
+        is new, while the same lights still on are not), else the finding itself."""
+        _, sep, entities = finding.partition(STILL_ON)
+        return {f"on:{e}" for e in entities.split(", ")} if sep else {finding}
+
+    def _no_model(self) -> str | None:
+        """Why no model could answer a wake now, or None. Only the budget is known in advance."""
+        state = self.orch.budget.today()
+        if not state["exhausted"] or any(p.available for p in self.orch.providers("manage")):
+            return None  # a local model may still answer; other failures are the run's to record
+        self.orch.budget_notice()
+        spent, limit = state["spent_today_eur"], state["daily_limit_eur"]
+        return f"the cloud budget for today is spent ({spent:.2f} of {limit:.2f} EUR)"
 
     def request(self, reason: str, *, force: bool = False) -> dict:
         """Queue a wake; coalesces while a run is going. → {status, ...}."""
@@ -226,6 +256,9 @@ class Manager:
             return {"status": "refused", "detail": "the kill switch is engaged"}
         if not self.enabled and not force:
             return {"status": "refused", "detail": "manager_enabled is off"}
+        if why := self._no_model():
+            self.feed.add("gate_drop", f"manager: not woken, {why}", level="info", agent_id=ORCHESTRATOR)
+            return {"status": "refused", "detail": why}
         now = self.clock()
         while self._wakes and now - self._wakes[0] > 3600:
             self._wakes.popleft()
@@ -292,7 +325,9 @@ class Manager:
 
     async def run(self, reasons: list[str]) -> str:
         """One bounded conversation. → run id."""
-        found = [f for f in self.anomalies() if not any(f in r for r in reasons)]
+        current = self.anomalies()
+        self._told |= set().union(*map(self._keys, current))  # the model sees all of them below
+        found = [f for f in current if not any(f in r for r in reasons)]
         self._last_run = self.clock()
         user = self.context(reasons, found)
         trace = _Trace(self.orch, "manager: " + "; ".join(reasons), "manage")

@@ -147,3 +147,58 @@ async def test_an_escalation_without_an_owner_goes_to_the_manager(tmp_path):
     await s.manager.wait()
     [run] = s.store.query("SELECT wake_reason, status FROM runs WHERE agent_id='orchestrator'")
     assert "the hall light flickers" in run["wake_reason"] and run["status"] == "ok"
+
+
+def manager_runs(s) -> int:
+    return s.store.query("SELECT COUNT(*) AS n FROM runs WHERE agent_id='orchestrator'")[0]["n"]
+
+
+async def sweep(s) -> None:
+    s.now[0] += 3601
+    await s.manager.tick()
+    await s.manager.wait()
+
+
+async def test_the_same_finding_is_handed_to_the_model_once_until_it_changes(tmp_path):
+    """Stories 2026-11-15: in shadow the lights it asked about stay on; every hourly sweep sent
+    the same finding again and spent the day's cloud budget."""
+    s = stack(tmp_path)
+    await sweep(s)
+    assert manager_runs(s) == 1
+    await sweep(s)  # same lights still on (shadow): no model call
+    assert manager_runs(s) == 1
+    assert any("already handed over" in r["summary"] for r in s.store.query("SELECT summary FROM feed"))
+    s.ha.add("light.porch", "on")  # one more light left on: new
+    await sweep(s)
+    assert manager_runs(s) == 2
+    s.ha.states["light.hall"]["state"] = "off"  # cleared: nothing new to say
+    await sweep(s)
+    assert manager_runs(s) == 2
+    s.ha.states["light.hall"]["state"] = "on"  # and back again: new
+    await sweep(s)
+    assert manager_runs(s) == 3
+
+
+async def test_an_escalation_from_a_task_run_does_not_wake_the_manager_again(tmp_path):
+    """The answer to its own task stays on the board for its next run (no manager → task →
+    escalation → manager loop)."""
+    s = stack(tmp_path)
+    result = s.council.escalate("room", "the hall light is still on (shadow)", source="task")
+    assert result["status"] == "on_board" and "next run" in result["note"]
+    await s.manager.wait()
+    assert manager_runs(s) == 0
+    assert any("still on (shadow)" in r["text"] for r in s.council.board.since(0))
+
+
+async def test_a_spent_cloud_budget_stops_wakes_and_tells_the_owner_once_a_day(tmp_path):
+    s = stack(tmp_path)
+    s.orch.settings.orchestrator_provider, s.orch.settings.anthropic_api_key = "anthropic", "key"
+    s.orch.budget.add("anthropic", "m", 0, 0, 1.2)
+    first = s.manager.request("sweep: lights")
+    assert first["status"] == "refused" and "budget" in first["detail"]
+    assert s.manager.request("manual: look", force=True)["status"] == "refused"
+    await s.manager.wait()
+    assert manager_runs(s) == 0 and s.llm.requests == []
+    inbox = s.store.query("SELECT severity, summary FROM inbox")
+    assert len(inbox) == 1 and inbox[0]["severity"] == "warning" and "budget" in inbox[0]["summary"]
+

@@ -145,3 +145,14 @@ def test_the_owners_automation_is_in_the_backfilled_history_too():
     assert rows[0]["context_entity_id"] == "automation.tv_off" and "context_user_id" not in rows[0]
     assert rows[0]["context_event_type"] == "automation_triggered"
     assert rows[1]["context_user_id"] == "u" and rows[2]["context_user_id"] == "u"
+
+
+def test_a_report_linked_to_the_entity_counts_even_when_it_names_it_in_words():
+    """Stories 2026-11-15: "Bedroom window changed off to on …" came within a minute, twice, and was
+    counted as missed because it did not spell binary_sensor.bedroom_window."""
+    from sim.stories import about
+
+    words = {"kind": "report", "summary": "bedroom: Bedroom window opened while the heater is on"}
+    assert not about(words, "binary_sensor.bedroom_window")
+    assert about({**words, "entity_id": "binary_sensor.bedroom_window"}, "binary_sensor.bedroom_window")
+    assert not about({**words, "entity_id": "binary_sensor.kitchen_window"}, "binary_sensor.bedroom_window")
