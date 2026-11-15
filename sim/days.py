@@ -73,7 +73,7 @@ class Driver:
             time.sleep(0.01)
         return False
 
-    def busy(self) -> bool:
+    def busy(self, until: float | None = None) -> bool:
         def check() -> bool:
             rt, orch = self.ctx.agents_rt, self.ctx.orchestrator
             review = getattr(self.ctx.council, "review", None)
@@ -85,18 +85,19 @@ class Driver:
                 or getattr(orch, "_tasks", None)
                 or (review is not None and review.running)
                 or (task is not None and not task.done())
-                or self.ctx.gate.pending()
+                or self.ctx.gate.pending(until)
             )
 
         return self.call(check)
 
-    def settle(self, timeout: float = SETTLE_TIMEOUT_S) -> bool:
-        """Flush the debounce, then wait until nothing runs; False on timeout."""
+    def settle(self, timeout: float = SETTLE_TIMEOUT_S, until: float | None = None) -> bool:
+        """Settle the debounces due before house time `until` (the next event; None: all), then
+        wait until nothing runs; False on timeout."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if self.call(self.ctx.gate.pending):
-                self.call(self.ctx.gate.flush)
-            if not self.busy():
+            if self.call(lambda: self.ctx.gate.pending(until)):
+                self.call(lambda: self.ctx.gate.flush(until))
+            if not self.busy(until):
                 return True
             time.sleep(0.02)
         return False
@@ -154,14 +155,15 @@ def play_days(
             if row.get("ts", 0) >= t0:
                 feed.setdefault(row["id"], row)
 
-    for ev in events:
+    drv.call(lambda: setattr(drv.ctx.gate, "manual_debounce", True))  # debounces settle in house time
+    for i, ev in enumerate(events):
         while next_check <= ev.ts:  # the work the real-time loops would have done meanwhile
             clock.travel_to(next_check)
             drv.checkpoint()
-            if not drv.settle():
+            if not drv.settle(until=ev.ts):
                 stuck.append({"ts": next_check, "at": "checkpoint"})
             if on_checkpoint is not None and on_checkpoint(next_check):
-                drv.settle()
+                drv.settle(until=ev.ts)
             if next_check % 3600 == 0:
                 keep_feed()
             if snapshots and _is_midnight(next_check):  # a day to restore from (sim/snapshot.py)
@@ -174,7 +176,8 @@ def play_days(
         applied += 1
         if not drv.seen(ev):
             unseen += 1
-        if not drv.settle():
+        # a debounce due after the next event waits for it: a contact bouncing back cancels its wake
+        if not drv.settle(until=events[i + 1].ts if i + 1 < len(events) else None):
             stuck.append({"ts": ev.ts, "at": ev.entity_id, "tag": ev.tag})
         day = clock.local().date()
         if progress and day != last_day:
@@ -188,6 +191,8 @@ def play_days(
         if on_checkpoint is not None and on_checkpoint(next_check):
             drv.settle()
         next_check += step
+    drv.settle()
+    drv.call(lambda: setattr(drv.ctx.gate, "manual_debounce", False))
     keep_feed()
     t1 = clock.time()
 

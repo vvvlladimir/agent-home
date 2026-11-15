@@ -79,6 +79,10 @@ class EventGate:
         self.scope_of, self.wake, self.clock, self.wall = scope_of, wake, clock, wall
         self._timers: dict[tuple[str, int], asyncio.TimerHandle] = {}
         self._pending: dict[tuple[str, int], tuple[str, str | None, str]] = {}
+        self._due: dict[tuple[str, int], float] = {}  # when each pending debounce settles (house time)
+        # the simulator (sim/days.py) jumps house time and settles debounces itself with `flush`;
+        # a real-time timer would fire while it waits on a model call, before the next house event
+        self.manual_debounce = False
         self._last_rule_wake: dict[tuple[str, int], float] = {}
         self._last_value: dict[tuple[str, int, str], float] = {}
         self._wakes: dict[str, deque[float]] = {}
@@ -104,6 +108,7 @@ class EventGate:
             timer.cancel()
         self._timers.clear()
         self._pending.clear()
+        self._due.clear()
         self._cron_next.clear()
         known = set(self.agents.agents)
         self._last_rule_wake = {k: v for k, v in self._last_rule_wake.items() if k[0] in known}
@@ -137,9 +142,11 @@ class EventGate:
                         continue
                 self._pending[key] = (entity_id, old_state, new_state)
                 if key in self._timers:
-                    self._timers[key].cancel()  # still changing: restart the debounce
-                loop = asyncio.get_running_loop()
-                self._timers[key] = loop.call_later(rule.debounce_s, self._settled, key)
+                    self._timers.pop(key).cancel()  # still changing: restart the debounce
+                self._due[key] = self.wall() + rule.debounce_s
+                if not self.manual_debounce:
+                    loop = asyncio.get_running_loop()
+                    self._timers[key] = loop.call_later(rule.debounce_s, self._settled, key)
         if alarm_reason is not None and not watched:
             self._unwatched(entity_id, old_state, new_state, alarm_reason)
 
@@ -153,6 +160,7 @@ class EventGate:
 
     def _settled(self, key: tuple[str, int]) -> None:
         self._timers.pop(key, None)
+        self._due.pop(key, None)
         pending = self._pending.pop(key, None)
         agent = self.agents.get(key[0])
         if pending is None or agent is None or not agent.enabled or key[1] >= len(agent.wake_rules.events):
@@ -179,17 +187,27 @@ class EventGate:
             reason += f" {rule.reason}"
         self._fire(agent, "event", reason, rule.priority, entity_id)
 
-    def flush(self) -> int:
-        """Settle every pending debounce now; the count settled. For the simulator (sim/days.py),
-        which jumps house time past the debounce instead of waiting for it in real time."""
-        keys = list(self._timers)
+    def flush(self, until: float | None = None) -> int:
+        """Settle the pending debounces now; the count settled. For the simulator (sim/days.py),
+        which jumps house time instead of waiting in real time: `until` is the house time of its
+        next event, so only debounces due before it settle (None: all). A door contact bouncing
+        back at that event must still be able to cancel its own wake."""
+        keys = self._due_keys(until)
         for key in keys:
-            self._timers[key].cancel()
+            timer = self._timers.pop(key, None)
+            if timer is not None:
+                timer.cancel()
             self._settled(key)
         return len(keys)
 
-    def pending(self) -> int:
-        return len(self._timers)
+    def pending(self, until: float | None = None) -> int:
+        return len(self._due_keys(until))
+
+    def _due_keys(self, until: float | None) -> list[tuple[str, int]]:
+        # strictly before the next event: on a tie the event comes first (a contact that bounces
+        # back exactly one debounce later still cancels the wake). Absolute house times: the
+        # house clock runs on while the simulator waits for a model, and must not decide a tie
+        return [k for k, due in self._due.items() if until is None or due < until]
 
     # --- caps -----------------------------------------------------------------------------
     def _recent(self, agent_id: str) -> deque[float]:

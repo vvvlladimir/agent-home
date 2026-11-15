@@ -89,6 +89,23 @@ async def test_a_change_that_reverts_inside_the_debounce_does_not_wake(tmp_path)
     assert len(g.wakes) == 1, "ends on: one wake"
 
 
+async def test_the_simulator_settles_debounces_in_house_time(tmp_path):
+    """sim/days.py jumps house time: a debounce due at or after the next event waits for it
+    (flush until that event), so a contact that bounces back within the debounce never wakes."""
+    g = Gate(tmp_path, {"events": [{"entities": [MOTION], "to": ["on"], "debounce_s": 1}]})
+    g.gate.manual_debounce = True
+    t = g.wall[0]
+    g.change(MOTION, "off", "on")
+    g.wall[0] += 0.003  # the house clock runs on while the simulator waits: a tie stays a tie
+    assert g.gate.pending() == 1 and g.gate.pending(until=t + 1) == 0, "due at the next event: it waits"
+    assert g.gate.flush(until=t + 1) == 0 and g.wakes == []
+    g.wall[0] = t + 1
+    g.change(MOTION, "on", "off")  # bounced back exactly one debounce later
+    assert g.gate.flush(until=t + 600) == 1 and g.wakes == []
+    g.change(MOTION, "off", "on")
+    assert g.gate.flush() == 1 and len(g.wakes) == 1
+
+
 async def test_cooldown_per_rule(tmp_path):
     g = Gate(tmp_path, {"events": [{"entities": [MOTION], "to": ["on"], "debounce_s": 0, "cooldown_s": 60}]})
     for _ in range(3):
