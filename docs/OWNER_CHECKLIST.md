@@ -317,6 +317,39 @@ Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_CO
 4. Commit `backlog.md` to `owner-reports/qa/<date>.md`.
    `[UNVERIFIED-ON-HW]` the same roles with `--room-llm jetson --jetson-host <ip>` and one role only.
 
+## D38 — the learner on the Jetson (about 30 minutes, then a week of watching)
+
+What it does: the Jetson keeps the house's history on its own disk and learns from it every night
+(habits over months, routines, what follows what, which automations you keep correcting). It never
+switches anything itself and gets no Home Assistant token. Plan: `docs/PLAN.md` → D38; decisions D38, D39.
+
+1. **Before the first start (optional):** in HA's `configuration.yaml`, `recorder: purge_keep_days: 60`,
+   restart HA. The learner reads what HA still has on its first contact; after that it keeps its own.
+2. **On the Jetson:** `git pull`, then (once) `jetson/setup.sh` if `/etc/agent-house/token` does not
+   exist. Mount the NVMe, then
+   `jetson/learner/setup_learner.sh --data /mnt/nvme/agent-house-learner` — add `--stop-llm` to stop
+   llama-server for good (D38). Check: `journalctl -u agent-house-learner -f` and
+   `curl -H "Authorization: Bearer $(cat /etc/agent-house/token)" http://localhost:9200/status`.
+3. **Add-on options:** `jetson_learner_url: http://<jetson-ip>:9200`, `jetson_token` = the Jetson's token.
+   With `--stop-llm`: empty `jetson_llm_url`, set `orchestrator_provider: anthropic` (or `openai`) with
+   its key, or drafts have no model. Restart the add-on.
+4. **Council page → Learner:** *connected*; *From the logbook: done*; press *Train now* once; *Training: ok*
+   within minutes. Send `owner-reports/` a screenshot or `GET api/learner` if anything says failed.
+5. **After a week:** the card's *What it found* and the findings (a `timeout` finding names a light
+   controller you keep correcting, with the timeout the history asks for). Activity → filter agent
+   `learner`: every `shadow` action should be one you wanted. Only then Settings → *Learner mode: live*
+   (the global mode must be live too).
+6. **Rooms with an agent:** the learner never acts on a room agent's devices. To let it act in a room,
+   export the config and delete that room's agent.
+7. **Backup (optional):** the journal is `<data>/journal.db` (SQLite, WAL): copy it weekly, or
+   `sqlite3 journal.db ".backup /nas/learner.db"`.
+
+Unverified until this runs on your hardware [UNVERIFIED-ON-HW]: an automation's actions carry the
+context id of its `automation_triggered` event (the cause tags); uv installs Python 3.12 on the Orin;
+scikit-learn's aarch64 wheel installs on your JetPack; the first backfill of a big house (day by day,
+logbook only) finishes in minutes; a nightly training takes minutes on the Orin's CPU; port 9200 is
+reachable from the Pi.
+
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.

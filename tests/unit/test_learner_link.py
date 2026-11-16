@@ -20,6 +20,7 @@ ENTITIES = [
     {"entity_id": "binary_sensor.study_motion", "state": "off"},
     {"entity_id": "sensor.study_lux", "state": "10"},
     {"entity_id": "lock.front_door", "state": "locked"},
+    {"entity_id": "input_select.agent_house_mode", "state": "guests"},
 ]
 
 
@@ -44,7 +45,8 @@ def make(tmp_path, **kw):
     )  # fmt: skip
     link.actuator, stack.council.learner = stack.actuator, link
     link._programs = {"nodered-user": "Node-RED"}
-    stack.store.set("learner_model", {"trained_at": 0, "live": [
+    stack.store.set("learner_model", {"trained_at": 1e12, "live": [
+        {"entity_id": "input_select.agent_house_mode", "state": "away", "fires": 9, "right": 8, "right_days": 5},
         {"entity_id": "light.study_lamp", "state": "on", "fires": 9, "right": 8, "right_days": 5},
         {"entity_id": "light.room_lamp", "state": "on", "fires": 9, "right": 8, "right_days": 5},
         {"entity_id": "lock.front_door", "state": "unlocked", "fires": 9, "right": 8, "right_days": 5},
@@ -167,3 +169,16 @@ def test_a_room_agent_cannot_be_called_learner(tmp_path):
     with pytest.raises(ConfigError, match="reserved"):
         parse_agent({"id": "learner", "name": "x", "room": "room"})
 
+
+
+async def test_never_a_helper_and_nothing_from_a_stale_model(tmp_path, monkeypatch):
+    """The Jetson names the targets: the add-on only accepts devices, and only from a fresh model."""
+    stack, link = make(tmp_path, learner_mode="live")
+    stack.safety.set_mode("live")
+    stack.ha.registry.entity_area["input_select.agent_house_mode"] = None  # the orchestrator owns it
+    assert "input_select.agent_house_mode" not in link.targets()
+    assert await link.consider(suggestion("input_select.agent_house_mode", "away")) is None
+    stack.store.set("learner_model", {**stack.store.get("learner_model"), "trained_at": 0})  # stale
+    assert link.targets() == []
+    assert await link.consider(suggestion("light.study_lamp")) is None
+    assert stack.ha.calls == []

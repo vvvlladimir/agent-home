@@ -49,6 +49,10 @@ The orchestrator itself actuates exactly one entity, `input_select.agent_house_m
 `auto_house_mode` is on and `orchestrator_mode` is `live` (Settings). It never leaves `guests` or
 `work`, which are yours.
 
+The learner (D38) acts as agent `learner`, only on devices no room agent owns, in shadow unless
+Settings → *Learner mode* is live and the global mode is live. Read its shadow actions in Activity
+(filter `learner`) before switching it on; lever 1 (global shadow) and the kill switch stop it too.
+
 ## Daily routine (two minutes)
 
 - **Inbox** (dashboard): T2 approvals waiting, reports with severity `warning` / `escalate`, and the

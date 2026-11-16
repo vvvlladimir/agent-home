@@ -213,45 +213,61 @@ Go / no-go after step 1: **go** (D38). Two ways out: HA automations keep coming 
 - [x] Verdict with numbers in `DECISIONS.md` (D38 provisional → final)
 
 2. Contracts
-- [ ] `contracts/schemas/house_event.schema.json`: one event as the add-on forwards it (entity, old/new,
-      cause: person / ours / owner automation / device, context user)
-- [ ] `contracts/schemas/house_model.schema.json`: routines, dependencies (A → B, lag, lift),
-      rules (triggers, conditions, P, shadow record, cost), modes, unusual now, device health,
-      corrections per deployed automation
-- [ ] Learner API (ingest, backfill status, `GET /house-model`, `POST /replay`) next to the metrics API
+- [x] `house_events`, `house_registry`, `house_model`, `learner_now`, `learner_replay`, `learner_status`
+      schemas; the learner's own API with a bearer token on everything but `/healthz`
+      → `contracts/schemas/`, `contracts/learner.openapi.yaml`; `GET /api/learner`, `POST /api/learner/train` (M6)
 
-3. Jetson learner (`jetson/learner/`, replaces llama-server)
-- [ ] Ingest + journal on NVMe: events in full, numeric sensors as 1-minute aggregates, retention
-- [ ] Backfill from HA's history and logbook on first start and after a gap
-- [ ] Layers: routines and usual states (counts), dependencies (lagged lift + permutation test),
-      predictions (LightGBM per device and state, k-fold by day shadow record, distilled rules),
-      modes (learnt from the owner's mode switches), unusual now, device health
-- [ ] Nightly retrain on a sliding window, recent days weighted up; online counts in between
-- [ ] `POST /replay`: what a candidate automation would have done on the last 30–60 days
-- [ ] systemd unit, `setup.sh --role learner`, metrics endpoint kept; fake in `sim/fake_learner.py`
+3. Jetson learner (`jetson/learner/`, replaces llama-server) → D39
+- [x] Journal on the NVMe (SQLite, duplicates ignored, retention 400 days); numeric sensors once a
+      minute (the add-on sends the last value) → `journal.py`
+- [x] Layers → `brain.py`: the D35 habits over up to 42 days (the add-on's own `predict.scan`), the
+      booster per device and state with the same k-fold-by-day shadow record (per probability bin),
+      routines, dependencies (lift over chance, a z-test instead of a permutation test), corrections,
+      the light controller's timeout from corrections (prototype E2), usual states and event relevance
+      over the longer history, health, modes, asks
+- [x] Nightly training at 03:30 on the last 90 days, and once on start; live suggestions on every batch
+- [ ] Recent days weighted up in training (today: a 90-day window, all days equal)
+- [x] `POST /replay` of simple automations (state / numeric_state / time / sun; and / or / not;
+      services that set a state); anything else is named as unsupported → `replay.py`
+- [x] systemd unit and `setup_learner.sh` (uv, Python 3.12 venv, `--data` on the NVMe, `--stop-llm`)
+- [ ] The sim panel and the polygon with a learner (today the tests run the real learner in-process,
+      `tests/integration/test_learner_loop.py`; `make sim` has none)
 
-4. Add-on side
-- [ ] Forwarder: the existing HA subscription → Jetson, small buffer, gap backfill on reconnect → `app/ha/`
-- [ ] Learner client; `predict.py` stays the fallback while the Jetson is off
-- [ ] Settings / Overview: learner status, last training, history length
+4. Add-on side → `core/learner.py`, D39
+- [x] Forwarder with causes from the HA context, automation runs, ask answers; bounded buffer; the
+      registry on start and on change
+- [x] Backfill from HA's logbook (not the history: numeric sensors before the first contact are not filled)
+- [x] The learner's habits replace the add-on's own 14-day scan while fresh; `predict.py` stays the
+      fallback; its usual states / event relevance feed the unusual notes and the event gate
+- [x] Live suggestions through the actuator as agent `learner` (shadow by default, only where the
+      orchestrator owns the entity, reserved id) → `test_learner_link.py`
+- [x] Council page: the learner card (journal, backfill, training, counts, facts, train now); Settings:
+      learner mode
 
 5. Orchestrator in the cloud, room agents off
-- [ ] Room profile = owned entities + learner facts, rendered as text; chat about a room uses it
-- [ ] Manager prefilter wakes on learner findings (rule ready, unusual now, corrections piling up)
+- [x] What the learner found, as counts, in the draft prompt (per room) and in the house summary
+      (chat, manager)
+- [x] Manager prefilter wakes on new learner findings (a light controller corrected too often)
+- [x] A light controller the owner keeps correcting → finding `timeout:<entity>:<source>` with the
+      learnt timeout; drafting it writes our version (the owner's automation or Node-RED flow is never
+      edited)
 - [ ] Template library from the imported Node-RED flows (D18) with parameter slots; drafts =
       template + learnt parameters + replay numbers in the rationale
-- [ ] Improve deployed / imported automations from the owner's corrections (a draft of a new version)
-- [ ] Room agents off by default; polygon comparison (D28 metrics + cloud spend) learner + manager
-      vs room agents; if not worse, remove the agent runtime, the tool-call bench and llama-server;
-      D11, D21, D23 marked superseded
-- [ ] Routine work (daily review summary) deterministic or cloud
+- [ ] Replay numbers in every habit / timeout draft's rationale (the endpoint exists, the add-on does
+      not call it yet)
+- [ ] Room agents off: polygon comparison (D28 metrics + cloud spend) learner + manager vs room agents
+      with real models; if not worse, remove the agent runtime, the tool-call bench and llama-server;
+      D11, D23 marked superseded. Until then: delete a room's agent to let the learner act there (D22)
+- [x] Routine work (daily review summary) on the cloud when no local model is configured (D39)
 
 6. Owner in the loop
-- [ ] Mode labels (sleep, guests, focus) as helpers; uncertain mode → an ask within the ask budget
-- [ ] Ask answers read from `mobile_app_notification_action` (a "no" teaches too)
+- [x] Mode helpers are predicted like any device (D36), so an uncertain mode is an ask within the budget
+- [x] Ask notifications get a No button; answers are forwarded to the learner and counted (`asks`)
+- [ ] A "no" weighs more than an ignored ask in training (today both count as "not right")
 - [ ] Later: "watch me" recording of a scene, then a draft from it
 
 Owner steps
+- [ ] **Owner:** install the learner on the Jetson (OWNER_CHECKLIST → D38 learner)
 - [ ] **Owner:** NVMe in the Jetson; static IP
 - [ ] **Owner:** `recorder: purge_keep_days: 60` now, back to 10 once the learner writes
 - [ ] **Owner:** areas on all devices, presence sensors per room (no phone tracking: presence comes from the radars, the bed sensor and `binary_sensor.presence_anyone_home`)

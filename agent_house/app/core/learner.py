@@ -30,6 +30,7 @@ from itertools import islice
 import httpx
 
 from . import clock, predict
+from .habits import ACT_DOMAINS
 from .insights import changes_from_logbook, fires_from_logbook
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,8 @@ ANSWER_ENTITY = "event.agent_house_ask"
 MAX_STATE = 255
 TIMEOUT_MIN_CORRECTIONS = 0.3  # a day
 FACTS = 12
+# devices the learner may act on live; helpers (input_boolean / input_select, the house mode) never
+LIVE_DOMAINS = frozenset(ACT_DOMAINS - {"input_boolean", "input_select"})
 
 
 def _ts(value) -> float | None:
@@ -495,15 +498,23 @@ class LearnerLink:
 
     # --- live suggestions ---------------------------------------------------------------------------
     def targets(self) -> list[str]:
-        """Entities the learner may suggest acting on: its live targets."""
-        model = self.store.get("learner_model") or {}
-        return sorted({m["entity_id"] for m in model.get("live") or []})
+        """Entities the learner may act on: devices among its live targets of a fresh model. Never a
+        helper (the house mode is the owner's and the orchestrator's; guests / work only the owner's):
+        the Jetson names the targets, so the add-on decides which kinds it accepts."""
+        model = self.model() or {}
+        return sorted(
+            {
+                m["entity_id"]
+                for m in model.get("live") or []
+                if isinstance(m.get("entity_id"), str) and m["entity_id"].split(".", 1)[0] in LIVE_DOMAINS
+            }
+        )
 
     async def consider(self, s: dict) -> dict | None:
         if self.actuator is None or s.get("mode") != "act" or not s.get("earned"):
             return None
         entity_id, state = s.get("entity_id"), s.get("state")
-        if not isinstance(entity_id, str) or not isinstance(state, str):
+        if not isinstance(entity_id, str) or not isinstance(state, str) or entity_id not in self.targets():
             return None
         key, now = (entity_id, state), clock.time()
         if now - self._acted.get(key, -1e18) < predict.SUPPRESS_S:
