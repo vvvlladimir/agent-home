@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 - **The Jetson learns your house instead of running a small model (D38).** A new service on the
   Jetson (`jetson/learner`) keeps the house's history on its own disk (months, not HA's 10 days) and
