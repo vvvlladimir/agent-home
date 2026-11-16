@@ -1,7 +1,7 @@
 """AI testers against the polygon (docs/POLYGON.md "AI testers").
 
     python -m sim.qa run --roles newcomer migrator fussy_tenant -- --orchestrator openai \
-        --room-llm compatible --room-model Qwen/Qwen3.5-4B --no-pace --backfill-days 14
+        --backfill-days 14
     python -m sim.qa coordinate .agent-logs/qa/<stamp>
     python -m sim.qa verify .agent-logs/qa/<stamp>
     python -m sim.qa claude                     # all of it on Claude Code alone, no keys (D30)
@@ -14,9 +14,10 @@ kind, similar text), asks the coordinator model (Qwen through an OpenAI-compatib
 question per candidate pair, and writes `backlog.json` + `backlog.md`.
 `verify`: replays each backlog item's steps on a fresh polygon with a fresh tester that sees only
 the steps; only items reproduced there are `confirmed`.
-`claude`: run + coordinate + verify where every model is a `claude -p` session (room agents haiku/low,
-orchestrator sonnet/medium, testers haiku, attackers sonnet, coordinator haiku/low, verifier
-sonnet/medium); needs only a logged-in `claude` CLI, e.g. a claude.ai/code cloud session.
+`claude`: run + coordinate + verify where every model is a `claude -p` session (orchestrator
+sonnet/medium, testers haiku, attackers sonnet, coordinator haiku/low, verifier sonnet/medium; the
+learner is no model, it runs in each polygon); needs only a logged-in `claude` CLI, e.g. a
+claude.ai/code cloud session.
 `up`, `pairs`, `coordinate --same`, `verify-up`, `verify-collect`, `down`: the same loop driven by a
 lead Claude Code session whose subagents are the testers and verifiers (skill `/polygon-claude`).
 Everything model-related is outside the add-on; nothing here runs in `make test` except the pure
@@ -173,7 +174,7 @@ def model_args(models: str) -> tuple[str, list[str]]:
     return "fake", ["--backfill-days", "14"]
 
 
-CLAUDE_POLYGON = ["--orchestrator", "claude", "--room-llm", "claude", "--no-pace", "--backfill-days", "14"]
+CLAUDE_POLYGON = ["--orchestrator", "claude", "--backfill-days", "14"]
 # the attackers and the usefulness judge need the stronger model
 CLAUDE_ROLE_MODELS = {"intruder": "sonnet", "chaos": "sonnet", "hands_off_owner": "sonnet"}
 

@@ -1,4 +1,5 @@
-"""What the sim panel changes: model backends, the Jetson address, the house spec. Persisted in
+"""What the sim panel changes: the cloud backends, the learner (in the sim or the real Jetson), the
+house spec. Persisted in
 `.data/sim/` (gitignored): `config.json` for settings, `secrets.json` (mode 0600) for API keys.
 
 Secrets never leave this module unmasked: `public()` shows the last four characters only.
@@ -15,41 +16,20 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-ROOM_BACKENDS = ("fake", "jetson", "openai", "anthropic", "compatible", "claude")
 CLOUD_BACKENDS = ("fake", "real", "claude")  # claude = `claude -p` (sim/claude_bridge.py)
-METRICS_SOURCES = ("auto", "fake", "jetson")
-_SECTIONS = ("room", "jetson", "anthropic", "openai", "house", "backfill_days")
-SECRET_KEYS = ("anthropic_api_key", "openai_api_key", "compatible_api_key", "jetson_token")
-
-
-@dataclass
-class RoomLLM:
-    backend: str = "fake"
-    openai_model: str = "gpt-6-luna"
-    anthropic_model: str = "claude-haiku-5-5"
-    compatible_base_url: str = "https://api.deepinfra.com/v1/openai"
-    compatible_model: str = "Qwen/Qwen3.5-4B"  # check the provider's catalogue for the exact id
-    claude_model: str = "haiku"  # backend "claude": `claude -p --model`, no API key (D30)
-    claude_effort: str = "low"
-    pace: bool = True  # slow cloud answers down to the Jetson's measured speed (D23)
-    prefill_tps: float = 515.0
-    decode_tps: float = 16.0
-    n_ctx: int = 8192
-    single_slot: bool = True  # llama-server runs with -np 1: one request at a time
+LEARNER_BACKENDS = ("sim", "jetson", "off")  # sim = jetson/learner/server.py in this process
+_SECTIONS = ("jetson", "anthropic", "openai", "house", "backfill_days")
+SECRET_KEYS = ("anthropic_api_key", "openai_api_key", "jetson_token")
 
 
 @dataclass
 class Jetson:
+    learner: str = "sim"  # off = the learner is down: the add-on falls back to predict.py
     host: str = ""  # IP or hostname of the real Jetson, e.g. 192.168.178.40
-    llm_port: int = 8080
-    metrics_port: int = 9100
-    metrics: str = "auto"  # auto = the real Jetson when the room backend is "jetson"
+    learner_port: int = 9200
 
-    def llm_url(self) -> str:
-        return f"http://{self.host}:{self.llm_port}" if self.host else ""
-
-    def metrics_url(self) -> str:
-        return f"http://{self.host}:{self.metrics_port}" if self.host else ""
+    def learner_url(self) -> str:
+        return f"http://{self.host}:{self.learner_port}" if self.host else ""
 
 
 @dataclass
@@ -75,7 +55,6 @@ class Faults:
 
 @dataclass
 class SimConfig:
-    room: RoomLLM = field(default_factory=RoomLLM)
     jetson: Jetson = field(default_factory=Jetson)
     anthropic: Cloud = field(default_factory=Cloud)
     openai: Cloud = field(default_factory=Cloud)
@@ -83,7 +62,7 @@ class SimConfig:
     backfill_days: int = 14
     secrets: dict = field(default_factory=dict, repr=False)
     faults: dict[str, Faults] = field(
-        default_factory=lambda: {k: Faults() for k in ("llm", "anthropic", "openai")}
+        default_factory=lambda: {k: Faults() for k in ("learner", "anthropic", "openai")}
     )
     path: Path | None = field(default=None, repr=False)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -104,8 +83,14 @@ class SimConfig:
                 continue
             if target == "secrets":
                 cfg.secrets = {k: v for k, v in data.items() if k in SECRET_KEYS and isinstance(v, str)}
-            else:
+                continue
+            try:
                 cfg.update(data)
+            except (ValueError, TypeError):  # a config from an older panel (room agents, D40)
+                jetson = data.get("jetson") if isinstance(data.get("jetson"), dict) else {}
+                known = {k: v for k, v in jetson.items() if k in Jetson.__dataclass_fields__}
+                cfg.update({**{k: data[k] for k in ("anthropic", "openai", "house", "backfill_days")
+                               if k in data}, "jetson": known})  # fmt: skip
         return cfg
 
     def save(self) -> None:
@@ -134,7 +119,10 @@ class SimConfig:
                 raise
 
     def _apply(self, data: dict[str, Any]) -> None:
-        for section in ("room", "jetson", "anthropic", "openai"):
+        unknown = sorted(set(data) - set(_SECTIONS))
+        if unknown:
+            raise ValueError(f"unknown setting {unknown[0]} (known: {', '.join(_SECTIONS)})")
+        for section in ("jetson", "anthropic", "openai"):
             if section in data:
                 _merge(getattr(self, section), data[section], section)
         if "house" in data:
@@ -143,24 +131,18 @@ class SimConfig:
             self.house = dict(data["house"])
         if "backfill_days" in data:
             self.backfill_days = max(0, min(int(data["backfill_days"]), 30))
-        if self.room.backend not in ROOM_BACKENDS:
-            raise ValueError(f"room.backend must be one of {ROOM_BACKENDS}")
-        if self.jetson.metrics not in METRICS_SOURCES:
-            raise ValueError(f"jetson.metrics must be one of {METRICS_SOURCES}")
+        if self.jetson.learner not in LEARNER_BACKENDS:
+            raise ValueError(f"jetson.learner must be one of {LEARNER_BACKENDS}")
         for c in (self.anthropic, self.openai):
             if c.backend not in CLOUD_BACKENDS:
                 raise ValueError(f"cloud backend must be one of {CLOUD_BACKENDS}")
         if self.jetson.host and not re.fullmatch(r"[A-Za-z0-9.\-]+|\[[0-9A-Fa-f:]+\]", self.jetson.host):
             raise ValueError("jetson.host: an IP address or a hostname, no scheme or port")
         efforts = ("low", "medium", "high", "xhigh", "max")
-        if self.room.claude_effort not in efforts or self.anthropic.claude_effort not in efforts:
+        if self.anthropic.claude_effort not in efforts:
             raise ValueError(f"claude_effort must be one of {efforts}")
         if self.openai.backend == "claude":
             raise ValueError("the claude backend serves the Anthropic gateway only")
-        if not re.fullmatch(r"https?://\S+", self.room.compatible_base_url):
-            raise ValueError("room.compatible_base_url must start with http:// or https://")
-        if not (0 < self.room.prefill_tps and 0 < self.room.decode_tps and 512 <= self.room.n_ctx <= 262144):
-            raise ValueError("room: speeds must be > 0 and n_ctx within 512..262144")
 
     def set_secret(self, key: str, value: str) -> None:
         if key not in SECRET_KEYS:
@@ -175,14 +157,8 @@ class SimConfig:
     def secret(self, key: str) -> str:
         return self.secrets.get(key, "")
 
-    def metrics_source(self) -> str:
-        if self.jetson.metrics == "auto":
-            return "jetson" if self.room.backend == "jetson" and self.jetson.host else "fake"
-        return self.jetson.metrics
-
     def public(self) -> dict:
         out = {
-            "room": asdict(self.room),
             "jetson": asdict(self.jetson),
             "anthropic": asdict(self.anthropic),
             "openai": asdict(self.openai),
@@ -190,7 +166,6 @@ class SimConfig:
             "backfill_days": self.backfill_days,
             "secrets": {k: mask(self.secrets.get(k, "")) for k in SECRET_KEYS},
             "faults": {k: asdict(v) for k, v in self.faults.items()},
-            "metrics_source": self.metrics_source(),
         }
         return out
 

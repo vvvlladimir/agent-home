@@ -1,44 +1,11 @@
-import json
-import time
-from pathlib import Path
-
 import httpx
-import jsonschema
 import pytest
 import websockets
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import StreamingResponse
 
 from sim.fake_ingress import create_app as ingress_app
-from sim.fake_jetson import JetsonSim
-from sim.fake_jetson import create_app as jetson_app
-from sim.fake_llm import LLMSim
 from sim.server import ServerThread
-
-SCHEMA = json.loads((Path(__file__).parents[2] / "contracts/schemas/jetson_metrics.schema.json").read_text())
-
-
-def test_jetson_metrics_and_profile():
-    llm = LLMSim()
-    sim = JetsonSim(llm)
-    with ServerThread(jetson_app(sim)) as srv:
-        assert httpx.get(f"{srv.url}/healthz").json() == {"ok": True}
-        m = httpx.get(f"{srv.url}/metrics.json").json()
-        jsonschema.validate(m, SCHEMA)
-        assert m["source"] == "sim" and m["ram_used_mb"] == 4600 and m["power_mode"] == "MAXN_SUPER"
-        sim.ram_used_mb, sim.throttled = 7000.0, True
-        m = httpx.get(f"{srv.url}/metrics.json").json()
-        jsonschema.validate(m, SCHEMA)
-        assert m["ram_used_mb"] == 7000 and m["throttled"] is True
-        auth = {"Authorization": "Bearer jetson-sim"}
-        assert httpx.post(f"{srv.url}/profile/qwen35-2b-fast").status_code == 401
-        assert httpx.post(f"{srv.url}/profile/nope", headers=auth).status_code == 404
-        r = httpx.post(f"{srv.url}/profile/qwen35-2b-fast", headers=auth)
-        assert r.json() == {"ok": True, "active_profile": "qwen35-2b-fast"}
-        assert llm.loading
-        assert httpx.get(f"{srv.url}/metrics.json").json()["llama"]["active_profile"] == "qwen35-2b-fast"
-        time.sleep(0.5)
-        assert not llm.loading
 
 
 @pytest.fixture

@@ -1,61 +1,40 @@
-# The polygon's test house: which room agents exist and what each scenario should (not) wake.
-# `python -m sim.polygon run` seeds these agents into a fresh add-on, plays the scenarios and checks
-# the invariants (sim/polygon.py). Agents follow contracts/schemas AgentConfig; `expect` per scenario:
-#   wake:    agents that must have at least one event wake during the scenario
-#   no_wake: agents that must not be woken by an event during the scenario
-# Copy this file and pass it with --spec to test your own agents.
+# The polygon's test house (D40: no room agents; the learner runs in-process, D38). `python -m
+# sim.polygon run` applies `settings` to a fresh add-on, plays each scenario, then wakes the house
+# manager once and checks the invariants (sim/polygon.py). Per scenario:
+#   learner_events:  entities whose changes must reach the learner's journal
+#   manager_script:  steps queued on the fake Claude before the manager's wake (fake backend only)
+#   actions:         entities the manager must have switched for real (checked with --live only)
+# Copy this file and pass it with --spec to test your own expectations.
 
-agents:
-  - id: bedroom
-    name: Bedroom
-    room: bedroom
-    wake_rules:
-      events:
-        - {entities: ["binary_sensor.bedroom_window"], to: ["on"], debounce_s: 2, cooldown_s: 60,
-           reason: "Window opened."}
-        - {entities: ["sensor.bedroom_temperature"], below: 17.5, debounce_s: 2, cooldown_s: 60,
-           reason: "Bedroom got cold."}
-        - {entities: ["binary_sensor.*_smoke", "binary_sensor.*_water_leak"], to: ["on"], debounce_s: 0,
-           cooldown_s: 30, priority: alarm, reason: "Smoke or leak."}
-  - id: hallway
-    name: Hallway
-    room: hallway
-    wake_rules:
-      events:
-        - {entities: ["binary_sensor.front_door_contact"], to: ["on"], debounce_s: 1, cooldown_s: 60,
-           reason: "Front door opened."}
-        - {entities: ["binary_sensor.hallway_motion"], to: ["on"], debounce_s: 1, cooldown_s: 60,
-           reason: "Motion in the hallway."}
-        - {entities: ["binary_sensor.*_smoke", "binary_sensor.*_water_leak"], to: ["on"], debounce_s: 0,
-           cooldown_s: 30, priority: alarm, reason: "Smoke or leak."}
-  - id: living_room
-    name: Living room
-    room: living_room
-    wake_rules:
-      events:
-        - {entities: ["binary_sensor.living_room_motion"], to: ["on"], debounce_s: 1, cooldown_s: 60,
-           reason: "Motion in the living room."}
-        - {entities: ["binary_sensor.*_smoke", "binary_sensor.*_water_leak"], to: ["on"], debounce_s: 0,
-           cooldown_s: 30, priority: alarm, reason: "Smoke or leak."}
-  - id: kitchen
-    name: Kitchen
-    room: kitchen
-    wake_rules:
-      events:
-        - {entities: ["binary_sensor.kitchen_window"], to: ["on"], debounce_s: 2, cooldown_s: 60,
-           reason: "Window opened."}
-        - {entities: ["binary_sensor.*_smoke", "binary_sensor.*_water_leak"], to: ["on"], debounce_s: 0,
-           cooldown_s: 30, priority: alarm, reason: "Smoke or leak."}
+settings:
+  manager_enabled: true
+  manager_sweep_min: 0  # the polygon wakes the manager itself after each scenario
+  manager_max_wakes_per_hour: 30
 
 scenarios:
-  arrive_home: {wake: [hallway, living_room], no_wake: [bedroom, kitchen]}
-  leave_home: {wake: [hallway], no_wake: [bedroom, kitchen]}
-  evening: {wake: [living_room], no_wake: [bedroom, kitchen]}
-  night: {no_wake: [hallway, kitchen]}
-  window_while_heating: {wake: [bedroom], no_wake: [hallway, living_room, kitchen]}
+  arrive_home:
+    learner_events: [binary_sensor.front_door_contact, binary_sensor.hallway_motion]
+    # the manager switches the hallway light on as the orchestrator: live, through the policy
+    manager_script:
+      - tool_use:
+          - {name: call_service, input: {domain: light, service: turn_on, entity_id: light.hallway, data: {}}}
+      - {text: "Switched the hallway light on."}
+    actions: [light.hallway]
+  leave_home:
+    learner_events: [lock.front_door, person.owner]
+  evening:
+    learner_events: [media_player.living_room_tv]
+  night:
+    learner_events: [light.bedroom_lamp]
+  window_while_heating:
+    learner_events: [binary_sensor.bedroom_window]
+    # a T3 lock, asked for by the model: always denied, never sent (also live)
+    manager_script:
+      - tool_use:
+          - {name: call_service, input: {domain: lock, service: unlock, entity_id: lock.front_door, data: {}}}
+      - {text: "Could not unlock."}
   smoke: {}
   water_leak: {}
-  # outages: unavailable states must never wake anyone (gate IGNORED_STATES)
-  zigbee_outage: {no_wake: [bedroom, hallway, living_room, kitchen]}
-  router_reboot: {no_wake: [bedroom, hallway, living_room, kitchen]}
-  presence_flapping: {no_wake: [bedroom, kitchen]}
+  zigbee_outage: {}
+  router_reboot: {}
+  presence_flapping: {}

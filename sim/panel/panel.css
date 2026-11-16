@@ -65,3 +65,4 @@ code { font-size: 12px; background: var(--bg); padding: 0 4px; border-radius: 3p
 #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--ink); color: var(--bg); padding: 8px 16px; border-radius: 6px; transition: transform .2s; max-width: 90vw; }
 #toast.show { transform: translateX(-50%) translateY(0); }
 #toast.bad { background: var(--bad); color: #fff; }
+pre.state { white-space: pre-wrap; font-size: 0.85em; background: var(--bg); border: 1px solid var(--line); padding: 0.5em; border-radius: 4px; }

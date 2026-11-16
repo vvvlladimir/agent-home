@@ -20,40 +20,21 @@ from fastapi.staticfiles import StaticFiles
 
 from sim import house_gen
 from sim.fake_ha import HAState
-from sim.fake_jetson import JetsonSim
-from sim.fake_llm import LLMSim
 from sim.gateways import Gateways
 from sim.life import Life
 from sim.scenarios import SCENARIOS
 from sim.sim_config import SECRET_KEYS, SimConfig
 
 PANEL_DIR = Path(__file__).resolve().parent / "panel"
-JETSON_FIELDS = {
-    "temp_tj_c": (20, 110),
-    "temp_cpu_c": (20, 110),
-    "temp_gpu_c": (20, 110),
-    "ram_used_mb": (500, 7620),
-    "swap_used_mb": (0, 3810),
-    "cpu_percent": (0, 100),
-    "gpu_percent": (0, 100),
-    "power_mw": (2000, 25000),
-}
 CAUSES = ("user", "physical", "automation")
 
 
 class Sim:
     """Everything the panel steers, wired by sim/run.py."""
 
-    def __init__(
-        self,
-        ha: HAState,
-        llm: LLMSim,
-        jetson: JetsonSim,
-        cfg: SimConfig,
-        gateways: Gateways,
-        app_url: str = "",
-    ) -> None:
-        self.ha, self.llm, self.jetson, self.cfg, self.gw = ha, llm, jetson, cfg, gateways
+    def __init__(self, ha: HAState, learner, cfg: SimConfig, gateways: Gateways, app_url: str = "") -> None:
+        """`learner`: the in-process jetson/learner `Learner` (the `sim` backend)."""
+        self.ha, self.learner, self.cfg, self.gw = ha, learner, cfg, gateways
         self.app_url = app_url
         self.life: Life | None = None
         self.cassette = None  # sim/cassette.py, set by sim/run.py
@@ -170,19 +151,39 @@ class Sim:
                 "ws_connections": len(self.ha._conns),
                 "version": self.ha.version,
             },
-            "fake_llm": {
-                "loading": self.llm.loading,
-                "latency_s": self.llm.latency,
-                "queued_script": len(self.llm.script),
-                "requests": len(self.llm.requests),
-            },
-            "jetson": {
-                **{k: getattr(self.jetson, k) for k in JETSON_FIELDS},
-                "throttled": self.jetson.throttled,
-                "active_profile": self.jetson.active_profile,
-                "profiles": self.jetson.profiles,
-            },
+            "learner": self.learner_state(),
         }
+
+    # ---- the learner (D38) ---------------------------------------------------------------------
+    def learner_state(self) -> dict:
+        """The in-process learner as the Jetson would report it, plus what it learnt in counts."""
+        backend = self.cfg.jetson.learner
+        if self.learner is None or backend != "sim":
+            return {"backend": backend, "status": None, "model": None}
+        model = self.learner.model or {}
+        return {
+            "backend": backend,
+            "status": self.learner.status(),
+            "model": {
+                "trained_at": model.get("trained_at"),
+                "habits": len((model.get("habits") or {}).get("predictions") or []),
+                **{k: len(model.get(k) or []) for k in ("live", "routines", "dependencies", "corrections",
+                                                        "timeouts")},
+            } if model else None,
+        }  # fmt: skip
+
+    async def train(self) -> dict:
+        """Train now: the in-process learner on a thread, or the real Jetson's POST /train."""
+        backend = self.cfg.jetson.learner
+        if backend == "sim" and self.learner is not None:
+            return {"started": self.learner.start_training()}
+        if backend == "jetson" and self.cfg.jetson.host:
+            token = self.cfg.secret("jetson_token")
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post(f"{self.cfg.jetson.learner_url()}/train",
+                                 headers={"Authorization": f"Bearer {token}"} if token else {})  # fmt: skip
+            return {"started": r.status_code == 202, "status": r.status_code}
+        return {"started": False, "detail": f"no learner to train (backend {backend})"}
 
 
 # ---- connection checks: cheap calls that cost no tokens ------------------------------------------
@@ -195,14 +196,14 @@ async def check(cfg: SimConfig, target: str) -> dict:
                     return {"ok": False, "detail": "no Jetson address"}
                 token = cfg.secret("jetson_token")
                 h = {"Authorization": f"Bearer {token}"} if token else {}
-                health = await c.get(f"{cfg.jetson.llm_url()}/health", headers=h)
-                metrics = await c.get(f"{cfg.jetson.metrics_url()}/metrics.json", headers=h)
-                m = metrics.json() if metrics.status_code == 200 else {}
+                health = await c.get(f"{cfg.jetson.learner_url()}/healthz")
+                status = await c.get(f"{cfg.jetson.learner_url()}/status", headers=h)
+                st = status.json() if status.status_code == 200 else {}
                 detail = (
-                    f"llama-server /health {health.status_code}, metrics {metrics.status_code}, "
-                    f"profile {(m.get('llama') or {}).get('active_profile')}"
+                    f"learner /healthz {health.status_code}, /status {status.status_code}, "
+                    f"journal {(st.get('journal') or {}).get('events')} events"
                 )
-                ok = health.status_code == 200 and metrics.status_code == 200
+                ok = health.status_code == 200 and status.status_code == 200
             elif target == "claude":
                 from sim import claude_bridge  # noqa: PLC0415
 
@@ -221,22 +222,13 @@ async def check(cfg: SimConfig, target: str) -> dict:
                     headers={"x-api-key": cfg.secret("anthropic_api_key"), "anthropic-version": "2023-06-01"},
                 )
                 ok, detail = r.status_code == 200, f"GET /v1/models → {r.status_code}"
-            elif target in ("openai", "compatible"):
-                base = (
-                    "https://api.openai.com/v1"
-                    if target == "openai"
-                    else cfg.room.compatible_base_url.rstrip("/")
-                )
-                key = cfg.secret(f"{target}_api_key")
+            elif target == "openai":
+                base = "https://api.openai.com/v1"
+                key = cfg.secret("openai_api_key")
                 if not key:
-                    return {"ok": False, "detail": f"no {target} API key saved"}
+                    return {"ok": False, "detail": "no openai API key saved"}
                 r = await c.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"})
                 ok, detail = r.status_code == 200, f"GET {base}/models → {r.status_code}"
-                if ok and target == "compatible":
-                    ids = [m.get("id") for m in (r.json().get("data") or [])]
-                    found = cfg.room.compatible_model in ids
-                    detail += f"; model {cfg.room.compatible_model!r} {'listed' if found else 'NOT listed'}"
-                    ok = found or not ids
             else:
                 return {"ok": False, "detail": f"unknown target {target}"}
     except (httpx.HTTPError, ValueError) as err:
@@ -399,23 +391,12 @@ def create_app(sim: Sim, port: int) -> FastAPI:
                     sim.ha.drop_ws()
                 if data.get("restart"):
                     sim.ha_restart(float(data.get("seconds", 10)))
-            elif target in ("llm", "anthropic", "openai"):
+            elif target in ("learner", "anthropic", "openai"):
                 f = sim.cfg.faults[target]
                 if "fail_next" in data:
                     f.fail_next, f.status = max(0, int(data["fail_next"])), int(data.get("status", 500))
                 if "latency_s" in data:
                     f.latency_s = max(0.0, min(float(data["latency_s"]), 300.0))
-            elif target == "fake_llm":
-                if "loading" in data:
-                    sim.llm.loading = bool(data["loading"])
-                if "script" in data and isinstance(data["script"], list):
-                    sim.llm.script.extend(s for s in data["script"] if isinstance(s, dict))
-            elif target == "jetson":
-                for k, (lo, hi) in JETSON_FIELDS.items():
-                    if k in data:
-                        setattr(sim.jetson, k, max(lo, min(float(data[k]), hi)))
-                if "throttled" in data:
-                    sim.jetson.throttled = bool(data["throttled"])
             else:
                 raise ValueError(f"unknown target {target!r}")
             return sim.state()
@@ -447,6 +428,11 @@ def create_app(sim: Sim, port: int) -> FastAPI:
             raise HTTPException(400, f"{err}; known: {', '.join(SECRET_KEYS)}") from None
         sim.cfg.save()
         return sim.cfg.public()["secrets"]
+
+    # -- the learner
+    @app.post("/api/learner/train")
+    async def train_learner():
+        return await sim.train()
 
     @app.post("/api/check/{target}")
     async def check_target(target: str):

@@ -14,14 +14,19 @@ as a finding ("could not finish X"). With frequent slips, sometimes mistype an e
 step, the way a real person would, and see how the add-on copes.
 
 ## Your house
-- Add-on API: `{app}` (the owner's view: `/api/status`, `/api/settings`, `/api/agents`,
-  `/api/chat`, `/api/proposals`, `/api/automations`, `/api/migration`, `/api/council`,
-  `/api/manager`, `/api/metrics`, `/api/runs`, `/api/actions`, `/api/inbox`, `/api/events`).
-  Contract: `{openapi}`. You may read that file.
+- Add-on API: `{app}` (the owner's view: `/api/status`, `/api/settings`, `/api/chat`,
+  `/api/proposals`, `/api/automations`, `/api/migration`, `/api/council`, `/api/manager`,
+  `/api/learner`, `/api/metrics`, `/api/runs`, `/api/actions`, `/api/inbox`, `/api/events`,
+  `/api/dev`). Contract: `{openapi}`. You may read that file.
+- The house has no room agents. The **learner** (on the Jetson in a real home, here in the
+  polygon) learns habits and may act on devices as agent `learner`; the **house manager** (the
+  orchestrator, a cloud model) looks after the house and drafts; both stay in shadow until the
+  global mode and their own mode (`learner_mode`, `orchestrator_mode`) are live.
 - Your hands in the house (the panel): `{panel}`. Writes need the header `X-Sim-Panel: 1`.
   - `POST /api/entities/<entity_id>` with `{{"state": "on", "cause": "user"}}` is you pressing a
     switch in the app (`physical` = the wall switch).
-  - `GET /api/entities`, `GET /api/state`, `POST /api/scenario/<name>`, `POST /api/faults`.
+  - `GET /api/entities`, `GET /api/state`, `POST /api/scenario/<name>`, `POST /api/faults`,
+    `POST /api/learner/train` (the learner trains now).
 - Proposals are drafts. You decide them like the owner: `POST /api/proposals/<id>/approve` or
   `POST /api/proposals/<id>/reject` with `{{"note": "..."}}`. Before you approve, read the YAML
   and its evidence (`POST /api/proposals/<id>/evidence` with `{{"days": 7}}`); approve only what you would want in

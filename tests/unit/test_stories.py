@@ -50,9 +50,10 @@ def test_expectations_read_the_trace():
     story = {"days": 7, "needs_model": True, "expect": [
         {"proposal_for": "light.kitchen_counter", "by_day": 4}, {"deployed_for": "light.kitchen_counter"},
         {"report_about": "binary_sensor.kitchen*_water_leak", "after_tag": "incident:leak", "within_min": 10},
-        {"max_event_wakes_per_day": 5}]}  # fmt: skip
+        {"proposal_for": "light.bedroom_lamp", "model": True}]}  # fmt: skip
     out = then(story, result, {}, has_model=True)
-    assert [e["ok"] for e in out] == [True, True, True, True], out
+    assert [e["ok"] for e in out] == [True, True, True, False], out
+    assert then(story, result, {}, has_model=False)[3]["ok"] is None, "`model: true` waits for a real model"
     late = {**story, "expect": [{"proposal_for": "light.kitchen_counter", "by_day": 2}]}
     assert then(late, result, {}, has_model=True)[0]["ok"] is False
     assert then(story, result, {}, has_model=False)[0]["ok"] is True, "D35: habit drafts need no model"
@@ -251,3 +252,43 @@ def test_report_about_anchors_on_the_incident_not_on_its_end():
     }
     out = then(story, _trace(events=rows, feed=[report]), {}, True)
     assert out[0]["ok"] is True and "1/1" in out[0]["detail"], out
+
+
+def test_the_light_controller_switches_off_at_its_timeout_and_the_owner_corrects_it():
+    from sim.stories import ASK_EVENT
+
+    names = {"light": "light.lamp", "sensor": "binary_sensor.radar", "elsewhere": "binary_sensor.kitchen"}
+    story = {"days": 5, "chaos": "calm", "light_controllers": [{"ref": "automation.lamp_ctrl", "timeout_s": 120,
+                                                                **names}],
+             "answers": [{"day": 1, "at": "19:00", "action": "AGENT_HOUSE_LIGHT_LAMP_ON_NO"}]}  # fmt: skip
+    events, found = given(story, START, 3, HOUSE + list(names.values()))
+    ctrl = [e for e in events if e.tag == "controller"]
+    offs = [e for e in ctrl if e.entity_id == "light.lamp" and e.state == "off"]
+    assert offs and all(e.cause == "automation:automation.lamp_ctrl" for e in offs)
+    corrections = [e for e in ctrl if e.entity_id == "light.lamp" and e.state == "on" and e.cause == "user"]
+    assert corrections, "sitting still, the owner switches it back on"
+    assert found["light.lamp"] == "light.lamp"
+    [answer] = [e for e in events if e.tag == "answer"]
+    assert answer.entity_id == f"event:{ASK_EVENT}" and answer.state.endswith("_NO")
+
+
+def test_the_learner_expectations_read_the_trace():
+    t = START.timestamp()
+    acted = {"ts": t, "agent_id": "learner", "entity_ids": ["light.kitchen_counter"], "verdict": "shadow"}
+    trace = _trace(
+        actions=[acted], last_scan={"habits": {"source": "learner"}},
+        findings=[{"id": "timeout:light.lamp:automation.ctrl", "kind": "timeout"}],
+        runs=[{"wake_source": "manage", "started": t, "wake_reason": "manager: sweep: learner: Lamp (finding x)"}],
+        learner={"live_entities": ["light.kitchen_counter"], "asks": {"fired": 0, "yes": 1, "no": 2}},
+        explained=[{"proposal": "p", "status": 200, "provider": "openai", "cached_again": True}],
+    )  # fmt: skip
+    story = {"days": 3, "expect": [
+        {"habits_source": "learner"}, {"finding": "timeout:light.lamp:"}, {"manager_woken_by": "learner:"},
+        {"learner_acted": "light.kitchen_counter", "verdict": "shadow"}, {"asks": {"yes": 1, "no": 2}},
+        {"explained": "openai"}, {"habits_source": "addon"}, {"learner_acted": "light.bedroom_lamp",
+                                                              "verdict": "executed"}]}  # fmt: skip
+    out = then(story, trace, {}, True)
+    assert [o["ok"] for o in out] == [True, True, True, True, True, True, False, None], out
+    live = {**acted, "verdict": "executed"}
+    story = {"days": 3, "expect": [{"learner_acted": "light.kitchen_counter", "verdict": "shadow"}]}
+    assert then(story, _trace(actions=[acted, live], learner=trace["learner"]), {}, True)[0]["ok"] is False

@@ -79,19 +79,32 @@ def test_the_inbox_tells_the_truth():
     ]["ok"]
 
 
-def test_one_open_alarm_per_thing_and_caps_in_house_time():
+def test_one_open_alarm_per_thing_and_the_managers_cap_in_house_time():
     leak = "Water leak at binary_sensor.kitchen_leak"
     inbox = [{"id": 1, "ts": T0, "severity": "alarm", "status": "new", "summary": leak},
              {"id": 2, "ts": T0 + 600, "severity": "alarm", "status": "new", "summary": leak}]  # fmt: skip
     runs = [
-        {"id": f"r{i}", "agent_id": "hallway", "wake_source": "event", "started": T0 + i} for i in range(5)
+        {"id": f"r{i}", "agent_id": "orchestrator", "wake_source": "manage", "started": T0 + i} for i in range(5)
     ]
-    checks = by_name(check_trace(trace(inbox=inbox, runs=runs), "shadow", {"hallway": 4}))
+    checks = by_name(check_trace(trace(inbox=inbox, runs=runs), "shadow", {"manager": 4}))
     assert not checks["one_open_alarm_per_thing"]["ok"]
     assert (
-        not checks["hourly_cap_in_house_time"]["ok"]
-        and checks["hourly_cap_in_house_time"]["items"][0]["wakes"] == 5
+        not checks["manager_cap_in_house_time"]["ok"]
+        and checks["manager_cap_in_house_time"]["items"][0]["runs"] == 5
     )
+
+
+def test_only_our_actors_act_and_the_learner_never_on_helpers_or_t3():
+    actions = [
+        {"id": "a1", "ts": T0, "agent_id": "bedroom", "entity_ids": ["light.a"], "verdict": "shadow"},
+        {"id": "a2", "ts": T0, "agent_id": "learner", "entity_ids": ["input_select.agent_house_mode"],
+         "verdict": "shadow"},
+        {"id": "a3", "ts": T0, "agent_id": "learner", "entity_ids": ["lock.front_door"], "verdict": "denied"},
+        {"id": "a4", "ts": T0, "agent_id": "orchestrator", "entity_ids": ["light.a"], "verdict": "executed"},
+    ]  # fmt: skip
+    checks = by_name(check_trace(trace(actions=actions), "live"))
+    assert [i["action"] for i in checks["actions_by_our_actors"]["items"]] == ["a1"]
+    assert [i["action"] for i in checks["learner_devices_only"]["items"]] == ["a2"], "a denial is fine"
 
 
 def test_the_daily_review_must_run_every_lived_day():

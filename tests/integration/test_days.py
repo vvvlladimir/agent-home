@@ -1,4 +1,5 @@
-"""Lived days in house time (sim/days.py) and restoring a snapshot (sim/snapshot.py), fakes only."""
+"""Lived days in house time (sim/days.py) with the learner in-process, and restoring a snapshot
+(sim/snapshot.py), fake clouds only."""
 
 from __future__ import annotations
 
@@ -27,7 +28,11 @@ def test_two_days_pass_the_checks_and_a_snapshot_boots_back(tmp_path):
     s = report["scenarios"][0]
     assert rc == 0 and report["ok"], [c for c in s["checks"] if not c["ok"]]
     assert s["house_days"] == 2 and not s["stuck"] and s["runs"]
-    assert {r["agent_id"] for r in s["runs"]} >= {"orchestrator", "hallway"}
+    assert {r["agent_id"] for r in s["runs"]} == {"orchestrator"}
+    learner = s["learner"]
+    assert learner["trainings"] >= 2, "the learner trains every house night at 03:30"
+    assert learner["journal"]["events"] > 100 and learner["link"]["connected"] and not learner["link"]["dropped"]
+    assert learner["model"] is not None, "the add-on fetched the house model"
     assert len(s["snapshots"]) == 2, "one per house midnight"
 
     snap = Path(s["snapshots"][-1])

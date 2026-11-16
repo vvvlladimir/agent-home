@@ -99,21 +99,12 @@
         <label>REST latency, s <input id="ha-latency" type="number" min="0" max="60" step="0.5"></label>
       </div>
       <div class="card">
-        <h2>Room-agent LLM (any backend)</h2>
+        <h2>Learner gateway</h2>
         <div class="buttons">
-          <button data-fault='{"target":"llm","fail_next":3,"status":503}'>Next 3 → 503</button>
-          <button data-fault='{"target":"llm","fail_next":1,"status":400}'>Next → 400</button>
-          <button data-fault='{"target":"llm","fail_next":0,"latency_s":0}'>Clear</button>
+          <button data-fault='{"target":"learner","fail_next":3,"status":503}'>Next 3 → 503</button>
+          <button data-fault='{"target":"learner","fail_next":0,"latency_s":0}'>Clear</button>
         </div>
-        <label>Extra latency, s <input id="llm-latency" type="number" min="0" max="300" step="1"></label>
-        <h3>Fake llama-server only</h3>
-        <div class="buttons">
-          <button data-fault='{"target":"fake_llm","loading":true}'>Loading model</button>
-          <button data-fault='{"target":"fake_llm","loading":false}'>Loaded</button>
-          <button data-fault='{"target":"fake_llm","script":[{"garbage":true}]}'>Next answer garbage</button>
-          <button data-fault='{"target":"fake_llm","script":[{"hang":200}]}'>Next answer hangs</button>
-          <button data-fault='{"target":"fake_llm","script":[{"raw_arguments":"{broken json"}]}'>Next tool call broken JSON</button>
-        </div>
+        <label>Extra latency, s <input id="learner-latency" type="number" min="0" max="300" step="1"></label>
       </div>
       <div class="card">
         <h2>Claude / OpenAI (orchestrator)</h2>
@@ -125,59 +116,33 @@
           <button data-fault='{"target":"openai","fail_next":0,"latency_s":0}'>Clear OpenAI</button>
         </div>
       </div>
-      <div class="card">
-        <h2>Fake Jetson metrics</h2>
-        <form id="jetson-form" class="kvform"></form>
-        <div class="buttons">
-          <button data-fault='{"target":"jetson","temp_tj_c":96,"throttled":true}'>Overheat + throttle</button>
-          <button data-fault='{"target":"jetson","ram_used_mb":7400,"swap_used_mb":2900}'>Out of RAM</button>
-          <button data-fault='{"target":"jetson","temp_tj_c":53,"throttled":false,"ram_used_mb":4600,"swap_used_mb":0}'>Normal</button>
-        </div>
-      </div>
     </div>
   </section>
 
   <section id="tab-models" class="tab">
     <div class="grid2">
-      <form id="room-form" class="card">
-        <h2>Room agents (the Jetson's job)</h2>
-        <label>Backend
-          <select name="backend">
-            <option value="fake">fake llama-server (scripted, free)</option>
-            <option value="jetson">real Jetson by IP</option>
-            <option value="compatible">OpenAI-compatible API (e.g. DeepInfra Qwen3.5-4B, same model as the Jetson)</option>
-            <option value="openai">OpenAI API</option>
-            <option value="anthropic">Claude API</option>
-          </select>
-        </label>
-        <label>OpenAI model <input name="openai_model"></label>
-        <label>Claude model <input name="anthropic_model"></label>
-        <label>OpenAI-compatible base URL <input name="compatible_base_url"></label>
-        <label>OpenAI-compatible model <input name="compatible_model"></label>
-        <fieldset>
-          <legend>Behave like the Jetson (cloud backends)</legend>
-          <label class="row"><input name="pace" type="checkbox"> Pace answers to the Jetson's speed</label>
-          <label>Prompt processing, tokens/s <input name="prefill_tps" type="number" step="1"></label>
-          <label>Generation, tokens/s <input name="decode_tps" type="number" step="0.5"></label>
-          <label>Context, tokens <input name="n_ctx" type="number" step="512"></label>
-          <label class="row"><input name="single_slot" type="checkbox"> One request at a time (-np 1)</label>
-        </fieldset>
-        <button type="submit" class="primary">Save</button>
-      </form>
       <div>
+        <div class="card">
+          <h2>Learner (the Jetson's job, D38)</h2>
+          <p class="hint">The real <code>jetson/learner</code>: it gets every change of the house with its cause, keeps the journal in <code>&lt;data&gt;/learner</code>, trains on start and every night at 03:30, and sends live suggestions back (the add-on acts on them as agent <code>learner</code>, in shadow unless learner mode is live).</p>
+          <pre id="learner-state" class="state">…</pre>
+          <div class="buttons"><button type="button" id="learner-train" class="primary">Train now</button></div>
+        </div>
         <form id="jetson-real-form" class="card">
-          <h2>Real Jetson</h2>
-          <label>IP or hostname <input name="host" placeholder="192.168.178.40"></label>
-          <label>llama-server port <input name="llm_port" type="number"></label>
-          <label>Metrics port <input name="metrics_port" type="number"></label>
-          <label>Metrics source
-            <select name="metrics">
-              <option value="auto">auto (real when room agents use the Jetson)</option>
-              <option value="fake">fake</option><option value="jetson">real Jetson</option>
+          <h2>Which learner the add-on reaches</h2>
+          <label>Learner
+            <select name="learner">
+              <option value="sim">the learner in this sim</option>
+              <option value="jetson">the real Jetson by IP</option>
+              <option value="off">off (down: the add-on falls back to its own predict.py)</option>
             </select>
           </label>
+          <label>Jetson IP or hostname <input name="host" placeholder="192.168.178.40"></label>
+          <label>Learner port <input name="learner_port" type="number"></label>
           <div class="buttons"><button type="submit" class="primary">Save</button><button type="button" data-check="jetson">Test</button></div>
         </form>
+      </div>
+      <div>
         <form id="cloud-form" class="card">
           <h2>Orchestrator (Claude / OpenAI)</h2>
           <label>Claude <select name="anthropic"><option value="fake">fake</option><option value="real">real API</option></select></label>
@@ -192,13 +157,11 @@
           <p class="hint">Kept in <code>.data/sim/secrets.json</code> (mode 600, gitignored). Only the sim gateways use them; the add-on never sees them. Leave a field empty to keep the saved key; type <code>-</code> to delete it.</p>
           <label>Claude API key <span class="saved" data-saved="anthropic_api_key"></span><input name="anthropic_api_key" type="password" autocomplete="off"></label>
           <label>OpenAI API key <span class="saved" data-saved="openai_api_key"></span><input name="openai_api_key" type="password" autocomplete="off"></label>
-          <label>OpenAI-compatible API key <span class="saved" data-saved="compatible_api_key"></span><input name="compatible_api_key" type="password" autocomplete="off"></label>
-          <label>Jetson token (llama-server --api-key and metrics) <span class="saved" data-saved="jetson_token"></span><input name="jetson_token" type="password" autocomplete="off"></label>
+          <label>Jetson token (the real learner's /etc/agent-house/token) <span class="saved" data-saved="jetson_token"></span><input name="jetson_token" type="password" autocomplete="off"></label>
           <div class="buttons">
             <button type="submit" class="primary">Save keys</button>
             <button type="button" data-check="anthropic">Test Claude</button>
             <button type="button" data-check="openai">Test OpenAI</button>
-            <button type="button" data-check="compatible">Test compatible</button>
           </div>
         </form>
       </div>

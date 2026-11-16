@@ -1,15 +1,16 @@
 """Stories: a lived household plus what we inject, and what must be true afterwards (step 3).
 
 Each story in sim/stories.yaml is lived k times with different seeds on a fresh polygon
-(sim/days.py). A simple owner decides the drafts the way a person would: approve a draft whose
-actions target one of the story's habits and name only entities HA has, reject the rest with a
-reason. The report gives, per story, pass@1 (share of runs that passed) and pass^k (all k passed;
-tau-bench's reliability measure), the failed expectations with house times, and a coverage table:
-which features of the add-on the runs reached and which none did.
+(sim/days.py) with the real learner in-process (D38; `learner: off` lives the story with it down).
+A simple owner decides the drafts the way a person would: approve a draft whose actions target one
+of the story's habits and name only entities HA has, reject the rest with a reason; it may ask what
+a draft does first (D37). The report gives, per story, pass@1 (share of runs that passed) and pass^k
+(all k passed; tau-bench's reliability measure), the failed expectations with house times, and a
+coverage table: which features of the add-on the runs reached and which none did.
 
     python -m sim.stories list
-    python -m sim.stories run --story all --k 2                       # fakes: model stories are n/a
-    python -m sim.stories run --story morning_counter_habit --k 3 --room-llm claude --orchestrator claude
+    python -m sim.stories run --story all --k 2                       # fakes: `model:` expectations are n/a
+    python -m sim.stories run --story counter_follows_ceiling --k 3 --orchestrator claude
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import json
 import random
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,7 @@ from sim import household, invariants, polygon
 
 HERE = Path(__file__).resolve().parent
 STORIES = HERE / "stories.yaml"
+ASK_EVENT = "mobile_app_notification_action"  # core/predict.py: the ask's buttons
 
 
 def load() -> dict:
@@ -91,6 +93,14 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
                 and (auto.get("days", "all") != "workdays" or day.weekday() < 5)
             ):  # fmt: skip
                 events[i] = replace(e, cause=f"automation:{auto['ref']}", tag="owner_automation")
+    for lc in story.get("light_controllers") or []:
+        found = {k: resolve(lc[k], entities) for k in ("light", "sensor", "elsewhere")}
+        names.update({lc[k]: v for k, v in found.items()})
+        if None not in found.values():
+            extra += controller(lc, found, start, story["days"], rng)
+    for ans in story.get("answers") or []:  # the owner taps a button of one of our asks
+        t = _clock_at(start + timedelta(days=ans["day"]), ans["at"], 0, rng)
+        extra.append(household.Event(t.timestamp(), f"event:{ASK_EVENT}", ans["action"], "user", "answer"))
     for inc in story.get("incidents") or []:
         eid = resolve(inc["entity"], entities)
         names[inc["entity"]] = eid
@@ -110,6 +120,49 @@ def given(story: dict, start: datetime, seed: int, entities: list[str]) -> tuple
             # note "back": the end of the incident, never an anchor of report_about
             extra.append(household.Event(end, eid, back, "physical", inc["tag"], "back"))
     return sorted(events + extra), names
+
+
+def controller(
+    lc: dict, found: dict, start: datetime, days: int, rng: random.Random
+) -> list[household.Event]:
+    """The owner's light controller (an HA automation, `ref`): the light goes on with the room's
+    presence sensor in the evening and off `timeout_s` after it went quiet. The sensor drops out for
+    1–5 min while someone sits still; when that switches the light off, the person switches it back
+    on by hand (a correction). Sometimes they really walk out: the other room's sensor sees them at
+    once. (tests/unit/test_learner.py `controller`, D38 step 1 E2.)"""
+    light, sensor, elsewhere = found["light"], found["sensor"], found["elsewhere"]
+    auto, timeout = f"automation:{lc['ref']}", float(lc.get("timeout_s", 120))
+    out = []
+
+    def add(ts: float, eid: str, state: str, cause: str = "physical") -> None:
+        out.append(household.Event(ts, eid, state, cause, "controller"))
+
+    for d in range(days):
+        day = start + timedelta(days=d)
+        t = (day + timedelta(hours=lc.get("from_h", 18) + rng.uniform(0, 0.3))).timestamp()
+        end = (day + timedelta(hours=lc.get("to_h", 22.8))).timestamp()
+        add(t, sensor, "on")
+        add(t + 2, light, "on", auto)
+        while t < end:
+            t += rng.uniform(900, 1800)
+            if rng.random() < 0.3:  # a real walk out: the other room sees it, back after 10–20 min
+                length = rng.uniform(600, 1200)
+                add(t + 5, elsewhere, "on")
+                add(t + length - 30, elsewhere, "off")
+            else:  # sitting still: the sensor drops out
+                length = rng.uniform(60, 300)
+            add(t, sensor, "off")
+            if length >= timeout:
+                add(t + timeout, light, "off", auto)
+                if length < 600:  # still there: back on by hand
+                    add(t + timeout + rng.uniform(10, 40), light, "on", "user")
+            t += length
+            add(t, sensor, "on")
+            if length >= 600:
+                add(t + 2, light, "on", auto)
+        add(end, sensor, "off")
+        add(end + timeout, light, "off", auto)
+    return out
 
 
 def owner_history(story: dict, ha, entities: list[str]) -> int:
@@ -145,11 +198,15 @@ class Owner:
     """Decides drafts like a person who knows their own habits; every hour of house time."""
 
     def __init__(
-        self, app: polygon.App, habit_entities: set[str], known: set[str], approve: str = "habits"
+        self, app: polygon.App, habit_entities: set[str], known: set[str], approve: str = "habits",
+        explain: str | None = None,
     ) -> None:
-        """`approve`: `habits` (drafts acting only on the story's habits) or `none` (says no to all)."""
+        """`approve`: `habits` (drafts acting only on the story's habits) or `none` (says no to all).
+        `explain`: a provider (D37): before deciding, ask that model what the draft does, twice."""
         self.app, self.habits, self.known, self.approve = app, habit_entities, known, approve
+        self.explain = explain
         self.decided: dict[str, str] = {}
+        self.explained: list[dict] = []
 
     def __call__(self, ts: float) -> bool:
         if ts % 3600:
@@ -158,6 +215,8 @@ class Owner:
         for p in self.app.get("/api/proposals", status="draft"):
             if p["id"] in self.decided:
                 continue
+            if self.explain:
+                self.ask(p["id"])
             text = p.get("yaml") or ""
             named = invariants.entities_in(text)
             targets = {e for e in named if invariants._acted_on(text, e)}
@@ -178,6 +237,19 @@ class Owner:
                 self.decided[p["id"]] = "rejected"
             acted = True
         return acted
+
+
+    def ask(self, proposal_id: str) -> None:
+        """What the draft does, in plain words, from the owner's pick of model; asked twice (the
+        second answer must be the cached one, free)."""
+        body = {"provider": self.explain, "language": "en"}
+        first = self.app.send("POST", f"/api/proposals/{proposal_id}/explain", body)
+        again = self.app.send("POST", f"/api/proposals/{proposal_id}/explain", body)
+        row = {"proposal": proposal_id, "status": first.status_code}
+        if first.status_code == 200:
+            run = self.app.get(f"/api/runs/{first.json()['run_id']}")
+            row |= {"provider": run.get("provider"), "cached_again": again.json().get("cached") is True}
+        self.explained.append(row)
 
 
 # --- then: expectations -----------------------------------------------------------------------------
@@ -203,6 +275,9 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
 
     for exp in story.get("expect") or []:
         kind = next(iter(exp))
+        if exp.get("model") and not has_model:
+            add(exp, None, "needs a real model (the fakes answer \"OK.\")")
+            continue
         if kind == "proposal_for":
             eid, by = name(exp["proposal_for"]), start + exp.get("by_day", story["days"]) * 86400
             hits = [p for p in proposals if eid in targets(p) and (p.get("created") or 0) <= by]
@@ -319,10 +394,6 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                 f"at most {worst} warnings/alarms a day (max {exp[kind]}); "
                 f"{sum(1 for r in reports if _severity(r) == 'info')} info reports in all",
             )
-        elif kind == "max_event_wakes_per_day":
-            wakes = sum(1 for r in result["runs"] if r.get("wake_source") == "event")
-            per_day = wakes / max(result["house_days"], 1)
-            add(exp, per_day <= exp[kind], f"{per_day:.0f} event wakes a day (max {exp[kind]})")
         elif kind == "never_actuated":
             eid = name(exp[kind])
             acted = [f"{hm(a['ts'])} {a['service']} ({a['verdict']})" for a in result["actions"]
@@ -359,15 +430,6 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                               if r.get("wake_source") == "manage")  # fmt: skip
             worst = max(per_day.values(), default=0)
             add(exp, worst <= exp[kind], f"at most {worst} manager runs a day (max {exp[kind]})")
-        elif kind == "max_fault_wakes":
-            n = sum(1 for e in events if e["tag"] == exp[kind])
-            woke = _fault_wakes(result).get(exp[kind], 0)
-            share = woke / n if n else 0.0
-            add(
-                exp,
-                share <= exp["share"] if n else None,
-                f"{woke}/{n} {exp[kind]} events woke an agent ({share:.0%}, max {exp['share']:.0%})",
-            )
         elif kind == "quiet_while_tag":
             bad = []
             for on, off in _windows(events, exp[kind]):
@@ -384,6 +446,40 @@ def then(story: dict, result: dict, names: dict, has_model: bool) -> list[dict]:
                 f"{len(bad)} run(s)/action(s) in {len(windows)} window(s) of {exp[kind]}"
                 + (f": {bad[:4]}" if bad else ""),
             )
+        elif kind == "habits_source":  # D38: the learner's habits replace the add-on's scan while fresh
+            source = ((result.get("last_scan") or {}).get("habits") or {}).get("source") or "addon"
+            add(exp, source == exp[kind], f"the last scan's habits came from the {source}")
+        elif kind == "finding":
+            ids = [f["id"] for f in result.get("findings") or [] if f["id"].startswith(exp[kind])]
+            add(exp, bool(ids), f"{len(ids)} finding(s) {exp[kind]}*" + (f": {ids[:3]}" if ids else ""))
+        elif kind == "manager_woken_by":
+            hits = [
+                r for r in result["runs"]
+                if r.get("wake_source") == "manage" and exp[kind] in (r.get("wake_reason") or "")
+            ]  # fmt: skip
+            add(exp, bool(hits), f"{len(hits)} manager run(s) woken by {exp[kind]!r}")
+        elif kind == "learner_acted":
+            eid = name(exp[kind])
+            offered = eid in ((result.get("learner") or {}).get("live_entities") or [])
+            acts = [a for a in result["actions"]
+                    if a.get("agent_id") == "learner" and eid in (a.get("entity_ids") or [])]  # fmt: skip
+            verdicts = Counter(a["verdict"] for a in acts)
+            ok = bool(verdicts.get(exp["verdict"])) and set(verdicts) <= {exp["verdict"], "denied"}
+            add(exp, ok if offered or acts else None, f"learner on {eid}: {dict(verdicts) or 'nothing'}"
+                + ("" if offered else " (never a live target)"))  # fmt: skip
+        elif kind == "asks":
+            asks = (result.get("learner") or {}).get("asks") or {}
+            want = exp[kind]
+            ok = all(int(asks.get(k) or 0) >= v for k, v in want.items())
+            add(exp, ok, f"the learner counted asks {asks or 'none'} (at least {want})")
+        elif kind == "explained":
+            rows = result.get("explained") or []
+            good = [
+                r for r in rows
+                if r.get("status") == 200 and r.get("provider") == exp[kind] and r.get("cached_again")
+            ]  # fmt: skip
+            detail = f"{len(good)}/{len(rows)} drafts explained by {exp[kind]}, the second ask cached"
+            add(exp, bool(good) if rows else None, detail)
         else:
             add(exp, False, f"unknown expectation {kind}")
     return out
@@ -538,13 +634,16 @@ FEATURES = (
     "proposal_deployed",
     "proposal_rejected",
     "manager_run",
+    "manager_gate_drop",
     "alarm_report",
     "warning_report",
-    "gate_drop_cap",
-    "gate_drop_cooldown",
     "house_mode_action",
-    "room_run",
     "orchestrator_poke",
+    "learner_training",
+    "learner_habits",
+    "learner_action",
+    "learner_finding",
+    "unusual_note",
 )
 
 
@@ -556,50 +655,38 @@ def coverage(result: dict) -> dict[str, int]:
             c["manager_run"] += 1
         elif r.get("agent_id") == "orchestrator":
             c["daily_review" if r.get("wake_source") == "review" else "orchestrator_poke"] += 1
-        else:
-            c["room_run"] += 1
     for p in props:
         c["proposal_drafted"] += 1
         c[f"proposal_{p.get('status')}"] += 1 if p.get("status") in ("blocked", "deployed", "rejected") else 0
     for e in feed:
         text = e.get("summary") or e.get("text") or ""
-        if e.get("kind") == "gate_drop":
-            c[
-                "gate_drop_cap"
-                if "cap" in text
-                else "gate_drop_cooldown"
-                if "cooldown" in text
-                else "gate_drop"
-            ] += 1
+        if e.get("kind") == "gate_drop" and text.startswith("manager:"):
+            c["manager_gate_drop"] += 1
         if e.get("kind") == "report":
             c[f"{_severity(e)}_report"] += 1
+            c["unusual_note"] += "Unusual:" in text
         if "first look" in text.lower():
             c["first_look"] += 1
     c["house_mode_action"] += sum(
         1 for a in result["actions"] if MODE_HELPER in (a.get("entity_ids") or [])
     )
-    tags = Counter(e["tag"] for e in result["events"])
-    woke = _fault_wakes(result)
-    for tag in tags:
-        if tag.startswith("fault:"):
-            c[f"{tag} (woke an agent)"] = woke.get(tag, 0)
+    learner = result.get("learner") or {}
+    c["learner_training"] += int(learner.get("trainings") or 0)
+    c["learner_habits"] += ((result.get("last_scan") or {}).get("habits") or {}).get("source") == "learner"
+    c["learner_action"] += sum(1 for a in result["actions"] if a.get("agent_id") == "learner")
+    c["learner_finding"] += sum(1 for f in result.get("findings") or [] if f.get("kind") == "timeout")
     return dict(c)
-
-
-def _fault_wakes(result: dict) -> dict[str, int]:
-    """How often a sensor lie woke an agent within 2 min (noise the prefilter let through)."""
-    out: dict[str, int] = defaultdict(int)
-    starts = sorted(r["started"] for r in result["runs"] if r.get("wake_source") == "event")
-    for e in result["events"]:
-        if e["tag"].startswith("fault:") and any(0 <= s - e["ts"] <= 120 for s in starts):
-            out[e["tag"]] += 1
-    return out
 
 
 # --- running ----------------------------------------------------------------------------------------
 def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
-    spec, cfg, checks, _ = polygon._prepare(args)
+    """`learner: off` lives the story with the learner down (predict.py on the Pi decides);
+    `live: true` puts the global mode and both actors live (default: shadow)."""
+    args = argparse.Namespace(**{**vars(args), "learner": story.get("learner", args.learner),
+                                 "live": bool(story.get("live", args.live))})  # fmt: skip
+    _, cfg, checks, _ = polygon._prepare(args)
     days_mod.quiet_addon_loops()
+    spec = {"settings": {}}  # the story's own settings below, not the polygon's
     stack, app, meta = polygon._start(args, spec, cfg, checks, out_dir / f"{sid}-{seed}" / "data")
     has_model = cfg.anthropic.backend != "fake" or cfg.openai.backend != "fake"
     try:
@@ -611,8 +698,6 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
             r = app.send("POST", "/api/council/mode-helper", {})
             if r.status_code >= 300:
                 raise polygon.SetupError(f"mode helper: {r.status_code} {r.text[:200]}")
-        for room in story.get("suggested_agents") or []:  # the owner keeps the editor's suggestions
-            accept_suggested_rules(app, room)
         for h in story.get("helpers") or []:  # e.g. the kill switch input_boolean the story flips
             attrs = {"friendly_name": h.get("name", h["entity"])}
             stack.on_ha(lambda h=h, a=attrs: stack.ha.set_state(h["entity"], h.get("state", "off"), a))
@@ -624,8 +709,10 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
         if missing:
             return {"story": sid, "seed": seed, "ok": None, "skipped": f"the house has no {missing}"}
         habit_ids = {names[h["entity"]] for h in story.get("habits") or []}
-        owner = Owner(app, habit_ids, set(entities), (story.get("owner") or {}).get("approve", "habits"))
+        decides = story.get("owner") or {}
+        owner = Owner(app, habit_ids, set(entities), decides.get("approve", "habits"), decides.get("explain"))
         result = days_mod.play_days(stack, events, start.timestamp(), story["days"], on_checkpoint=owner)
+        result["explained"] = owner.explained
     finally:
         stack.stop()
     result["plan_start"] = start.timestamp()
@@ -642,27 +729,13 @@ def run_story(args, sid: str, story: dict, seed: int, out_dir: Path) -> dict:
         "failed_checks": [c for c in safety if not c["ok"]],
         "coverage": coverage(result),
         "owner": owner.decided,
+        "learner": {k: (result.get("learner") or {}).get(k) for k in ("trainings", "live_entities", "asks")},
         "house_days": result["house_days"],
         "duration_s": result["duration_s"],
         "runs": len(result["runs"]),
         "proposals": len(result["proposals"]),
         "data_dir": str(out_dir / f"{sid}-{seed}" / "data"),
     }
-
-
-def accept_suggested_rules(app: polygon.App, room: str) -> None:
-    """What the owner gets by keeping the editor's suggested wake rules (GET api/agents/suggest-rules)
-    for `room`: the room's agent takes exactly those rules; a room without an agent gets one."""
-    rules = app.get("/api/agents/suggest-rules", room=room)["rules"]
-    agent = next((a for a in app.get("/api/agents") if a["room"] == room), None)
-    if agent is None:
-        r = app.send("POST", "/api/agents", {"room": room, "wake_rules": {"events": rules}})
-    else:
-        config = app.get(f"/api/agents/{agent['id']}")
-        config["wake_rules"] = {**(config.get("wake_rules") or {}), "events": rules}
-        r = app.send("PUT", f"/api/agents/{agent['id']}", config)
-    if r.status_code >= 300:
-        raise polygon.SetupError(f"suggested rules for {room}: {r.status_code} {r.text[:200]}")
 
 
 def cmd_run(args) -> int:

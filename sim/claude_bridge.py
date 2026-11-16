@@ -1,8 +1,8 @@
 """Claude Code as the polygon's model backend (D30): every model call becomes one headless
 `claude -p` turn with its own model and effort, so the whole polygon runs where only Claude Code is
-logged in (claude.ai/code cloud sessions, a laptop) without OpenAI, DeepInfra or Jetson keys.
+logged in (claude.ai/code cloud sessions, a laptop) without OpenAI or Anthropic keys. Since D40 the
+only model of the add-on is the orchestrator; the learner is no model.
 
-    room agents   (llama-server API, OpenAI chat shape) → `chat_completion()`
     orchestrator  (Anthropic Messages API)              → `messages()`
     coordinator   (yes/no question)                     → `ask()`
 
@@ -39,9 +39,9 @@ PREAMBLE = (
 
 # `--json-schema` answers through the CLI's own `StructuredOutput` tool. A `tool_use` of any other
 # name is the model calling a tool natively; the CLI answers "No such tool available" and the model
-# then writes about broken tools (stories 2026-11-15: an agent told the owner its call_service was
-# broken before calling it). Mostly the tools are the application's own (find_entities,
-# submit_automation, assign_task): those calls are what the model meant, so they become the turn's
+# then writes about broken tools (stories 2026-11-15: the owner was told a call_service was
+# broken before it was called). Mostly the tools are the application's own (find_entities,
+# submit_automation, report): those calls are what the model meant, so they become the turn's
 # `tool_calls` and the text about the failure is dropped. Any other native tool (Bash, Read …):
 # the turn is asked again, then refused. Read from `--output-format stream-json`.
 STRUCTURED = "StructuredOutput"
@@ -172,49 +172,6 @@ def _tool(name: str, description: str | None, schema: dict | None) -> dict:
 
 def _json(v: Any) -> str:
     return v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-
-
-# ---- OpenAI chat completions (room agents) --------------------------------------------------------
-def render_chat(body: dict) -> tuple[str, list[str], list[dict]]:
-    system, turns = [], []
-    for m in body.get("messages") or []:
-        role = m.get("role")
-        if role in ("system", "developer"):
-            system.append(_text(m.get("content")))
-        elif role == "user":
-            turns.append(f"USER:\n{_text(m.get('content'))}")
-        elif role == "assistant":
-            parts = [_text(m.get("content"))] if _text(m.get("content")) else []
-            for c in m.get("tool_calls") or []:
-                f = c.get("function") or {}
-                parts.append(f"called {f.get('name')}({f.get('arguments') or '{}'}) id={c.get('id')}")
-            turns.append("ASSISTANT:\n" + "\n".join(parts or ["…"]))
-        elif role == "tool":
-            turns.append(f"TOOL RESULT id={m.get('tool_call_id')}:\n{_text(m.get('content'))}")
-    tools = [
-        _tool(f["name"], f.get("description"), f.get("parameters"))
-        for t in body.get("tools") or []
-        if (f := t.get("function") or {}).get("name")
-    ]
-    return "\n\n".join(system), turns, tools
-
-
-def chat_completion(
-    body: dict, model: str, effort: str, timeout: float = 240.0
-) -> tuple[dict, str, int, int]:
-    """OpenAI chat request → (assistant message, finish reason, tokens in, tokens out)."""
-    system, turns, tools = render_chat(body)
-    if body.get("tool_choice") == "none":
-        tools = []
-    r = _turn(system, turns, tools, model, effort, timeout)
-    msg: dict[str, Any] = {"role": "assistant", "content": r["text"] or (None if r["calls"] else "")}
-    if r["calls"]:
-        msg["tool_calls"] = [
-            {"id": f"call_{next(_ids)}", "type": "function",
-             "function": {"name": c["name"], "arguments": json.dumps(c.get("arguments") or {})}}
-            for c in r["calls"]
-        ]  # fmt: skip
-    return msg, ("tool_calls" if r["calls"] else "stop"), r["tokens_in"], r["tokens_out"]
 
 
 # ---- Anthropic Messages (orchestrator) --------------------------------------------------------------

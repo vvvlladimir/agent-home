@@ -1,17 +1,19 @@
-"""The polygon: boot a whole simulated home headless, play scenarios, check the invariants, write a
-JSON report, exit 0 (all checks pass) / 1 (a check failed) / 2 (setup failed). For people and for
-testing agents alike; every run is isolated (free ports, its own data dir), so many can run at once.
+"""The polygon: boot a whole simulated home headless, with the real learner (D38) in-process, play
+scenarios, wake the house manager once, check the invariants, write a JSON report, exit 0 (all checks
+pass) / 1 (a check failed) / 2 (setup failed). For people and for testing agents alike; every run is
+isolated (free ports, its own data dir), so many can run at once.
 
     python -m sim.polygon list
     python -m sim.polygon run --scenario window_while_heating --speed 10
-    python -m sim.polygon run --scenario all --room-llm openai --orchestrator anthropic
+    python -m sim.polygon run --scenario all --orchestrator anthropic
     python -m sim.polygon serve            # same house, stays up; prints the URLs as JSON
-    python -m sim.polygon run --scenario all --room-llm claude --orchestrator claude   # no keys (D30)
+    python -m sim.polygon run --scenario all --orchestrator claude   # no keys (D30)
 
-Model backends default to the fakes. `--room-llm` / `--orchestrator` route through the sim gateways
-to a real Jetson or cloud API; keys come from ANTHROPIC_API_KEY / OPENAI_API_KEY /
-AH_SIM_COMPATIBLE_API_KEY / AH_SIM_JETSON_TOKEN or the panel's `.data/sim/secrets.json`, and never
-reach the add-on, its traces or the report. Each real backend is checked before the house boots.
+The orchestrator defaults to the fake Claude and OpenAI; `--orchestrator` routes through the sim
+gateways to a real cloud API or `claude -p`; `--learner jetson --jetson-host IP` to a real Jetson
+learner. Keys come from ANTHROPIC_API_KEY / OPENAI_API_KEY / AH_SIM_JETSON_TOKEN or the panel's
+`.data/sim/secrets.json`, and never reach the add-on, its traces or the report. Each real backend is
+checked before the house boots.
 """
 
 from __future__ import annotations
@@ -33,16 +35,16 @@ import yaml
 from sim import clock, control, house_gen
 from sim.run import ROOT, Ports, Stack, boot
 from sim.scenarios import SCENARIOS
-from sim.sim_config import ROOM_BACKENDS, SimConfig
+from sim.sim_config import LEARNER_BACKENDS, SimConfig
 
 DEFAULT_SPEC = Path(__file__).with_name("polygon.yaml")
 OURS = "agent_house_"
 BUSY = ("queued", "running")
 ACTUATED = ("executed", "approved")
+ACTORS = ("orchestrator", "learner")  # D40: nobody else may appear in the action log
 ENV_KEYS = {
     "ANTHROPIC_API_KEY": "anthropic_api_key",
     "OPENAI_API_KEY": "openai_api_key",
-    "AH_SIM_COMPATIBLE_API_KEY": "compatible_api_key",
     "AH_SIM_JETSON_TOKEN": "jetson_token",
 }
 
@@ -53,31 +55,20 @@ class SetupError(Exception):
 
 # ---- model backends ------------------------------------------------------------------------------
 def sim_config(args: argparse.Namespace) -> SimConfig:
-    """Fakes unless a flag says otherwise; only the keys and the Jetson address come from the panel's
-    saved config, so a backend left on `real` in the panel never costs money here by surprise."""
+    """Fakes and the in-process learner unless a flag says otherwise; only the keys and the Jetson
+    address come from the panel's saved config, so a backend left on `real` in the panel never costs
+    money here by surprise."""
     saved = SimConfig.load(args.sim_config)
     cfg = SimConfig()
     cfg.secrets = dict(saved.secrets)
-    cfg.jetson = saved.jetson
+    cfg.jetson.host = saved.jetson.host
     for var, key in ENV_KEYS.items():
         if os.environ.get(var):
             cfg.set_secret(key, os.environ[var])
-    room: dict = {"pace": not args.no_pace}
-    if args.room_llm:
-        room["backend"] = args.room_llm
-    if args.room_model:
-        field = {"openai": "openai_model", "anthropic": "anthropic_model", "compatible": "compatible_model",
-                 "claude": "claude_model"}  # fmt: skip
-        if args.room_llm not in field:
-            raise SetupError("--room-model needs --room-llm openai, anthropic, compatible or claude")
-        room[field[args.room_llm]] = args.room_model
-    if args.room_effort:
-        room["claude_effort"] = args.room_effort
-    if args.compatible_url:
-        room["compatible_base_url"] = args.compatible_url
-    update: dict = {"room": room, "house": {"preset": args.house}, "backfill_days": args.backfill_days}
+    jetson: dict = {"learner": args.learner}
     if args.jetson_host:
-        update["jetson"] = {"host": args.jetson_host}
+        jetson["host"] = args.jetson_host
+    update: dict = {"jetson": jetson, "house": {"preset": args.house}, "backfill_days": args.backfill_days}
     if args.orchestrator in ("anthropic", "openai"):
         update[args.orchestrator] = {"backend": "real", "model_override": args.orchestrator_model or ""}
     elif args.orchestrator == "claude":  # the add-on talks to its Claude provider; `claude -p` answers
@@ -94,20 +85,15 @@ def sim_config(args: argparse.Namespace) -> SimConfig:
 
 
 def preflight(cfg: SimConfig) -> list[dict]:
-    """A free call per real backend (model lists, /health): fail before the house boots."""
-    targets = []
-    if cfg.room.backend != "fake":
-        targets.append(cfg.room.backend)
-    targets += [n for n in ("anthropic", "openai") if getattr(cfg, n).backend == "real" and n not in targets]
-    if cfg.anthropic.backend == "claude" and "claude" not in targets:
+    """A free call per real backend (model lists, the learner's /status): fail before the house boots."""
+    targets = [n for n in ("anthropic", "openai") if getattr(cfg, n).backend == "real"]
+    if cfg.anthropic.backend == "claude":
         targets.append("claude")
+    if cfg.jetson.learner == "jetson":
+        targets.append("jetson")
     results = []
     for t in targets:
-        key = {
-            "anthropic": "anthropic_api_key",
-            "openai": "openai_api_key",
-            "compatible": "compatible_api_key",
-        }
+        key = {"anthropic": "anthropic_api_key", "openai": "openai_api_key"}
         if t in key and not cfg.secret(key[t]):
             var = next(v for v, k in ENV_KEYS.items() if k == key[t])
             raise SetupError(f"{t}: no API key; export {var} or save it in the sim panel")
@@ -147,38 +133,32 @@ def wait_ready(app: App, timeout: float = 60) -> dict:
     raise SetupError(f"add-on not connected to the fake HA after {timeout:.0f} s: {last}")
 
 
-SLOW_LIMITS = {"timeout_s": 300}  # `claude -p` turns take seconds each, not the Jetson's ~1 s
-SLOW_SETTINGS = {"llm_timeout_s": 300, "llm_stale_after_s": 900}
-
-
-def seed_agents(app: App, agents: list[dict], live: bool, slow: bool = False) -> list[str]:
-    have = {a["id"] for a in app.get("/api/agents")}
-    if slow:
-        r = app.send("PUT", "/api/settings", SLOW_SETTINGS)
-        if r.status_code >= 300:
-            raise SetupError(f"settings: {r.status_code} {r.text[:200]}")
-    for spec in agents:
-        body = {**spec, "mode": "live" if live else spec.get("mode", "shadow")}
-        if slow:
-            body["limits"] = {**(spec.get("limits") or {}), **SLOW_LIMITS}
-        method, path = ("PUT", f"/api/agents/{spec['id']}") if spec["id"] in have else ("POST", "/api/agents")
-        r = app.send(method, path, body)
-        if r.status_code >= 300:
-            raise SetupError(f"agent {spec['id']}: {r.status_code} {r.text[:300]}")
+def seed(app: App, settings: dict, live: bool) -> None:
+    """The polygon's settings (sim/polygon.yaml) and the modes: with `--live` the global mode and
+    both actors (orchestrator, learner) are live; else everything stays in shadow."""
+    modes = {"orchestrator_mode": "live", "learner_mode": "live"} if live else {}
+    r = app.send("PUT", "/api/settings", {**(settings or {}), **modes})
+    if r.status_code >= 300:
+        raise SetupError(f"settings: {r.status_code} {r.text[:200]}")
     r = app.send("PUT", "/api/mode", {"mode": "live" if live else "shadow"})
     if r.status_code >= 300:
         raise SetupError(f"mode: {r.status_code} {r.text[:200]}")
-    return [a["id"] for a in agents]
 
 
 # ---- one scenario ----------------------------------------------------------------------------------
-def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> dict:
+def play(
+    stack: Stack, app: App, name: str, settle: float, timeout: float, expect: dict | None = None
+) -> dict:
+    """Play one scenario, then wake the house manager once (with `manager_script` queued on the fake
+    Claude first), let everything settle and collect what happened."""
+    expect = expect or {}
     life = stack.sim.life
     assert life is not None
     owners_before = stack.on_ha(lambda: _owner_automations(stack))
     calls0 = stack.on_ha(lambda: len(stack.ha.service_calls))
     writes0 = stack.on_ha(lambda: len(stack.ha.config_writes))
     gw0 = {(r["ts"], r["path"]) for r in stack.sim.gw.log.list()}
+    journal0 = stack.learner.journal.stats()["events"]
     t0 = clock.time()
 
     def start():
@@ -194,13 +174,20 @@ def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> di
             timed_out = True
             break
         time.sleep(0.2)
-    # let the gate's debounce fire and the runs finish: quiet for `settle` seconds, nothing busy
+    if not timed_out:
+        script = expect.get("manager_script")
+        if script and stack.cfg.anthropic.backend == "fake":
+            httpx.post(stack.sim.gw.internal["anthropic"] + "/_sim/script", json=script, timeout=10)
+        r = app.send("POST", "/api/manager/wake", {"reason": f"polygon: after {name}"})
+        if r.status_code >= 300 and r.status_code != 409:
+            raise SetupError(f"manager wake: {r.status_code} {r.text[:200]}")
+    # quiet for `settle` seconds: nothing running, and the learner has the scenario's events
     seen, quiet_since = -1, time.monotonic()
     while not timed_out:
         runs = _runs_since(app, t0)
         if len(runs) != seen or any(r["status"] in BUSY for r in runs):
             seen, quiet_since = len(runs), time.monotonic()
-        elif time.monotonic() - quiet_since >= settle:
+        elif time.monotonic() - quiet_since >= settle and _learnt(stack, app):
             break
         if time.monotonic() > deadline:
             timed_out = True
@@ -210,6 +197,9 @@ def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> di
     runs = [app.get(f"/api/runs/{r['id']}") for r in _runs_since(app, t0)]
     run_ids = {r["id"] for r in runs}
     actions = [a for a in app.get("/api/actions", limit=500) if a["ts"] >= t0 or a.get("run_id") in run_ids]
+    rows = stack.learner.journal.db.execute(
+        "SELECT DISTINCT entity_id FROM events WHERE ts>=?", (t0 - 1,)
+    ).fetchall()
     return {
         "scenario": name,
         "description": SCENARIOS[name][0],
@@ -227,8 +217,22 @@ def play(stack: Stack, app: App, name: str, settle: float, timeout: float) -> di
         "ha_config_writes": stack.on_ha(lambda: list(stack.ha.config_writes[writes0:])),
         "owner_automations_changed": owners_before != stack.on_ha(lambda: _owner_automations(stack)),
         "llm_requests": [r for r in stack.sim.gw.log.list() if (r["ts"], r["path"]) not in gw0],
+        "learner": {
+            **app.get("/api/learner")["link"],
+            "journal_new": stack.learner.journal.stats()["events"] - journal0,
+            "entities": sorted(r[0] for r in rows),
+            "backend": stack.cfg.jetson.learner,
+        },
         "entities": stack.on_ha(lambda: sorted(stack.ha.states)),
     }
+
+
+def _learnt(stack: Stack, app: App) -> bool:
+    """The add-on has nothing left to forward (or no learner of ours runs in this process)."""
+    if stack.cfg.jetson.learner != "sim":
+        return True
+    link = app.get("/api/learner")["link"]
+    return link["buffered"] == 0 and link["connected"]
 
 
 def _runs_since(app: App, t0: float) -> list[dict]:
@@ -243,7 +247,7 @@ def _owner_automations(stack: Stack) -> dict:
 
 # ---- invariants: pure, on the collected data -------------------------------------------------------
 def check(result: dict, mode: str, expect: dict) -> list[dict]:
-    """The safety rules of CLAUDE.md plus the scenario's wake expectations, as pass/fail lines."""
+    """The safety rules of CLAUDE.md plus the scenario's expectations, as pass/fail lines."""
     out: list[dict] = []
 
     def add(name: str, bad: list, detail: str) -> None:
@@ -293,50 +297,57 @@ def check(result: dict, mode: str, expect: dict) -> list[dict]:
         [
             f"{r.get('gateway')} {r.get('backend')} {r.get('path')} → {r.get('status')}"
             for r in result["llm_requests"]
-            if int(r.get("status") or 0) >= 400
+            if int(r.get("status") or 0) >= 400 and r.get("gateway") != "learner"
         ],
-        "every model request through the gateways answered < 400",
+        "every model request through the cloud gateways answered < 400",
     )
-    woken = {r["agent_id"] for r in result["runs"] if r.get("wake_source") == "event"}
-    if expect.get("wake"):
-        add("expected_wakes", sorted(set(expect["wake"]) - woken), f"woken by an event: {expect['wake']}")
-    if expect.get("no_wake"):
-        add("no_unexpected_wakes", sorted(set(expect["no_wake"]) & woken), f"not woken: {expect['no_wake']}")
+    add(
+        "known_actors_only",
+        sorted({a["agent_id"] for a in actions if a["agent_id"] not in ACTORS}),
+        f"every action is by {' or '.join(ACTORS)}",
+    )
+    learner = result.get("learner") or {}
+    if learner.get("backend") == "sim":
+        add("learner_link_ok", [] if learner.get("connected") and not learner.get("dropped") else [learner],
+            "the add-on reached the learner and lost no event")  # fmt: skip
+        if expect.get("learner_events"):
+            add("learner_events", sorted(set(expect["learner_events"]) - set(learner.get("entities") or [])),
+                f"the learner's journal has these changes: {expect['learner_events']}")  # fmt: skip
+    if expect.get("actions"):
+        done = {e for a in actions if a["verdict"] in ACTUATED for e in a.get("entity_ids") or []}
+        want = set(expect["actions"]) if mode == "live" else set()
+        add("expected_actions", sorted(want - done), f"live: executed on {expect['actions']}")
     return out
 
 
 # ---- CLI ----------------------------------------------------------------------------------------------
 def _common(ap: argparse.ArgumentParser) -> None:
-    ap.add_argument("--spec", type=Path, default=DEFAULT_SPEC, help="agents + expectations (YAML)")
+    ap.add_argument("--spec", type=Path, default=DEFAULT_SPEC, help="settings + expectations (YAML)")
     ap.add_argument("--house", choices=sorted(house_gen.PRESETS), default="realistic")
     ap.add_argument("--backfill-days", type=int, default=0, help="history to write first (slow when large)")
     ap.add_argument("--rate", type=float, default=1.0, help="background life of the house (0 = silent)")
     ap.add_argument("--speed", type=float, default=10.0, help="play scenario waits N times faster")
-    ap.add_argument("--live", action="store_true", help="global mode and the agents live (default: shadow)")
-    ap.add_argument("--port-base", type=int, default=0, help="ports N..N+7 (default 0 = free ports)")
+    ap.add_argument("--live", action="store_true",
+                    help="global mode, the orchestrator and the learner live (default: shadow)")  # fmt: skip
+    ap.add_argument("--port-base", type=int, default=0, help="ports N..N+6 (default 0 = free ports)")
     ap.add_argument("--out-dir", type=Path, help="data dir + report (default .agent-logs/polygon/<stamp>)")
     ap.add_argument(
         "--sim-config", type=Path, default=ROOT / ".data" / "sim", help="saved keys + Jetson host"
     )
-    llm = ap.add_argument_group("model backends (default: the fakes)")
+    llm = ap.add_argument_group("backends (default: the fake clouds and the learner in this process)")
     llm.add_argument(
-        "--room-llm", choices=ROOM_BACKENDS, help="room agents' model behind the llama-server API"
-    )
-    llm.add_argument("--room-model", help="model id for --room-llm openai / anthropic / compatible")
-    llm.add_argument("--compatible-url", help="base URL for --room-llm compatible")
-    llm.add_argument("--jetson-host", help="IP of the real Jetson for --room-llm jetson")
-    llm.add_argument(
-        "--no-pace", action="store_true", help="cloud room model at full speed, not Jetson speed"
-    )
+        "--learner", choices=LEARNER_BACKENDS, default="sim",
+        help="sim = jetson/learner in-process; jetson = the real one (--jetson-host); off = down",
+    )  # fmt: skip
+    llm.add_argument("--jetson-host", help="IP of the real Jetson for --learner jetson")
     llm.add_argument(
         "--orchestrator",
-        choices=("auto", "local", "anthropic", "openai", "claude"),
+        choices=("auto", "anthropic", "openai", "claude"),
         default="auto",
         help="claude = the add-on's Claude provider answered by `claude -p`, no API key (D30)",
     )
     llm.add_argument("--orchestrator-model", help="override the model the orchestrator asks for")
     llm.add_argument("--orchestrator-effort", default="medium", help="effort for --orchestrator claude")
-    llm.add_argument("--room-effort", help="effort for --room-llm claude (default low)")
 
 
 def _prepare(args: argparse.Namespace) -> tuple[dict, SimConfig, list[dict], Path]:
@@ -360,10 +371,8 @@ def _start(
     try:
         app = App(stack)
         wait_ready(app)
-        agents = (  # a restored polygon keeps its own agents, settings and mode
-            [a["id"] for a in app.get("/api/agents")] if restore
-            else seed_agents(app, spec.get("agents") or [], args.live, slow=cfg.room.backend == "claude")
-        )  # fmt: skip
+        if not restore:  # a restored polygon keeps its own settings and mode
+            seed(app, spec.get("settings") or {}, args.live)
     except BaseException:
         stack.stop()
         raise
@@ -373,15 +382,8 @@ def _start(
         "house": stack.house["summary"],
         "mode": "live" if args.live else "shadow",
         "speed": args.speed,
-        "agents": agents,
         "backends": {
-            "room": cfg.room.backend,
-            "room_model": {
-                "openai": cfg.room.openai_model,
-                "anthropic": cfg.room.anthropic_model,
-                "compatible": cfg.room.compatible_model,
-                "claude": f"{cfg.room.claude_model}/{cfg.room.claude_effort}",
-            }.get(cfg.room.backend),
+            "learner": cfg.jetson.learner,
             "orchestrator": args.orchestrator,
             "anthropic": cfg.anthropic.backend,
             "openai": cfg.openai.backend,
@@ -410,11 +412,10 @@ def cmd_run(args: argparse.Namespace) -> int:
                 stack, app, meta = _start(args, spec, cfg, checks, data_dir)
                 report["meta"] = report["meta"] or {**meta, "out_dir": str(out_dir), "shared": args.shared}
             print(f"polygon: {name} …", file=sys.stderr, flush=True)
-            result = play(stack, app, name, args.settle, args.timeout)
+            expect = (spec.get("scenarios") or {}).get(name) or {}
+            result = play(stack, app, name, args.settle, args.timeout, expect)
             result["data_dir"] = str(stack.data_dir)
-            result["checks"] = check(
-                result, report["meta"]["mode"], (spec.get("scenarios") or {}).get(name) or {}
-            )
+            result["checks"] = check(result, report["meta"]["mode"], expect)
             result["ok"] = all(c["ok"] for c in result["checks"])
             result.pop("entities")
             report["scenarios"].append(result)
@@ -426,7 +427,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 )
             print(
                 f"  runs {len(result['runs'])}, actions {len(result['actions'])}, "
-                f"llm requests {len(result['llm_requests'])}, {result['duration_s']} s",
+                f"model requests {len(result['llm_requests'])}, learner +{result['learner']['journal_new']} "
+                f"events, {result['duration_s']} s",
                 file=sys.stderr,
             )
     finally:

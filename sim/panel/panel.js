@@ -94,10 +94,9 @@ function render() {
     pill('entities', S.house.summary.entities),
     pill('events/min', life.events_last_min),
     pill('rate', life.rate === 0 ? 'paused' : `×${life.effective_rate}`, life.rate === 0 ? 'warn' : ''),
-    pill('room LLM', c.room.backend, c.room.backend === 'fake' ? '' : 'live'),
+    pill('learner', c.jetson.learner, c.jetson.learner === 'off' ? 'warn' : c.jetson.learner === 'jetson' ? 'live' : ''),
     pill('Claude', c.anthropic.backend, c.anthropic.backend === 'real' ? 'live' : ''),
     pill('OpenAI', c.openai.backend, c.openai.backend === 'real' ? 'live' : ''),
-    pill('Jetson metrics', c.metrics_source, c.metrics_source === 'jetson' ? 'live' : ''),
     pill('add-on WS', S.ha.ws_connections, S.ha.ws_connections ? '' : 'warn'),
     life.scenario ? pill('scenario', life.scenario, 'live') : '',
   ].join('');
@@ -146,20 +145,21 @@ function render() {
   // faults
   const hl = $('#ha-latency');
   if (hl !== document.activeElement) hl.value = S.ha.latency_s;
-  const ll = $('#llm-latency');
-  if (ll !== document.activeElement) ll.value = c.faults.llm.latency_s;
-  const jf = $('#jetson-form');
-  if (!jf.children.length) {
-    jf.innerHTML =
-      Object.keys(S.jetson)
-        .filter((k) => !['throttled', 'active_profile', 'profiles'].includes(k))
-        .map((k) => `<label>${esc(k)} <input name="${esc(k)}" type="number" step="any"></label>`)
-        .join('') + '<button type="submit">Apply</button>';
-  }
-  fill(jf, S.jetson);
+  const ll = $('#learner-latency');
+  if (ll !== document.activeElement) ll.value = c.faults.learner.latency_s;
 
-  // models
-  fill($('#room-form'), c.room);
+  // learner and models
+  const L = S.learner || {};
+  const st = L.status;
+  $('#learner-state').textContent = !st
+    ? `backend: ${L.backend} (no learner in this sim to show)`
+    : [
+        `journal: ${st.journal.events} events, ${st.journal.entities ?? '?'} entities`,
+        `training: ${st.training.state}${st.training.duration_s ? ` (${st.training.duration_s} s)` : ''}${st.training.error ? ` — ${st.training.error}` : ''}`,
+        `next training: ${st.training.next_at ? new Date(st.training.next_at * 1000).toLocaleString() : '?'}`,
+        `live targets: ${st.live_targets}`,
+        L.model ? `model: ${Object.entries(L.model).filter(([k]) => k !== 'trained_at').map(([k, v]) => `${k} ${v}`).join(', ')}` : 'model: not trained yet',
+      ].join('\n');
   fill($('#jetson-real-form'), c.jetson);
   fill($('#cloud-form'), {
     anthropic: c.anthropic.backend, anthropic_model: c.anthropic.model_override,
@@ -268,19 +268,11 @@ $('#scenario-stop').addEventListener('click', () => act(() => api('api/scenario-
 
 $$('[data-fault]').forEach((b) => b.addEventListener('click', () => act(() => api('api/faults', 'POST', JSON.parse(b.dataset.fault)), b.textContent)));
 $('#ha-latency').addEventListener('change', (ev) => act(() => api('api/faults', 'POST', { target: 'ha', latency_s: Number(ev.target.value) })));
-$('#llm-latency').addEventListener('change', (ev) => act(() => api('api/faults', 'POST', { target: 'llm', latency_s: Number(ev.target.value) })));
-$('#jetson-form').addEventListener('submit', (ev) => {
-  ev.preventDefault();
-  act(() => api('api/faults', 'POST', { target: 'jetson', ...read(ev.target) }), 'Jetson metrics set');
-});
-
-$('#room-form').addEventListener('submit', (ev) => {
-  ev.preventDefault();
-  act(() => api('api/config', 'PUT', { room: read(ev.target) }), 'Room-agent backend saved');
-});
+$('#learner-latency').addEventListener('change', (ev) => act(() => api('api/faults', 'POST', { target: 'learner', latency_s: Number(ev.target.value) })));
+$('#learner-train').addEventListener('click', () => act(() => api('api/learner/train', 'POST'), (r) => (r.started ? 'Training started' : r.detail || 'Not started (a training runs?)')));
 $('#jetson-real-form').addEventListener('submit', (ev) => {
   ev.preventDefault();
-  act(() => api('api/config', 'PUT', { jetson: read(ev.target) }), 'Jetson saved');
+  act(() => api('api/config', 'PUT', { jetson: read(ev.target) }), 'Learner saved');
 });
 $('#cloud-form').addEventListener('submit', (ev) => {
   ev.preventDefault();

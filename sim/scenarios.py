@@ -2,7 +2,7 @@
 returns steps for `Life.play`: `{"entity", "state", "cause"}`, `{"wait": seconds}`.
 
 Causes matter: `user` = the owner in the HA UI, `physical` = a wall switch or a sensor,
-`automation` = one of the owner's automations. The habit finder and the agents read them.
+`automation` = one of the owner's automations. The habit finder and the learner read them.
 """
 
 from __future__ import annotations
