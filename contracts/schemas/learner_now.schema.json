@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "learner_now.schema.json",
+  "title": "LearnerNow",
+  "description": "GET /now of the Jetson learner, and `suggestions` in the answer to POST /events (D38): what the booster thinks the owner is about to do, calibrated by its out-of-sample record. The learner only suggests; the add-on decides through the actuator (policy, tiers, ownership, kill switch, shadow).",
+  "type": "object",
+  "required": ["ts", "suggestions"],
+  "properties": {
+    "ts": {"type": "number"},
+    "suggestions": {"type": "array", "items": {"$ref": "#/$defs/suggestion"}}
+  },
+  "$defs": {
+    "suggestion": {
+      "type": "object",
+      "required": ["entity_id", "state", "p", "mode", "earned"],
+      "properties": {
+        "entity_id": {"type": "string"},
+        "state": {"type": "string"},
+        "p": {"type": "number", "minimum": 0, "maximum": 1, "description": "the record of the model's bin shrunk towards its own estimate (D35)"},
+        "p_model": {"type": "number", "minimum": 0, "maximum": 1},
+        "fires": {"type": "integer", "description": "shadow fires of this bin"},
+        "right": {"type": "integer"},
+        "right_days": {"type": "integer"},
+        "cost": {"type": "number"},
+        "mode": {"enum": ["act", "ask", "wait"], "description": "by expected utility, as core/predict.py decides"},
+        "earned": {"type": "boolean", "description": "the bin has MIN_FIRES fires right on MIN_RIGHT_DAYS days"}
+      }
+    }
+  }
+}

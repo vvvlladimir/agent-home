@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "house_events.schema.json",
+  "title": "HouseEvents",
+  "description": "POST /events of the Jetson learner (jetson/learner/server.py, D38): a batch of what happened in the house, forwarded by the add-on (app/core/learner.py). The add-on tags each change with its cause the way core/insights.py reads the logbook; live changes are tagged from their HA context, a backfill from the logbook. Numeric sensors arrive at most once a minute per entity (the last value). The learner never sees an HA token and never writes to HA.",
+  "type": "object",
+  "required": ["schema_version", "events"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "backfill": {"type": "boolean", "default": false, "description": "true = read from HA's logbook to fill a gap, not live"},
+    "events": {"type": "array", "maxItems": 5000, "items": {"$ref": "#/$defs/event"}}
+  },
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["ts", "kind", "entity_id"],
+      "additionalProperties": false,
+      "properties": {
+        "ts": {"type": "number", "description": "unix seconds"},
+        "kind": {
+          "enum": ["state", "trigger", "answer"],
+          "description": "state = an entity changed state; trigger = an automation or script ran (entity_id is the automation); answer = the owner pressed a button of an ask notification (state is the button's action id)"
+        },
+        "entity_id": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
+        "state": {"type": ["string", "null"], "maxLength": 255},
+        "cause": {
+          "enum": ["user", "physical", "agent", "automation", "script", "other"],
+          "default": "other",
+          "description": "core/insights.py Change.cause: user = a person in the HA UI or app; physical = no context at all (a wall switch, or a sensor's own change); agent = Agent House; automation = an HA automation or a program user (Node-RED …); script; other"
+        },
+        "ref": {"type": ["string", "null"], "maxLength": 255, "description": "automation/script entity, `user:<program name>`, or the agent id"}
+      }
+    }
+  }
+}

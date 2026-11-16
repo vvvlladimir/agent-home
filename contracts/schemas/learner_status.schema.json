@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "learner_status.schema.json",
+  "title": "LearnerStatus",
+  "description": "GET /status of the Jetson learner (D38): the journal, the registry it has, and the nightly training.",
+  "type": "object",
+  "required": ["schema_version", "journal", "training"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": "string"},
+    "journal": {
+      "type": "object",
+      "required": ["events", "last_ts"],
+      "properties": {
+        "events": {"type": "integer"},
+        "entities": {"type": "integer"},
+        "first_ts": {"type": ["number", "null"]},
+        "last_ts": {"type": ["number", "null"], "description": "the newest event: the add-on fills the gap after it from HA's logbook"},
+        "size_mb": {"type": ["number", "null"]}
+      }
+    },
+    "registry_ts": {"type": ["number", "null"]},
+    "training": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {"enum": ["never", "running", "ok", "failed"]},
+        "started": {"type": ["number", "null"]},
+        "finished": {"type": ["number", "null"]},
+        "duration_s": {"type": ["number", "null"]},
+        "error": {"type": ["string", "null"]},
+        "next_at": {"type": ["number", "null"]}
+      }
+    },
+    "model_ts": {"type": ["number", "null"]},
+    "live_targets": {"type": "integer"}
+  }
+}

@@ -667,6 +667,25 @@ paths:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Metrics"}}}}
         "502": {$ref: "#/components/responses/Error"}
 
+  /api/learner:
+    get:
+      tags: [council]
+      operationId: getLearner
+      x-milestone: M6
+      summary: The Jetson learner (D38) - the link that forwards the house to it, its journal and training, the house model it learnt, and what its live suggestions did
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/LearnerInfo"}}}}
+  /api/learner/train:
+    post:
+      tags: [council]
+      operationId: trainLearner
+      x-milestone: M6
+      summary: Ask the learner to train now instead of at night
+      responses:
+        "202": {description: started, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}}}}}}
+        "409": {$ref: "#/components/responses/Error"}
+        "502": {$ref: "#/components/responses/Error"}
+
   /api/chat:
     post:
       tags: [chat]
@@ -1189,6 +1208,36 @@ components:
             last: {type: [object, "null"]}
         last_scan: {type: [object, "null"], description: "the last history scan without its findings; `habits` is its funnel (ScanResult.habits)"}
         first_look: {type: [object, "null"], description: "the first scan after install (D31): when, how many drafted, the habit funnel; null until it ran"}
+    LearnerInfo:
+      type: object
+      required: [configured, mode, link, model]
+      properties:
+        configured: {type: boolean, description: "jetson_learner_url is set"}
+        mode: {type: string, enum: [shadow, live], description: "learner_mode: live suggestions only act when live (and policy allows)"}
+        link:
+          type: object
+          description: the add-on's side - forwarding, buffer, backfill
+          properties:
+            connected: {type: boolean}
+            last_push: {type: [number, "null"]}
+            pushed: {type: integer}
+            buffered: {type: integer}
+            dropped: {type: integer, description: events lost because the buffer was full}
+            error: {type: [string, "null"]}
+            backfill: {type: object, description: "{state: idle|running|done|failed, from, to, days, error}"}
+            registry_sent: {type: [number, "null"]}
+        jetson: {type: [object, "null"], description: "schemas/learner_status.schema.json, null while unreachable"}
+        model:
+          type: [object, "null"]
+          description: summary of schemas/house_model.schema.json (counts and the strongest items); null before the first training
+        live:
+          type: object
+          description: what the live suggestions did today
+          properties:
+            acted: {type: integer}
+            shadow: {type: integer}
+            denied: {type: integer}
+            recent: {type: array, items: {type: object}}
     ManagerStatus:
       type: object
       required: [enabled, mode, anomalies, owned, weak]

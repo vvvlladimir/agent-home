@@ -1,0 +1,19 @@
+# Installed by jetson/learner/setup_learner.sh to /etc/systemd/system/ with @USER@, @REPO@ and @DATA@
+# filled in. The learner (D38): journal, nightly training, live suggestions; it never talks to HA.
+[Unit]
+Description=Agent House learner (journal + nightly training + live suggestions)
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Environment=AH_LEARNER_DATA=@DATA@
+ExecStart=@DATA@/venv/bin/python @REPO@/jetson/learner/server.py
+Restart=always
+RestartSec=5
+# training is a background job: keep the box responsive
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# The learner's venv (jetson/setup.sh --learner). It imports core/predict.py and core/insights.py from
+# the add-on, so it needs the add-on's own requirements, plus the booster.
+-r ../../agent_house/requirements.txt
+jsonschema>=4.23
+numpy>=1.26
+scikit-learn>=1.4

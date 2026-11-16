@@ -6,3 +6,6 @@ jsonschema>=4.23
 openapi-spec-validator>=0.7
 yamllint>=1.35
 shellcheck-py>=0.10
+# the Jetson learner (jetson/learner/, D38) is tested here too
+numpy>=1.26
+scikit-learn>=1.4

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "house_model.schema.json",
+  "title": "HouseModel",
+  "description": "GET /model of the Jetson learner (D38): what it learnt from the journal, rebuilt every night. Facts with counts, never raw history. The add-on stores it, the orchestrator reads it as text, the event gate and the unusual-state notes use its longer-history tables. `habits` are the D35 predictions (core/predict.py, the same code) over the learner's longer history: their automations are built deterministically and stay HA automations. `live` describes the booster that predicts on top of them while the Jetson is up.",
+  "type": "object",
+  "required": ["schema_version", "trained_at", "history"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "trained_at": {"type": "number"},
+    "duration_s": {"type": "number"},
+    "history": {
+      "type": "object",
+      "required": ["events", "days"],
+      "properties": {
+        "first_ts": {"type": ["number", "null"]},
+        "last_ts": {"type": ["number", "null"]},
+        "days": {"type": "number", "description": "days of history the model was trained on"},
+        "events": {"type": "integer"},
+        "by_hand": {"type": "integer", "description": "changes made by a person (cause user or physical) of switchable devices"}
+      }
+    },
+    "habits": {
+      "type": "object",
+      "properties": {
+        "days": {"type": "integer"},
+        "predictions": {"type": "array", "items": {"type": "object", "description": "one core/predict.py scan item: entity_id, state, room, name, mode (act|ask), p, fires, right, right_days, per_day, value, cost, rule, yaml"}},
+        "funnel": {"type": "object"}
+      }
+    },
+    "live": {
+      "type": "array",
+      "description": "devices and states the booster predicts live, with its out-of-sample record",
+      "items": {
+        "type": "object",
+        "required": ["entity_id", "state", "fires", "right", "right_days"],
+        "properties": {
+          "entity_id": {"type": "string"},
+          "state": {"type": "string"},
+          "room": {"type": ["string", "null"]},
+          "by_hand": {"type": "integer"},
+          "fires": {"type": "integer", "description": "shadow fires of the fold models on days they never saw"},
+          "right": {"type": "integer"},
+          "right_days": {"type": "integer"},
+          "cost": {"type": "number", "description": "learnt cost of a wrong action (core/predict.py cost_of)"}
+        }
+      }
+    },
+    "routines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity_id", "state", "days", "at", "spread_min", "seen_days"],
+        "properties": {
+          "entity_id": {"type": "string"},
+          "state": {"type": "string"},
+          "days": {"enum": ["workdays", "weekends"]},
+          "at": {"type": "string", "pattern": "^\\d\\d:\\d\\d$", "description": "median local time"},
+          "spread_min": {"type": "number", "description": "half the inter-quartile range, minutes"},
+          "seen_days": {"type": "integer"},
+          "share": {"type": "number", "description": "seen days / days of that kind in the history"}
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["after", "then", "count", "lift", "lag_s"],
+        "properties": {
+          "after": {"$ref": "#/$defs/kind"},
+          "then": {"$ref": "#/$defs/kind"},
+          "count": {"type": "integer", "description": "times `then` followed `after` within the window"},
+          "expected": {"type": "number", "description": "that count if they were independent"},
+          "lift": {"type": "number"},
+          "lag_s": {"type": "number", "description": "median delay"},
+          "share": {"type": "number", "description": "of all `then`, the share that followed `after`"}
+        }
+      }
+    },
+    "usual_states": {"type": "object", "description": "core/predict.py usual_states over the longer history"},
+    "event_relevance": {"type": "object", "description": "core/predict.py event_relevance over the longer history"},
+    "health": {
+      "type": "object",
+      "properties": {
+        "unavailable": {"type": "array", "items": {"type": "object", "required": ["entity_id"], "properties": {"entity_id": {"type": "string"}, "since": {"type": ["number", "null"]}}}},
+        "flapping": {"type": "array", "items": {"type": "object", "required": ["entity_id", "per_day"], "properties": {"entity_id": {"type": "string"}, "per_day": {"type": "number"}, "usual_per_day": {"type": "number"}}}}
+      }
+    },
+    "corrections": {
+      "type": "array",
+      "description": "what an automation (ours, the owner's, or a program like Node-RED) set and a person changed back soon after",
+      "items": {
+        "type": "object",
+        "required": ["source", "entity_id", "state", "fires", "corrected"],
+        "properties": {
+          "source": {"type": "string", "description": "automation entity, `user:<program>` or `agent:<id>`"},
+          "entity_id": {"type": "string"},
+          "state": {"type": "string"},
+          "fires": {"type": "integer"},
+          "corrected": {"type": "integer"},
+          "per_day": {"type": "number", "description": "corrections a day"},
+          "delay_s": {"type": "number", "description": "median time until the person changed it back"}
+        }
+      }
+    },
+    "timeouts": {
+      "type": "array",
+      "description": "an automation that switches a light off after a presence sensor went quiet, the timeout it uses and the one the owner's corrections ask for (prototype E2, D38)",
+      "items": {
+        "type": "object",
+        "required": ["entity_id", "source", "current_min", "suggested_min"],
+        "properties": {
+          "entity_id": {"type": "string"},
+          "presence": {"type": "array", "items": {"type": "string"}},
+          "source": {"type": "string"},
+          "current_min": {"type": "number"},
+          "suggested_min": {"type": "number"},
+          "corrections_per_day": {"type": "number"},
+          "cost_now": {"type": "number", "description": "per day, by the same cost as the suggestion"},
+          "cost_suggested": {"type": "number"},
+          "runs": {"type": "integer", "description": "quiet stretches of the sensor it was learnt from"}
+        }
+      }
+    },
+    "modes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity_id"],
+        "properties": {
+          "entity_id": {"type": "string"},
+          "states": {"type": "array", "items": {"type": "string"}},
+          "by_hand": {"type": "integer"},
+          "predicted": {"type": "boolean", "description": "a habit or a live target of the learner"}
+        }
+      }
+    },
+    "asks": {
+      "type": "object",
+      "properties": {"fired": {"type": "integer"}, "yes": {"type": "integer"}, "no": {"type": "integer"}}
+    }
+  },
+  "$defs": {
+    "kind": {
+      "type": "object",
+      "required": ["entity_id", "state"],
+      "properties": {"entity_id": {"type": "string"}, "state": {"type": "string"}, "by_hand": {"type": "boolean"}}
+    }
+  }
+}

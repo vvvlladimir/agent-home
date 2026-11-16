@@ -1,0 +1,105 @@
+openapi: 3.1.0
+info:
+  title: Agent House learner (Jetson)
+  version: 0.1.0
+  description: |
+    HTTP API of `jetson/learner/server.py` (D38). Only the add-on talks to it. Every path but
+    `/healthz` needs `Authorization: Bearer <token>` (the Jetson's token, `/etc/agent-house/token`,
+    the add-on's `jetson_token`): the journal is the house's private history. Bodies are described in
+    `schemas/*.schema.json`. The learner never holds an HA token and never writes to HA.
+servers:
+  - url: http://jetson.local:9200
+components:
+  securitySchemes:
+    bearer: {type: http, scheme: bearer}
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: {type: object, required: [ok, error], properties: {ok: {const: false}, error: {type: string}}}
+security:
+  - bearer: []
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      security: []
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}}}}}}
+  /status:
+    get:
+      operationId: status
+      summary: The journal, the registry and the training
+      responses:
+        "200": {description: "schemas/learner_status.schema.json", content: {application/json: {schema: {type: object}}}}
+        "401": {$ref: "#/components/responses/Error"}
+  /registry:
+    put:
+      operationId: putRegistry
+      summary: Areas, entities, our automations and the tier policy (replaces the previous one)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, description: "schemas/house_registry.schema.json"}}}
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}, entities: {type: integer}}}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+  /events:
+    post:
+      operationId: postEvents
+      summary: Append a batch to the journal (duplicates are ignored); live suggestions come back
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, description: "schemas/house_events.schema.json"}}}
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, accepted, last_ts, suggestions]
+                properties:
+                  ok: {type: boolean}
+                  accepted: {type: integer}
+                  duplicates: {type: integer}
+                  last_ts: {type: [number, "null"]}
+                  suggestions: {type: array, description: "items of schemas/learner_now.schema.json"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "413": {$ref: "#/components/responses/Error"}
+  /model:
+    get:
+      operationId: getModel
+      summary: The house model of the last training (404 before the first one)
+      responses:
+        "200": {description: "schemas/house_model.schema.json", content: {application/json: {schema: {type: object}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+  /now:
+    get:
+      operationId: getNow
+      summary: Live suggestions for the house as it is now
+      responses:
+        "200": {description: "schemas/learner_now.schema.json", content: {application/json: {schema: {type: object}}}}
+        "401": {$ref: "#/components/responses/Error"}
+  /train:
+    post:
+      operationId: train
+      summary: Train now instead of at night (202; 409 while a training runs)
+      responses:
+        "202": {description: started, content: {application/json: {schema: {type: object, properties: {ok: {type: boolean}}}}}}
+        "401": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+  /replay:
+    post:
+      operationId: replay
+      summary: What a candidate automation would have done on the last days of the journal
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, description: "schemas/learner_replay.schema.json#/$defs/request"}}}
+      responses:
+        "200": {description: "schemas/learner_replay.schema.json#/$defs/result", content: {application/json: {schema: {type: object}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}

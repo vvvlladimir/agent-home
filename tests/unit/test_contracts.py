@@ -11,9 +11,9 @@ import yaml
 from openapi_spec_validator import validate
 
 ROOT = Path(__file__).resolve().parents[2]
-DONE = {"M1", "M2", "M3", "M4", "M5"}  # milestones whose operations must all be routed
+DONE = {"M1", "M2", "M3", "M4", "M5", "M6"}  # milestones whose operations must all be routed
 SCHEMAS = sorted((ROOT / "contracts" / "schemas").glob("*.schema.json"))
-MILESTONES = {"M1", "M2", "M3", "M4", "M5"}
+MILESTONES = {"M1", "M2", "M3", "M4", "M5", "M6"}
 
 
 def test_openapi_is_valid_and_every_operation_has_a_milestone():
@@ -28,6 +28,16 @@ def test_openapi_is_valid_and_every_operation_has_a_milestone():
             assert operation.get("x-milestone") in MILESTONES, f"{method} {path}"
             assert operation["operationId"] not in seen, operation["operationId"]
             seen.add(operation["operationId"])
+
+
+def test_learner_openapi_is_valid():
+    """The Jetson learner's own API (D38): every path but /healthz needs the bearer token."""
+    spec = yaml.safe_load((ROOT / "contracts" / "learner.openapi.yaml").read_text())
+    validate(spec)
+    assert spec["security"] == [{"bearer": []}]
+    for path, item in spec["paths"].items():
+        for operation in item.values():
+            assert (operation.get("security") == []) == (path == "/healthz"), path
 
 
 @pytest.mark.parametrize("path", SCHEMAS, ids=lambda p: p.name)

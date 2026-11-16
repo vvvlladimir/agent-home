@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "learner_replay.schema.json",
+  "title": "LearnerReplay",
+  "description": "POST /replay of the Jetson learner (D38): what a candidate automation would have done on the journal's last days. Only simple automations replay (state / time / sun / numeric_state triggers; state / time / sun / numeric_state / and / or / not conditions; service calls on entities); anything else is listed in `unsupported` and nothing is counted. An estimate from what happened by hand, never proof.",
+  "type": "object",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["automation"],
+      "properties": {
+        "automation": {"type": "object", "description": "an HA automation config (triggers, conditions, actions)"},
+        "days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30}
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["supported", "unsupported", "days", "fires", "outcomes"],
+      "properties": {
+        "supported": {"type": "boolean"},
+        "unsupported": {"type": "array", "items": {"type": "string"}},
+        "days": {"type": "number"},
+        "fires": {"type": "integer"},
+        "per_day": {"type": "number"},
+        "outcomes": {
+          "type": "object",
+          "description": "per entity it would have set: right = a person set the same within 10 min after; no_op = it already was; wrong = nobody did while someone was active (a change by hand anywhere within 30 min); unobserved = nobody was active",
+          "properties": {
+            "right": {"type": "integer"}, "wrong": {"type": "integer"},
+            "no_op": {"type": "integer"}, "unobserved": {"type": "integer"}
+          }
+        },
+        "examples": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "object",
+            "properties": {"ts": {"type": "number"}, "entity_id": {"type": "string"}, "state": {"type": "string"}, "outcome": {"type": "string"}}
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [{"$ref": "#/$defs/request"}, {"$ref": "#/$defs/result"}]
+}

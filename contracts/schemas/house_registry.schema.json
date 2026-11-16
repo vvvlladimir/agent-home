@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "house_registry.schema.json",
+  "title": "HouseRegistry",
+  "description": "PUT /registry of the Jetson learner (D38): what the learner needs to read the journal like the add-on does — areas, the entities with their current state, our own automations and the tier policy. Sent on start and whenever HA's registries change.",
+  "type": "object",
+  "required": ["schema_version", "ts", "areas", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": 1},
+    "ts": {"type": "number"},
+    "time_zone": {"type": ["string", "null"], "description": "HA's time zone (IANA), so hours and weekdays mean the house's"},
+    "areas": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["area_id"],
+        "properties": {"area_id": {"type": "string"}, "name": {"type": ["string", "null"]}}
+      }
+    },
+    "entities": {
+      "type": "array",
+      "maxItems": 20000,
+      "items": {
+        "type": "object",
+        "required": ["entity_id"],
+        "properties": {
+          "entity_id": {"type": "string", "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$"},
+          "area_id": {"type": ["string", "null"]},
+          "name": {"type": ["string", "null"]},
+          "state": {"type": ["string", "null"]},
+          "attributes": {"type": "object", "description": "a small subset: friendly_name, device_class, unit_of_measurement"},
+          "registry": {"type": "object", "description": "a subset of the entity registry entry: disabled_by, hidden_by, entity_category, platform"}
+        }
+      }
+    },
+    "ours": {
+      "type": "object",
+      "description": "automation entity → {ha_id, ask, targets: [[entity_id, state]]} for our deployed automations (core/insights.py `mine`)",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["ha_id"],
+        "properties": {
+          "ha_id": {"type": "string"},
+          "ask": {"type": "boolean"},
+          "targets": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"type": "string"}], "minItems": 2, "maxItems": 2}}
+        }
+      }
+    },
+    "policy": {"type": ["object", "null"], "description": "the add-on's tier policy (schemas/policy.schema.json): T3 devices are never proposed"},
+    "settings": {
+      "type": "object",
+      "description": "habit_days / habit_min_repeats the add-on uses, so both read the same way",
+      "properties": {"habit_days": {"type": "integer"}, "habit_min_repeats": {"type": "integer"}}
+    }
+  }
+}
