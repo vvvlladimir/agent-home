@@ -26,7 +26,7 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] **Owner:** install on the Pi, open the panel, commit screenshot + diagnostics (OWNER_CHECKLIST M1, 2026-11-13)
 - [x] **Owner:** answers Q1–Q7 → `owner-reports/answers.md`
 
-## M2 — Inference stack
+## M2 — Inference stack (removed by D40: the Jetson learns instead)
 
 - [x] `jetson/setup.sh` (`--check`, `--dry-run`, `--json`), `build_llamacpp.sh`, `profiles/*.env`,
       `llama-server.service`, `models.md`; shellcheck clean
@@ -36,9 +36,9 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] Tool-call JSON repair + content-embedded tool-call parsing
 - [x] API + GUI: Models & Benchmarks page; `PUT api/settings`
 - [x] Gemma 4 E2B comparison profile
-- [ ] **Owner:** `setup.sh --check`, setup, `bench/run_all.sh`; then `make analyze-report` → final default profile
+- [x] ~~**Owner:** `setup.sh --check`, setup, `bench/run_all.sh`; then `make analyze-report` → final default profile~~ dropped: no local model (D40)
 
-## M3 — Room agents in Shadow Mode
+## M3 — Room agents in Shadow Mode (agents removed by D40; the policy, actuator, approvals, kill switch and action log stay)
 
 - [x] Policy decision function: kill switch → allowlist → service allowlist → tier → rate limit → mode
 - [x] Single actuation path (`Actuator`), T2 approvals with expiry, action log
@@ -130,12 +130,12 @@ steps are written down in `OWNER_CHECKLIST.md`.
 - [x] Polygon: headless scenario runs on free ports with a fresh house per scenario, scenario
       speed-up, invariant checks, JSON report and exit code; real backends by flag with a preflight
       → `sim/polygon.py`, `sim/polygon.yaml`, `tests/integration/test_polygon.py`, RUNBOOK → Polygon
-- [ ] **Owner:** point the panel at the real Jetson and at the cloud APIs once (OWNER_CHECKLIST → Sim panel)
-- [ ] **Owner:** one `make polygon ARGS="--room-llm openai"` (or `jetson`) run with a real key
+- [ ] **Owner:** point the panel's learner at the real Jetson and the orchestrator at the cloud APIs once (OWNER_CHECKLIST → Sim panel)
+- [ ] **Owner:** one `make polygon ARGS="--orchestrator openai"` (or `--learner jetson --jetson-host IP`) run with a real key
 
 ## House manager, accuracy metrics, AI testers — `docs/POLYGON.md`
 
-- [x] Suggested wake rules for a new agent from its room's devices (alarms, openings, locks and
+- [x] ~~Suggested wake rules for a new agent from its room's devices~~ (removed by D40) (alarms, openings, locks and
   garage as report-only T3, motion, cold, low batteries, fridges) → `core/wake_suggest.py`,
   `GET api/agents/suggest-rules`, editor fills them in; stories `suggested_agents`
 - [x] House manager: prefilter sweep, escalations, manual wake, scope = unowned switchables,
@@ -230,8 +230,9 @@ Go / no-go after step 1: **go** (D38). Two ways out: HA automations keep coming 
 - [x] `POST /replay` of simple automations (state / numeric_state / time / sun; and / or / not;
       services that set a state); anything else is named as unsupported → `replay.py`
 - [x] systemd unit and `setup_learner.sh` (uv, Python 3.12 venv, `--data` on the NVMe, `--stop-llm`)
-- [ ] The sim panel and the polygon with a learner (today the tests run the real learner in-process,
-      `tests/integration/test_learner_loop.py`; `make sim` has none)
+- [x] The sim panel and the polygon with a learner: the real learner in-process behind the learner
+      gateway, trained every house night in `days`/stories, panel shows it and trains now
+      → `sim/run.py`, `sim/gateways.py`, `sim/days.py`, `sim/control.py`, stories `learner_*` (D40)
 
 4. Add-on side → `core/learner.py`, D39
 - [x] Forwarder with causes from the HA context, automation runs, ask answers; bounded buffer; the
@@ -255,9 +256,9 @@ Go / no-go after step 1: **go** (D38). Two ways out: HA automations keep coming 
       template + learnt parameters + replay numbers in the rationale
 - [ ] Replay numbers in every habit / timeout draft's rationale (the endpoint exists, the add-on does
       not call it yet)
-- [ ] Room agents off: polygon comparison (D28 metrics + cloud spend) learner + manager vs room agents
-      with real models; if not worse, remove the agent runtime, the tool-call bench and llama-server;
-      D11, D23 marked superseded. Until then: delete a room's agent to let the learner act there (D22)
+- [x] Room agents off: removed on the owner's decision **without** the planned polygon comparison
+      (skipped on the owner's instruction); agent runtime, tool-call bench and llama-server gone;
+      D11, D23 superseded → D40
 - [x] Routine work (daily review summary) on the cloud when no local model is configured (D39)
 
 6. Owner in the loop
@@ -267,7 +268,7 @@ Go / no-go after step 1: **go** (D38). Two ways out: HA automations keep coming 
 - [ ] Later: "watch me" recording of a scene, then a draft from it
 
 Owner steps
-- [ ] **Owner:** install the learner on the Jetson (OWNER_CHECKLIST → D38 learner)
+- [ ] **Owner:** install the learner on the Jetson (OWNER_CHECKLIST → D38 learner); `--stop-llm` on a Jetson that ran llama-server
 - [ ] **Owner:** NVMe in the Jetson; static IP
 - [ ] **Owner:** `recorder: purge_keep_days: 60` now, back to 10 once the learner writes
 - [ ] **Owner:** areas on all devices, presence sensors per room (no phone tracking: presence comes from the radars, the bed sensor and `binary_sensor.presence_anyone_home`)
@@ -275,3 +276,14 @@ Owner steps
 - [ ] **Owner:** weekly backup of the journal (optional)
 - [ ] Later, optional: room presence per person (Bluetooth: ESPresense / Bermuda); a sequence model
       on the GPU only if it beats the booster after months of history
+
+## Room agents removed — D40
+
+- [x] Room agents, runtime, tools, event gate, wake rules, board, tasks/escalations, agent eval removed; ownership = the orchestrator's (pairing switches nobody's) → `core/council.py`, `core/actuator.py`, D40
+- [x] Local model, tool-call bench, profiles, llama-server, Jetson metrics endpoint, `tools/analyze_report.py` removed; providers Claude / OpenAI / auto, `local` reads as auto → `core/orchestrator.py`
+- [x] Upgrades: removed options, settings, stored agents and old exports ignored, tested → `tests/unit/test_config.py`, `tests/integration/test_m5_chat_config.py`
+- [x] Safety tests ported to the actors (house manager, learner) → `tests/unit/test_safety_invariants.py`, `tests/integration/test_m3_safety.py`
+- [x] Developer snapshot `GET api/dev` → `api/dev.py`, `contracts/openapi.yaml` `DevSnapshot`
+- [x] Sim, polygon and stories with the learner; room-agent stories dropped → `sim/`, `sim/stories.yaml`
+- [ ] GUI: remove the Agents / Models pages and room-agent chat, Developer tools page on `api/dev` (GUI agent)
+- [ ] Alarms (smoke, leak, door left open) were reported by room agents; nothing in the add-on raises them now (HA's own alerts do) — decide whether the house manager's prefilter should wake on them

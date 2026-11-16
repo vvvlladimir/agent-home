@@ -3,8 +3,9 @@
 Everything here needs your hardware. Nothing below has been verified by the cloud session; each
 step says what to commit so the next session can read the result.
 
-Where results go: `owner-reports/` (see its README). After committing, run `make analyze-report`
-or just start the next session.
+Where results go: `owner-reports/` (see its README). After committing, start the next session.
+Since 0.5.0 (D40) there are no room agents and no local model: the M2 steps (Jetson model,
+benchmark) are gone, M3 is redone with the house manager, the learner (D38) replaces the rest.
 
 ## Questions — answered 2026-11-13 (`owner-reports/answers.md`)
 
@@ -48,104 +49,41 @@ What this settled: [VERIFIED-ON-HW] image build on the Pi, ingress path handling
 ingress, the `supervisor/core` REST and WebSocket proxy with `SUPERVISOR_TOKEN`, registry shapes on
 your HA version.
 
-## M2 — Jetson: set up, benchmark, pick the default model
+## D40 — upgrade to 0.5.0 (about 15 minutes)
 
-Target: Orin Nano 8 GB, JetPack 6.x / L4T R36.5, at `192.168.1.215`. Run everything as your normal
-user over SSH from a checkout of this repository (`git clone https://github.com/vvvlladimir/agent-home`,
-then `git checkout claude/stoic-cray-1j91qm` while the work is on a branch). Expect 1–3 hours in
-total, mostly the llama.cpp build and the model downloads.
+The room agents and the model on the Jetson are removed. Your benchmark of 2026-11-13 stays in
+`owner-reports/bench/` (D23). Take an HA backup first (RUNBOOK → Upgrades).
 
-1. **Check, nothing is changed:**
-   ```bash
-   mkdir -p owner-reports/setup
-   ./jetson/setup.sh --check --json > owner-reports/setup/$(date +%F)_check.json
-   ./jetson/setup.sh --check            # the same as a readable table
-   ```
-   A `FAIL` line stops setup; tell me what it says. `--dry-run` lists every command setup would run.
-2. **Set up** (asks once, uses sudo; power mode, swap, packages, token, systemd units, llama.cpp build
-   of 20–40 minutes):
-   ```bash
-   ./jetson/setup.sh                    # add --headless to free the desktop's RAM (needs a reboot)
-   ```
-   If `nvpmodel` asks for a reboot, reboot and run `./jetson/setup.sh` again. The last lines print
-   the three add-on options; **the token is shown only once** (it stays in `/etc/agent-house/token`).
-3. **Watch the first model download** (a few GB), until it says the server is listening:
-   ```bash
-   journalctl -u llama-server -f
-   curl -s http://127.0.0.1:9100/metrics.json | python3 -m json.tool | head -40
-   ```
-4. **Benchmark every profile** (4B, 2B, Gemma 4 E2B and the 4B with presence penalty 0; about an
-   hour plus downloads). Restores the active profile at the end:
-   ```bash
-   ./jetson/bench/run_all.sh --quick          # 10-minute smoke test first
-   ./jetson/bench/run_all.sh --soak 60        # the real run, with a one-hour thermal soak
-   ```
-   Optional: `--include-experimental` adds the 9B (little RAM headroom, may swap).
-5. **Connect the add-on** (Home Assistant → Settings → Add-ons → Agent House → Configuration):
-   ```yaml
-   jetson_llm_url: http://192.168.1.215:8080
-   jetson_metrics_url: http://192.168.1.215:9100
-   jetson_token: <the token from step 2>
-   ```
-   Restart the add-on, update it first if the store offers 0.1.0-dev.2. Then check and note:
-   - [ ] Dashboard → Jetson card: inference server `ok`, the model name, memory and temperature
-   - [x] **Models & Benchmarks**: four profiles, `qwen35-4b-balanced` marked active
-   - [x] **Run benchmark** with *Quick* ticked finishes and shows a row with tok/s and tool calls
-   - [x] **Activate** `qwen35-2b-fast`: state shows `warming`, then `ok` with the new model;
-         activate `qwen35-4b-balanced` again afterwards
-   - [x] Settings → Local model requests: change *Timeout* to 90, Save, restart the add-on: still 90
-6. **Commit** and push:
-   ```bash
-   git add owner-reports/setup owner-reports/bench owner-reports/logs
-   git commit -m "owner: M2 setup check and bench reports" && git push
-   ```
-   Plus `owner-reports/screenshots/m2-models.png` (Models & Benchmarks page) and a fresh diagnostics
-   bundle in `owner-reports/diagnostics/`.
-7. `make analyze-report` (or just start the next session): writes the measured table and a
-   recommendation into `docs/DECISIONS.md`; the default profile is then decided there.
+1. Update the add-on to 0.5.0. `[UNVERIFIED-ON-HW]` the Supervisor accepts the old options: it drops
+   `jetson_llm_url` / `jetson_metrics_url` (no longer in the schema) and keeps
+   `orchestrator_provider: local` valid (read as `auto`). If the add-on refuses to start with
+   "invalid options", open Configuration, save once, start again.
+2. Settings: your GUI settings (habits, house mode, manager, learner mode) are still there; the model
+   settings are gone. The top bar shows the learner instead of the model.
+3. Configuration: set `orchestrator_provider` to `anthropic` or `openai` (or keep `auto`) with its
+   key; without a key there are no drafts, chat or house manager runs (the daily review is then the
+   digest alone).
+4. On the Jetson: `git pull && jetson/learner/setup_learner.sh --stop-llm` (stops and disables
+   `llama-server` and `agent-house-metrics`; frees about 4 GB). Then the D38 steps below if the
+   learner is not installed yet.
+5. Open `api/dev` (the Developer tools page once the GUI has it): no token or key appears; the
+   learner section shows what the Jetson came up with. Send a diagnostics bundle if anything fails.
 
-Things only the Jetson can answer, all captured by the files above: the MAXN_SUPER mode id, the
-tegrastats line format (`logs/*_tegrastats.txt`), llama-server flags of your build
-(`logs/*_llama-server-help.txt`), the wire format of a tool call (`logs/*_sample-response.txt`),
-real tok/s and time to first token, peak RAM and swap, thermals over the soak, tool-call accuracy per
-profile, and whether each `:Q4_K_M` file name resolves (`jetson/models.md` → Downloads).
+## M3 — the safety levers with the house manager (about 20 minutes, Shadow)
 
-Known issue (seen 2026-11-13): `HTTPS is not supported … failed to download model from Hugging Face`
-means llama.cpp was built without OpenSSL. Fixed in the scripts; on a Jetson set up before the fix:
-`sudo apt install libssl-dev && ./jetson/build_llamacpp.sh --clean && sudo systemctl restart llama-server`.
+Keep the global mode on **Shadow**. The M3 run with room agents (2026-11-13, `owner-reports/m3/`)
+is history; the policy, approvals, action log and kill switch it tested are unchanged.
 
-If something breaks: `journalctl -u llama-server -n 100`, `journalctl -u agent-house-metrics -n 50`
-into `owner-reports/logs/`.
-
-## M3 — room agents in Shadow Mode
-
-Update the add-on, keep the global mode on **Shadow**. About 30 minutes.
-
-1. **Agents → New room agent** for *Bedroom*, then for *Livingroom* (Q3). Tick nothing in the entity
-   list (the room's entities are picked automatically), add one state rule on the room's motion or
-   presence sensor (`To: on`), Save. Check the **Prompt preview**: token estimate below the budget,
-   nothing important under *Left out*.
-2. **Wake** each agent once. **Runs & traces** shows a run `ok` + `shadow`; open it: context, llm,
-   tool and final steps. `[UNVERIFIED-ON-HW]` latency and tokens with the real model.
-3. Walk into each room: a run with wake source `event` appears within a few seconds (debounce 5 s).
-4. **Replay** one run: a new run marked `replay`, nothing changes in the house. **Copy as test case**:
-   paste the YAML into `owner-reports/m3/<room>-case.yaml` (if the clipboard is blocked, it downloads).
-5. Kill switch from HA: Developer Tools → Events → fire `agent_house_kill_switch` with
-   `engaged: true`; the top bar turns red. Release it in the panel. Optional: create an
-   `input_boolean.agent_house_kill`, set it in Settings as the kill-switch entity, toggle it in HA:
-   the panel follows.
-6. Leave both agents in Shadow for a day, then send `owner-reports/m3/` with: a screenshot of
-   Runs & traces, a diagnostics bundle, and the case files. Note any run that would have actuated
-   something you did not want (verdict `shadow` in the Action log).
-7. Optional live test, one T0 light only: set that agent's mode to *live* and the global mode to
-   *Live*, wake it with a reason like "turn on the lamp". The Action log shows `executed`. Back to
-   Shadow afterwards. A T2 entity (blinds, climate) instead shows a pending approval on the
-   Dashboard; Approve or Deny it there.
-
-**Status 2026-11-13:** received (one hour, `owner-reports/m3/README.md`). Still open: leave both agents
-in Shadow for a full day after updating. Jetson metrics: the crash was a thermal zone answering
-EAGAIN (fixed); on the Jetson `git pull && sudo systemctl restart agent-house-metrics`, then
-`curl -s http://192.168.1.215:9100/metrics.json | head -c 300` must print JSON.
+1. Settings → *House manager* on. Leave a light on and set every `person.*` away (or leave): within
+   the sweep interval the feed shows `manager: …`, Activity shows an action of agent
+   `orchestrator` with verdict `shadow`. Nothing changes in the house.
+2. Kill switch from HA: Developer Tools → Events → fire `agent_house_kill_switch` with
+   `engaged: true`; the top bar turns red, *Ask the house manager* is refused. Release it in the
+   panel. Optional: create an `input_boolean.agent_house_kill`, set it in Settings as the kill-switch
+   entity, toggle it in HA: the panel follows.
+3. Optional live test, one T0 light only: *Orchestrator mode* live and the global mode Live, leave
+   that light on with nobody home: the Action log shows `executed`. A T2 entity (blinds, climate)
+   instead shows a pending approval on the Overview; Approve or Deny it there. Back to Shadow.
 
 The Live feed shows *streaming* through ingress (verified in M1); if it ever shows *polling every 3 s*,
 SSE is being buffered and the feed falls back to polling — tell me.
@@ -194,10 +132,9 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
 5. Try one Node-RED group: the summary says what was read and how many logic nodes were not.
    The draft is a starting point; say in `owner-reports/m5/README.md` how close it was.
 6. **Chat**: ask the orchestrator "which lights are on in the living room?" and "turn the desk lamp
-   on when I sit down" (a proposal must appear); ask a room agent to switch something (in Shadow
-   the answer shows `shadow: light.turn_on …`, nothing moves). Note the wait per answer on the Jetson.
+   on when I sit down" (a proposal must appear). Note the wait per answer.
 7. **Settings → Config export**: download the YAML, check it has no token or key, import it back:
-   the message lists the agents and that they were set to shadow.
+   policy and settings are applied. An export from 0.4 imports too; its agents are listed as ignored.
 8. **Habit finder** (`[UNVERIFIED-ON-HW]`: the logbook fields `context_user_id`,
    `context_event_type`, `context_domain`, `context_entity_id` and that a wall switch leaves them
    empty). After a week or more of normal use: **Proposals → Found in the history → Scan history**.
@@ -221,9 +158,9 @@ the cloud part: put an Anthropic API key into the add-on's Configuration tab (`a
    the phone; hovering (computer) or tapping the ⓘ buttons (phone) shows a tooltip that is not cut
    off by the HA frame; **Stop all** stops at once and **Resume…** asks; dark mode follows HA's
    theme or the ◐ button. Pages moved (the steps above use the old names): Dashboard → **Overview**;
-   Live feed, Runs & traces → **Activity**; Agents → **Rooms**; Council → **Rooms → Council**;
+   Live feed, Runs & traces → **Activity**; Council → **Rooms → Council**;
    Proposals, Deployed automations, Migration → **Automations** (Drafts, Deployed, Your automations);
-   Models & Benchmarks, Settings & Logs → **Settings** (General, Models, Logs). The habit finder is
+   Settings & Logs → **Settings** (General, Logs). (The Agents and Models pages are gone in 0.5.0.) The habit finder is
    **Automations → Drafts → Found in the history → Scan**. Screenshot the Overview on both and put them in `owner-reports/m5/`.
 
 ## M5 — agent council, daily review, feedback (about 30 minutes, then a few days of Shadow)
@@ -234,61 +171,51 @@ Update to 0.1.0, keep the global mode on **Shadow**.
    options home / away / night / guests / work. `[UNVERIFIED-ON-HW]`: the WebSocket command
    `input_select/create` and that the entity id becomes `input_select.agent_house_mode`; if it gets
    another id, rename it in HA to that one.
-2. **Ownership**: the card lists each agent with its number of entities; look up a light of the
-   bedroom (owner: the bedroom agent) and `sun.sun` (owner: orchestrator). A warning under the card
-   means two agents share a room: decide which one keeps it.
+2. **Ownership** (0.5.0): every entity is the orchestrator's; network pairing switches
+   (`*_permit_join`) belong to nobody, so nothing of ours can switch them.
 3. **Settings → Automatic house mode** on, night window e.g. `23:00-07:00`, orchestrator mode
    *shadow*. Leave the house (or set your `person.*` away in HA → Developer tools → States): the
    feed shows `orchestrator: house mode → away (shadow …)`, nothing changes in HA. With
    `orchestrator_mode: live` *and* the global mode Live it switches the helper; set it to `guests`
    by hand: it stays `guests`.
-4. **Board**: switch the helper to `away` by hand. Every enabled room gets a task ("check that
-   everything is off"); its answer appears on the board as a `report`. Note the wait per room on
-   the Jetson.
-5. **Daily review**: Council → *Run review now*. The inbox gets *Daily review: …*; the Council card
+4. **Daily review**: Council → *Run review now*. The inbox gets *Daily review: …*; the Council card
    shows the summary and how many proposals it drafted (at most 3, one per finding, never two for
    the same entity). Then leave it to run at 04:30 for a few days.
-6. **Feedback**: after a deployed automation has run for some days, undo it by hand a few times
+5. **Feedback**: after a deployed automation has run for some days, undo it by hand a few times
    (switch the light back within 10 minutes). The next scan lists an `undo` finding; its draft has
    `Evidence: undone by hand …` in the rationale. `[UNVERIFIED-ON-HW]`: the logbook tells our
    automation's change from your switch (`context_*` fields).
-7. **Conflict**: if two of our automations fight over one light, the `conflict` proposal replaces
+6. **Conflict**: if two of our automations fight over one light, the `conflict` proposal replaces
    one and lists the other under *supersedes*; approving it switches the other one off (tick it on
    again on Deployed automations to undo).
-8. Send `owner-reports/m5/`: screenshots of Council and Proposals, a diagnostics bundle, and one
+7. Send `owner-reports/m5/`: screenshots of Council and Proposals, a diagnostics bundle, and one
    line per drafted proposal (useful / noise).
 
 ## v0.1.0 — release
 
-1. `make analyze-report` after the M2 benchmark (done 2026-11-13): keep `qwen35-4b-balanced` with
-   `llm_presence_penalty: 0` for the room agents (D23).
+1. ~~`make analyze-report` after the M2 benchmark~~ (done 2026-11-13, D23; the tool is gone since D40).
 2. Update the add-on to 0.1.0 from the repository, take an HA backup first (RUNBOOK → Upgrades).
-3. Go through RUNBOOK → *Going from Shadow to Live* for one room only.
+3. Go through RUNBOOK → *Going from Shadow to Live* for one actor only (0.5.0: the learner or the
+   house manager).
 
 ## Sim panel: real backends (optional, about 15 minutes)
 
 Everything else in the panel is tested in CI. These paths need your network or your keys:
 
-1. `make sim`, open `http://127.0.0.1:8090/` → **Models & keys**. Enter the Jetson's IP and its
-   token (`/etc/agent-house/token` on the Jetson), Save, **Test**. Expected: `/health 200, metrics
-   200, profile qwen35-4b-balanced`. `[UNVERIFIED-ON-HW]` the Mac reaching the Jetson on ports
-   8080 and 9100.
-2. Room agents → backend *real Jetson*. Run the scenario **arrive home**. In **Requests**, the
-   `llm` rows should show `jetson` with real latencies (warm wake around 6–7 s, D23).
+1. `make sim`, open `http://127.0.0.1:8090/` → **Models & keys**. The *Learner* card shows the
+   learner in the sim (journal, training, live targets); press **Train now**: *training: ok* within
+   a minute.
+2. *Which learner*: the real Jetson by IP, port 9200, its token (`/etc/agent-house/token`), Save,
+   **Test**. Expected: `learner /healthz 200, /status 200, journal … events`.
+   `[UNVERIFIED-ON-HW]` the Mac reaching the Jetson on port 9200. The sim's house then goes to your
+   real learner's journal: run that learner with a separate `--data` for it.
 3. Optional, costs cents: save a Claude key, set the orchestrator's Claude to *real API*, and ask
    the add-on's chat for one draft. The **Requests** tab shows the model and tokens.
    `[UNVERIFIED-ON-HW]` the gateway's passthrough with a real key.
-4. Optional: save a DeepInfra key and set room agents to *OpenAI-compatible*. Press **Test
-   compatible** to check that `Qwen/Qwen3.5-4B` is listed under that exact id, then fix the model
-   field if it is not. `[UNVERIFIED-ON-HW]` the model id and the provider's tool calling for this
-   model.
-
-5. Polygon with a real model (costs cents with a cloud key): `export OPENAI_API_KEY=…`, then
-   `make polygon ARGS="--room-llm openai"` (or `--room-llm jetson --jetson-host <ip>`). Expected:
-   `{"ok": true, …}`, and in `report.json` the `llm_requests` rows show the real backend. A failing
-   `expected_wakes` / `no_unexpected_wakes` is a spec or gate issue. A failing safety check
-   (`shadow_*`, `t3_*`, `owner_*`) is a bug: report it with the report file.
-   `[UNVERIFIED-ON-HW]` real-model runs fitting the per-run timeout when paced to Jetson speed.
+4. Polygon with a real model (costs cents with a cloud key): `export ANTHROPIC_API_KEY=…`, then
+   `make polygon ARGS="--orchestrator anthropic"` (or `--learner jetson --jetson-host <ip>`).
+   Expected: `{"ok": true, …}`. A failing safety check (`shadow_*`, `t3_*`, `owner_*`,
+   `known_actors_only`) is a bug: report it with the report file.
 
 Note anything odd in `owner-reports/sim-panel.md`.
 
@@ -305,17 +232,16 @@ Note anything odd in `owner-reports/sim-panel.md`.
 ## AI testers on the polygon (about 1 hour, costs API tokens)
 
 Needs the `claude` CLI logged in, `OPENAI_API_KEY` (orchestrator) and `AH_SIM_COMPATIBLE_API_KEY`
-(DeepInfra, room agents and coordinator). Details: `docs/POLYGON.md`.
+(DeepInfra, the coordinator). Details: `docs/POLYGON.md`.
 
 1. `python -m sim.qa run --roles newcomer migrator fussy_tenant -- --orchestrator openai
-   --orchestrator-model gpt-6.1-terra --room-llm compatible --room-model Qwen/Qwen3.5-4B
-   --compatible-url https://api.deepinfra.com/v1/openai --no-pace --backfill-days 14`.
+   --orchestrator-model gpt-6.1-terra --backfill-days 14`.
    Expected: three URLs, then `{"out": ...}` when the testers finish.
 2. `python -m sim.qa coordinate <out>`, then `python -m sim.qa verify <out>`.
    Expected: `<out>/backlog.md` with `confirmed` items first.
 3. Check the OpenAI spend for the run in the add-on's Requests tab and on the DeepInfra dashboard.
 4. Commit `backlog.md` to `owner-reports/qa/<date>.md`.
-   `[UNVERIFIED-ON-HW]` the same roles with `--room-llm jetson --jetson-host <ip>` and one role only.
+   `[UNVERIFIED-ON-HW]` the same roles with `--learner jetson --jetson-host <ip>` and one role only.
 
 ## D38 — the learner on the Jetson (about 30 minutes, then a week of watching)
 
@@ -327,21 +253,18 @@ switches anything itself and gets no Home Assistant token. Plan: `docs/PLAN.md` 
    restart HA. The learner reads what HA still has on its first contact; after that it keeps its own.
 2. **On the Jetson:** `git pull`, then (once) `jetson/setup.sh` if `/etc/agent-house/token` does not
    exist. Mount the NVMe, then
-   `jetson/learner/setup_learner.sh --data /mnt/nvme/agent-house-learner` — add `--stop-llm` to stop
-   llama-server for good (D38). Check: `journalctl -u agent-house-learner -f` and
+   `jetson/learner/setup_learner.sh --data /mnt/nvme/agent-house-learner` — add `--stop-llm` on a
+   Jetson that ran llama-server (D40). Check: `journalctl -u agent-house-learner -f` and
    `curl -H "Authorization: Bearer $(cat /etc/agent-house/token)" http://localhost:9200/status`.
-3. **Add-on options:** `jetson_learner_url: http://<jetson-ip>:9200`, `jetson_token` = the Jetson's token.
-   With `--stop-llm`: empty `jetson_llm_url`, set `orchestrator_provider: anthropic` (or `openai`) with
-   its key, or drafts have no model. Restart the add-on.
+3. **Add-on options:** `jetson_learner_url: http://<jetson-ip>:9200`, `jetson_token` = the Jetson's token,
+   and `orchestrator_provider` with a cloud key (drafts have no other model since 0.5.0). Restart the add-on.
 4. **Council page → Learner:** *connected*; *From the logbook: done*; press *Train now* once; *Training: ok*
    within minutes. Send `owner-reports/` a screenshot or `GET api/learner` if anything says failed.
 5. **After a week:** the card's *What it found* and the findings (a `timeout` finding names a light
    controller you keep correcting, with the timeout the history asks for). Activity → filter agent
    `learner`: every `shadow` action should be one you wanted. Only then Settings → *Learner mode: live*
    (the global mode must be live too).
-6. **Rooms with an agent:** the learner never acts on a room agent's devices. To let it act in a room,
-   export the config and delete that room's agent.
-7. **Backup (optional):** the journal is `<data>/journal.db` (SQLite, WAL): copy it weekly, or
+6. **Backup (optional):** the journal is `<data>/journal.db` (SQLite, WAL): copy it weekly, or
    `sqlite3 journal.db ".backup /nas/learner.db"`.
 
 Unverified until this runs on your hardware [UNVERIFIED-ON-HW]: an automation's actions carry the
@@ -353,8 +276,6 @@ reachable from the Pi.
 ## Unverified facts to watch for (from RESEARCH.md)
 
 - `repository.yaml` fields and icon sizes: the store listing on your HA settles these.
-- llama-server `timings` field names, default port, `--mlock` spelling: `setup.sh --check` will
-  record `llama-server --help` and one sample response.
 - `[UNVERIFIED-ON-HW]` The `t3_whitelist` add-on option (QA-004, a list of `match(...)` entries):
   open Settings → Apps → Agent House → Configuration, add `lock.front_door`, save, restart.
   Expected: the GUI's Settings page lists it under add-on options, the entity shows T2, and

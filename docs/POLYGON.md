@@ -12,13 +12,14 @@ corrects them itself, and leaves the decisions to the owner.
 | Part | What it does | Code |
 |---|---|---|
 | **Orchestrator** (cloud, `gpt-6.1-terra`) | drafts automations from chat, habits, undos and conflicts; migrates the owner's automations (parity before switching an original off); runs the daily review | `core/orchestrator.py`, `core/migration.py`, `core/review.py` |
-| **House manager** (same model, D27) | between reviews: a deterministic sweep (lights on with nobody home, failed room runs, weak automations) and escalations nobody owns wake it; it acts on entities no room agent owns, gives rooms tasks, proposes new automations or **changes to ours**, reports | `core/manager.py` |
-| **Room agents** (Jetson, Qwen3.5-4B) | wake on events or cron, act in their room within their tiers, report and escalate to the board | `core/runtime.py`, `core/gate.py`, `core/council.py` |
-| **Accuracy metrics** (no model, D28) | per automation and per agent: precision, coverage, F1 with 95 % intervals; pooled into one house score | `core/metrics.py`, `GET /api/metrics` |
+| **House manager** (same model, D27) | between reviews: a deterministic sweep (lights on with nobody home, a new learner finding, weak automations) wakes it; it acts on the switchable devices, proposes new automations or **changes to ours**, reports | `core/manager.py` |
+| **Learner** (the Jetson, no model, D38) | keeps the journal, trains every night (habits, the booster's live suggestions, routines, dependencies, corrections and the light controller's timeout), acts live as agent `learner` only through the actuator | `jetson/learner/`, `core/learner.py` |
+| **Accuracy metrics** (no model, D28) | per automation and per actor (orchestrator, learner): precision, coverage, F1 with 95 % intervals; pooled into one house score | `core/metrics.py`, `GET /api/metrics` |
 | **Behaviour analysis** (no model) | habits, undos, conflicts from the logbook, turned into drafts by the review | `core/insights.py` |
 
-Unchanged safety rules: shadow by default (the house manager too, unless `orchestrator_mode:
-live`); T3 never actuated; every action through actuator, policy, trace; drafts are deployed only
+Since D40 there are no room agents and no local model. Unchanged safety rules: shadow by default
+(the house manager unless `orchestrator_mode: live`, the learner unless `learner_mode: live`); T3
+never actuated; every action through actuator, policy, trace; drafts are deployed only
 after the owner approves them; ids start with `agent_house_`; the owner's own automations are never
 edited. **Changes to existing automations** work the same way: the manager or the review proposes a
 new version of one of ours (`ha_id`), the owner (or a tester playing the owner) approves, rejects
@@ -29,22 +30,21 @@ or edits it. Nothing is applied automatically.
 | Role | Model | Where | Why |
 |---|---|---|---|
 | Orchestrator + house manager | OpenAI `gpt-6.1-terra` | `--orchestrator openai --orchestrator-model gpt-6.1-terra`, key `OPENAI_API_KEY` | as in the owner's home; counts against `daily_budget_eur` |
-| Room agents (bug hunting) | `Qwen/Qwen3.5-4B` via an OpenAI-compatible host (DeepInfra) | `--room-llm compatible --room-model Qwen/Qwen3.5-4B --no-pace`, key `AH_SIM_COMPATIBLE_API_KEY` | same model as the Jetson, but parallel: the Jetson has one slot (`-np 1`, about 6–7 s per warm run, D23); five testers × four rooms would queue for minutes and every timeout would be a false bug |
-| Room agents (final run) | the Jetson itself | `--room-llm jetson --jetson-host <ip>`, one polygon only | real speed, queue and quantisation. `[UNVERIFIED-ON-HW]` API and Jetson answers differ slightly (quantisation, chat template) |
+| Learner | the real `jetson/learner`, in each polygon's process | default; `--learner jetson --jetson-host <ip>` for the real one, one polygon only | no model: the same code as on the Jetson, on the polygon's house time |
 | AI testers (personas) | Claude Haiku 5.5 (`claude -p --model haiku`) | one headless Claude Code session per role, `curl` + file tools only | cheap. Rerun the `intruder` and `fussy_tenant` roles once with `--tester-model sonnet`: results move by several points depending on the simulator model (§6), so a finding seen by only one of them is weaker |
-| Coordinator | `Qwen/Qwen3.5-4B`, same compatible host | `python -m sim.qa coordinate` | it gets **one yes/no question per candidate pair** ("same faulty behaviour under the same conditions?"); grouping, ranking and the backlog are deterministic code. A 4B model is reliable on short binary judgements, not on long synthesis |
+| Coordinator | `Qwen/Qwen3.5-4B` via an OpenAI-compatible host (DeepInfra), key `AH_SIM_COMPATIBLE_API_KEY` | `python -m sim.qa coordinate` | it gets **one yes/no question per candidate pair** ("same faulty behaviour under the same conditions?"); grouping, ranking and the backlog are deterministic code. A 4B model is reliable on short binary judgements, not on long synthesis |
 | Verifier | Claude Haiku 5.5, fresh session | `python -m sim.qa verify` | sees only the steps of one finding, on a fresh polygon; LLM testers report false positives, so only reproduced items are `confirmed` |
 
 Cost control: testers are capped by `--max-turns` and `--max-calls`, the orchestrator by
-`daily_budget_eur` and `manager_max_wakes_per_hour`; room calls through the API are **not** in
-that budget. Check the gateway request log (`polygon.json` → panel `/api/requests`).
+`daily_budget_eur` and `manager_max_wakes_per_hour`. Check the gateway request log (`polygon.json`
+→ panel `/api/requests`).
 
 ## 3. What is tested, and how
 
 | Area | Deterministic checks (`make polygon`, CI) | AI testers (`python -m sim.qa run`) |
 |---|---|---|
 | Shadow, T3, owner automations, kill switch | `shadow_*`, `t3_never_actuated`, `owner_automations_untouched` | `intruder`, `chaos` try to break them; any success is `critical` |
-| Room agents, wake prefilter | `expected_wakes`, `no_unexpected_wakes`, `runs_without_errors` | `fussy_tenant` lives in the house |
+| The learner link, its actions | `learner_link_ok`, `learner_events`, `known_actors_only`, `runs_without_errors` | `fussy_tenant` lives in the house |
 | Setup, settings, error messages | — | `newcomer` |
 | Chat → draft → approve / reject → deploy | unit + integration tests | `migrator`, `fussy_tenant` decide every proposal like the owner |
 | Migration and parity | `tests/unit/test_migration.py` | `migrator` (with `--backfill-days 14`) |
@@ -88,8 +88,7 @@ modes (false positives, over-cooperative simulated users).
 
 ```
 python -m sim.qa run --roles newcomer migrator fussy_tenant -- --orchestrator openai \
-    --orchestrator-model gpt-6.1-terra --room-llm compatible --room-model Qwen/Qwen3.5-4B \
-    --compatible-url https://api.deepinfra.com/v1/openai --no-pace --backfill-days 14
+    --orchestrator-model gpt-6.1-terra --backfill-days 14
 python -m sim.qa coordinate .agent-logs/qa/<stamp>
 python -m sim.qa verify .agent-logs/qa/<stamp>
 ```
@@ -108,7 +107,6 @@ keys, no Jetson.
 | Testers `intruder`, `chaos` | subagent `qa-attacker` | sonnet / medium |
 | Tester `hands_off_owner` (usefulness) | subagent `qa-evaluator` | sonnet / medium |
 | Verifier, one per candidate | subagent `qa-verifier` | sonnet / medium |
-| Room agents (stand-in for the Jetson's 4B) | `claude -p` behind the llama-server API | haiku / low |
 | Orchestrator + house manager | `claude -p` behind the Messages API | sonnet / medium |
 
 The add-on's own models cannot be subagents: the add-on calls them over HTTP and waits, and a
@@ -123,11 +121,10 @@ subagents → `sim.qa verify-collect` → `sim.qa down` → `owner-reports/qa/<d
 Without a lead (a terminal only): `make qa-claude` runs the same loop with headless `claude -p`
 testers.
 
-What it is good for: bugs in the add-on (API, policy, shadow, drafts, migration, manager). What it
-is not: a measure of the Jetson model. Tool calls go through structured output, not native
-function calling, and Haiku is stronger than Qwen3.5-4B. Each model call is 3–8 s, so agent and
-request timeouts are raised to 300 s in this mode; at most `AH_SIM_CLAUDE_PARALLEL` (4) calls run
-at once per polygon. It all counts against the account's Claude usage (a Pro window can run out
+What it is good for: bugs in the add-on (API, policy, shadow, drafts, migration, manager, the
+learner link). What it is not: a measure of the cloud model's tool calling, which goes through
+structured output here. Each model call is 3–8 s; at most `AH_SIM_CLAUDE_PARALLEL` (4) calls run at
+once per polygon. It all counts against the account's Claude usage (a Pro window can run out
 with six roles), not `daily_budget_eur`.
 
 ## 4b. Living days in house time (D32)
@@ -135,8 +132,8 @@ with six roles), not `daily_budget_eur`.
 `python -m sim.polygon days --days 30 --seed 7` boots the polygon (fakes by default, shadow), plays a
 seeded household for 30 days and runs the same checks as a scenario. The add-on and the fake HA
 share one house clock (`app/core/clock.py`, offset 0 in production); the player jumps it from event
-to event, settles the wake gate's debounce, ticks the council (daily review, manager, house mode)
-every 15 house minutes and waits for every run. With the fakes a month takes about two minutes;
+to event, ticks the learner link and the council (daily review, manager, house mode) every 15 house
+minutes, lets the in-process learner train at 03:30 house time, and waits for every run. With the fakes a month takes about two minutes;
 with real models, as long as their calls.
 
 The household (`sim/household.py`) is not a machine: bedtime is log-normal around 23:15 with a
@@ -149,7 +146,9 @@ the ground truth for the checks. `--chaos calm` turns all of it off for comparis
 On top of the safety checks, `sim/invariants.py` checks the whole lived trace, each failure with the
 house time it was first seen: proposals name only entities HA has and act on no T3 entity; the inbox
 claims no approval that does not exist and, in shadow, no change that was only recorded; one open
-alarm per entity; the hourly wake cap holds in house time; the daily review ran every day.
+alarm per entity; every action is by the orchestrator or the learner, and the learner's never touch a
+helper or a T3 entity; the house manager's hourly cap holds in house time; the daily review ran
+every day.
 
 ## 4c. Stories with expected outcomes, pass^k and coverage
 
@@ -158,34 +157,30 @@ alarm per entity; the hourly wake cap holds in house time; the daily review ran 
 injected habits and incidents with tags) – When (lived N days) – Then (checks on the trace: a
 proposal for the habit by day N, deployed after the owner's decision, a report within M minutes
 after an incident, no alarm after a sensor lie, no draft built on a sensor that only lied, at most N
-warnings a day, wakes a day). A simple owner approves drafts that act on the story's habits and name
+warnings or manager runs a day, where the habits came from, what the learner did live). A simple owner approves drafts that act on the story's habits and name
 only real entities, and rejects the rest with a reason. The report (`.agent-logs/stories/<stamp>/`)
 gives pass@1 and pass^k (all k passed, the reliability measure of tau-bench) per story, the
 safety checks and invariants of every run, and a coverage table: which add-on features the runs
-reached (daily review, drafts, deploys, rejections, manager, alarms, gate drops, house mode) and
-how often each kind of sensor lie woke an agent. Features no run reached are listed: that is the
-next story to write. With the fake models, expectations that need a draft are `n/a`.
+reached (daily review, drafts, deploys, rejections, manager, house mode, the learner's trainings,
+habits, actions and findings). Features no run reached are listed: that is the next story to write.
+With the fake models, expectations marked `model: true` are `n/a`.
 
-The 24 stories (2026-11-15) cover, in the categories smart-home agent benchmarks use (SMH-Bench,
-SimuHome: state, implicit intent, scheduling; SmartBench: anomalous device states and behavioural
-contexts) and the ADL anomaly kinds (CASAS: temporal, spatial), what this add-on does by itself:
+The stories (2026-11-16, D40: the room-agent stories — alarms, warnings, wake noise — went with
+the room agents) cover, in the categories smart-home agent benchmarks use (SMH-Bench, SimuHome:
+state, implicit intent, scheduling; SmartBench: anomalous device states and behavioural contexts)
+and the ADL anomaly kinds (CASAS: temporal, spatial), what this add-on does by itself:
 
 | Area | Stories |
 |---|---|
-| Habits → drafts → deploy | `morning_counter_habit`, `evening_reading_lamp`, `blinds_morning_habit` (T2 cover), `owner_says_no`, `owner_automation_covers_part` |
-| Not habits | `guests_and_sick_days`, `lying_sensors`, `drifting_thermometer` |
-| Alarms, once | `smoke_at_night`, `leak_while_out`, `leak_burst_one_alarm`, `leak_unwatched_room` |
-| Warnings and maintenance | `airing_while_heating`, `appliance_lost_power`, `low_battery_leak_sensor` |
-| T3 watched, never touched | `front_door_unlocked_at_night`, `garage_open_at_night`, `t3_habits_never_automated` |
-| Modes and the manager | `away_mode_follows_trip`, `lights_left_on_trip` (with a daily cap on manager runs) |
-| Noise and cost | `flaky_network_sensors`, `motion_storm`, `calm_house` |
-| Kill switch | `kill_switch_holds` (an `input_boolean` helper held on: no run, no action) |
-
-Stories that need an agent to watch a lock, the garage, a battery or a fridge give
-`suggested_agents: [room]`: the owner keeps the wake rules the editor suggests for that room.
+| Habits → drafts → deploy | `counter_follows_ceiling`, `blinds_close_at_bedtime` (T2 cover), `owner_says_no`, `owner_automation_covers_part`, `owner_asks_what_a_draft_does` (D37 explain, provider per request) |
+| The learner | `learner_habits_replace_the_scan`, `learner_down_predict_takes_over`, `learner_suggests_in_shadow`, `learner_acts_live`, `light_controller_corrected` (timeout finding → manager → our draft), `ask_answers_reach_the_learner` (Yes / No) |
+| Not habits | `clock_only_habit_waits`, `guests_and_sick_days`, `lying_sensors`, `drifting_thermometer`, `flaky_network_sensors` |
+| T3 watched, never touched | `t3_habits_never_automated` (live, learner and manager included) |
+| Modes and the manager | `away_mode_follows_trip`, `lights_left_on_trip` (with a daily cap on manager runs), `calm_house` |
+| Kill switch | `kill_switch_holds` (an `input_boolean` helper held on, everything live: no run, no action) |
 
 Not covered by stories (covered by unit, integration or polygon tests): chat, T2 approvals in live
-mode and their expiry, rollback after an owner's undo (the fake HA fires state triggers only, so a deployed time-triggered habit never runs),
+mode and their expiry, the D37 revise (needs a real model), rollback after an owner's undo (the fake HA fires state triggers only, so a deployed time-triggered habit never runs),
 the cloud budget stop (`daily_budget_eur` is an add-on option, not a runtime setting).
 
 ## 4d. Snapshots: verify by restoring, not by replaying
@@ -215,8 +210,8 @@ the user's override is the negative signal:
 | missed (false negative) | the owner set one of the automation's targets by hand to a state the automation sets, and it had not done so in the `UNDO_S` before |
 
 - Per automation: **precision** = kept / (kept + undone), **coverage** (recall) = kept / (kept +
-  missed), **F1** = their harmonic mean. Room agents get precision only: they act on events and
-  have no fixed intent to miss.
+  missed), **F1** = their harmonic mean. Actors (the house manager, the learner) get precision
+  only: they act on events and have no fixed intent to miss.
 - Every rate has a **95 % Wilson interval** (correct at small n, unlike the normal approximation:
   Agresti & Coull 1998, Newcombe 1998). Below `MIN_N` = 5 outcomes the rate is `null`
   (insufficient data), never 0 or 1.

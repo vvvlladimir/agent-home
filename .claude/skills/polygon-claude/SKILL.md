@@ -5,21 +5,23 @@ description: Run the AI-tester polygon from this session - polygons in the backg
 
 # Polygon with subagent testers (D30)
 
-You are the lead. The polygons run here as background processes; the testers and verifiers are
-your subagents (`qa-tester` haiku, `qa-attacker` sonnet, `qa-verifier` sonnet); you judge
-duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` as `PY`.
+You are the lead. The polygons run here as background processes, each with the real learner
+in-process (D38) and the orchestrator as the only model (D40: no room agents); the testers and
+verifiers are your subagents (`qa-tester` haiku, `qa-attacker` sonnet, `qa-verifier` sonnet); you
+judge duplicates yourself. Background: `docs/POLYGON.md` §4a. Use `.venv/bin/python` as `PY`.
 
 ## 1. Prepare
 - `make install` if `.venv` is missing.
 - Roles: the owner's list, else `newcomer migrator fussy_tenant`. `all` = seven roles; warn that
-  seven testers plus the add-on's models can use up a Pro plan's usage window.
+  seven testers plus the orchestrator's `claude -p` calls can use up a Pro plan's usage window.
 - Deterministic checks first: `make polygon-claude` (falls back: `make polygon`). A failing
   `shadow_*`, `t3_*` or `owner_*` check is critical: report it with `report.json` and stop.
 
 ## 2. Testers
 - `PY -m sim.qa up --roles <roles>` → JSON with `out`, `models` and per role a `brief` path.
-  `models: fake` means `claude -p` does not work here and the add-on's models are the fakes:
-  say so in the report (model behaviour untested, code paths still are).
+  `models: fake` means `claude -p` does not work here and the orchestrator is the fake Claude:
+  say so in the report (model behaviour untested, code paths still are). The learner is never a
+  model; it is the real one either way.
 - Spawn one subagent per role **in one message, in the background**: `qa-attacker` for
   `intruder` and `chaos`, `qa-evaluator` for `hands_off_owner`, `qa-tester` for the rest. Prompt: `Your brief: <brief path>`.
 - Wait for their notifications; do not poll. A tester that fails leaves no `findings.json`;

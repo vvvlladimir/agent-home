@@ -1,6 +1,6 @@
 ---
 name: test-engineer
-description: Owns tests/** and sim/**. Use for simulators (fake HA, fake LLM, fake Anthropic, fake Jetson metrics), eval harness and CI.
+description: Owns tests/** and sim/**. Use for simulators (fake HA, fake Claude / OpenAI, the learner in-process), the polygon, stories and CI.
 model: sonnet
 
 ---
