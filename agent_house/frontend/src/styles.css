@@ -214,6 +214,8 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-
 .feed { list-style: none; margin: 0; padding: 0; }
 .feed li { display: grid; grid-template-columns: max-content 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 0; border-top: 1px solid var(--line); }
 .feed li:first-of-type { border-top: 0; }
+/* rows without a time: marker, text, optional button */
+.feed.marks li { grid-template-columns: 14px minmax(0, 1fr) auto; }
 .feed time { font-size: 13px; color: var(--faint); white-space: nowrap; }
 .feed .where { color: var(--muted); }
 .feed .msg { min-width: 0; overflow-wrap: anywhere; }

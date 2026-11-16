@@ -158,7 +158,7 @@ const shown = computed(() => today.value.filter((x) => !filter.value || group(x.
           <dt>{{ t('Automated share') }}</dt><dd>{{ pct(metrics?.program.house_share.value) }}</dd>
           <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<Info v-if="manager?.hint" :tip="manager.hint" /><span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span><span v-if="manager" class="faint"> · {{ manager.owned.length }} {{ t('without a room agent') }} <Info :tip="manager.owned_note || ''" /></span></dd>
         </dl>
-        <ul v-if="weakAutos.length" class="feed">
+        <ul v-if="weakAutos.length" class="feed marks">
           <li v-for="a in weakAutos" :key="a.ha_id"><i class="mk warn" /><span class="msg">{{ a.title || a.ha_id }} · F1 {{ pct(a.f1) }} <span class="where">{{ a.examples?.[0] }}</span></span></li>
         </ul>
       </div>
