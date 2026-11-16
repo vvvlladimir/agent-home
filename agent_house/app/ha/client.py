@@ -80,6 +80,7 @@ class HAClient:
         self.last_error: str | None = None
         self.version: str | None = None
         self.location_name: str | None = None
+        self.time_zone: str | None = None
         self.reconnects = 0
         self.own_user_id: str | None = None  # HA user behind our token, from a call_service context
         self.last_event_ts: float | None = None
@@ -201,6 +202,7 @@ class HAClient:
             config = await self.command("get_config")
             self.version = config.get("version") or self.version
             self.location_name = config.get("location_name")
+            self.time_zone = config.get("time_zone")
         except HAError as err:  # not fatal: only cosmetic fields
             log.debug("get_config failed: %s", err)
 

@@ -70,13 +70,17 @@ class Actuator:
         clock: Callable[[], float] = clock.time,  # house time: action timestamps, approval expiry
         owner_of: Callable[[str], str | None] = lambda entity_id: None,
         pseudo: Callable[[str], object] = lambda agent_id: None,
+        delegates: dict[str, str] | None = None,
     ) -> None:
         """`owner_of(entity_id)`: the agent that owns the entity (council); the default owns
         nothing, so an unwired actuator denies everything. `pseudo(agent_id)`: configs of agents
-        that are not room agents (the orchestrator, which may switch the house mode)."""
+        that are not room agents (the orchestrator, which may switch the house mode).
+        `delegates`: pseudo agent → the owner it may act for (D38: the learner acts where the
+        orchestrator owns an entity, i.e. where no room agent does; never for a room agent)."""
         self.store, self.feed, self.ha, self.safety, self.agents = store, feed, ha, safety, agents
         self.scope_of, self.protected, self.clock = scope_of, protected, clock
         self.owner_of, self.pseudo = owner_of, pseudo
+        self.delegates = dict(delegates or {})
         # actions per minute of the house's life, like the gate's cooldowns and hourly caps; in
         # production the same as time.monotonic. On the polygon days pass in seconds, and wall time
         # denied the house mode's away/home as a burst (stories 2026-11-15)
@@ -89,10 +93,13 @@ class Actuator:
 
     # --- the decision ---------------------------------------------------------------------
     def _decide(self, agent_id, domain, service, entity_id, data, *, approved=False, force_shadow=False):
-        agent = (self.agents.get(agent_id) or self.pseudo(agent_id)) if isinstance(agent_id, str) else None
+        room_agent = self.agents.get(agent_id) if isinstance(agent_id, str) else None
+        agent = room_agent or (self.pseudo(agent_id) if isinstance(agent_id, str) else None)
         try:
             scope = set(self.scope_of(agent)) if agent is not None else set()
             owner = self.owner_of(entity_id) if isinstance(entity_id, str) else None
+            if room_agent is None and owner is not None and self.delegates.get(agent_id) == owner:
+                owner = agent_id  # acting for the owner it is a delegate of
             recent = self.rates.counts(agent_id, entity_id)
             protected = set(self.protected())
             policy = self.safety.policy

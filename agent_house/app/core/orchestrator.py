@@ -7,10 +7,12 @@ Providers (add-on option `orchestrator_provider`, D11, D16):
 - `auto`      — local first; then every cloud provider that has a key (Claude, then OpenAI) when
                 the local model is unreachable or fails a turn.
 
-Per task (M5, D21): `routine` work (the daily review's summary) runs on the local model only; the
-cloud is the expert for `draft`, `habit`, `undo` and `conflict` drafts. With `auto`, a draft the
-local model could not finish (no submission, or a proposal that is still blocked) is tried once
-more by the cloud alone — the low-confidence case.
+Per task (M5, D21): `routine` work (the daily review's summary) runs on the local model only — or,
+when no local model is configured (D38: the Jetson learns instead of serving a model), on the clouds
+that have a key, within the same budget and redaction. The cloud is the expert for `draft`,
+`habit`, `undo` and `conflict` drafts. With `auto`, a draft the local model could not finish (no
+submission, or a proposal that is still blocked) is tried once more by the cloud alone — the
+low-confidence case.
 
 Cloud calls carry redacted text only (`redact.py`, unless `redact_cloud` is off) and are paid
 from a daily budget in EUR with a hard stop: a call whose worst case (prompt + `max_tokens`) would
@@ -599,6 +601,7 @@ class Orchestrator:
         self._tasks: set[asyncio.Task] = set()
         self._local_tried = False
         self.council = None  # set by the app factory
+        self.learner = None  # D38: core/learner.py, what the Jetson learnt (set by the app factory)
 
     async def stop(self) -> None:
         for task in list(self._tasks):
@@ -620,7 +623,9 @@ class Orchestrator:
             "openai": [self.openai],
         }.get(self.choice(provider), [self.local, self.cloud, self.openai])
         if task == "routine":
-            return [self.local]
+            if getattr(self.settings, "jetson_llm_url", True):
+                return [self.local]
+            return [p for p in (self.cloud, self.openai) if p.has_key]  # D38: no local model
         if expert:
             return [p for p in configured if p is not self.local and p.has_key]
         return configured
@@ -888,6 +893,10 @@ class Orchestrator:
         user = f"Request: {request}{current}\n\nAreas: {areas}\nEntities (id, name, area, tier, state):\n" + (
             "\n".join(lines) or "(none)"
         )
+        learnt = self.learner.facts(room) if self.learner is not None else []
+        if learnt:  # D38: what the Jetson learnt from this house, as counts
+            user += "\n\nWhat the house learner saw (counts from the history, for times and delays):\n"
+            user += "\n".join(f"- {line}" for line in learnt)
         transcript: list[dict] = [{"role": "user", "text": user}]
         who = "the cloud expert, " if expert else ""
         trace = _Trace(
@@ -1076,6 +1085,10 @@ class Orchestrator:
             f"Proposals waiting for review: {self.lifecycle.count_open()}; "
             f"deployed automations: {self.lifecycle.count_deployed()}"
         )
+        learnt = self.learner.facts() if self.learner is not None else []
+        if learnt:
+            lines.append("What the house learner saw (counts):")
+            lines += [f"- {line}" for line in learnt]
         reports = self.store.query("SELECT agent_id, severity, summary FROM inbox ORDER BY id DESC LIMIT 5")
         if reports:
             lines.append("Latest agent reports:")

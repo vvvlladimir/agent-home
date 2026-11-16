@@ -162,7 +162,8 @@ class HAState:
             "context_event_type": "automation_triggered", "context_domain": "automation",
             "context_entity_id": entity_id, "context_name": entity_id,
         }  # fmt: skip
-        self.fire_event("automation_triggered", {"name": entity_id, "entity_id": entity_id})
+        # HA fires the event in the automation's run context, the one its actions then use
+        self.fire_event("automation_triggered", {"name": entity_id, "entity_id": entity_id}, context=context)
         row = {"when": _dt(ts).isoformat(), "entity_id": entity_id, "name": entity_id, "message": "triggered"}
         self.logbook_rows.append({**row, "domain": "automation", **self._origins[context["id"]]})
         for target, state in changes:
@@ -177,7 +178,7 @@ class HAState:
         if old:
             self.fire_event("state_changed", {"entity_id": entity_id, "old_state": old, "new_state": None})
 
-    def fire_event(self, event_type: str, data: dict | None = None) -> None:
+    def fire_event(self, event_type: str, data: dict | None = None, context: dict | None = None) -> None:
         if self.quiet:
             return
         ev = {
@@ -185,7 +186,7 @@ class HAState:
             "data": data or {},
             "origin": "LOCAL",
             "time_fired": _dt().isoformat(),
-            "context": _ctx(),
+            "context": context or _ctx(),
         }
         loop = self.loop
         if loop and loop.is_running():

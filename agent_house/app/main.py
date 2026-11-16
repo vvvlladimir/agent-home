@@ -26,6 +26,7 @@ from .core.bench import BenchRunner
 from .core.council import Council
 from .core.gate import EventGate
 from .core.insights import Insights
+from .core.learner import LEARNER, LearnerLink
 from .core.lifecycle import Lifecycle
 from .core.llm import LLMManager
 from .core.manager import Manager
@@ -69,6 +70,7 @@ class Context:
     review: Review
     metrics: Metrics
     manager: Manager
+    learner: LearnerLink
     ingress_stats: dict = field(
         default_factory=lambda: {"last_ingress_path": None, "last_peer": None, "rejected_peers": 0}
     )
@@ -132,7 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     owner_of = council.ownership.owner_of
     actuator = Actuator(
         store, feed, ha, safety, agents, agents_rt.scope, protected=kill_entity, owner_of=owner_of,
-        pseudo=council.agent_config,
+        pseudo=council.agent_config, delegates={LEARNER: "orchestrator"},
     )  # fmt: skip
 
     def wake(agent_id: str, **kwargs) -> None:
@@ -156,7 +158,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     agents_rt.council = orchestrator.council = council
     council.rt, council.actuator, council.gate = agents_rt, actuator, gate
     insights = Insights(store, feed, ha, lifecycle, runtime)
-    gate.relevance = lambda: store.get("event_relevance") or {}  # quiet event kinds wake less (D35)
+    learner = LearnerLink(settings, runtime, store, feed, ha, insights, safety)  # D38
+    learner.actuator, council.learner, orchestrator.learner = actuator, learner, learner
+    insights.learnt = learner.habits  # the D35 predictions over the learner's longer history
+    # quiet event kinds wake less (D35), from the learner's longer history while it is fresh (D38)
+    gate.relevance = lambda: store.get("learner_event_relevance") or store.get("event_relevance") or {}
     council.unusual = Unusual(store, ha, agents_rt)  # unusual-state notes (D35)
     council.review = Review(store, feed, orchestrator, insights, council, agents_rt, runtime, lifecycle)
     metrics = council.review.metrics = Metrics(store, insights, lifecycle)
@@ -183,6 +189,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         review=council.review,
         metrics=metrics,
         manager=council.manager,
+        learner=learner,
     )
 
     def on_state(entity_id: str, old: dict | None, new: dict | None) -> None:
@@ -205,6 +212,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ctx.ha.on_state_changed(gate.on_state)
     ctx.ha.on_state_changed(council.on_state)
     ctx.ha.on_event(KILL_EVENT, on_kill_event)
+    if learner.configured:  # D38: the house goes to the learner, with its causes
+        ctx.ha.on_state_changed(learner.on_state)
+        for event_type in ("automation_triggered", "script_started", "mobile_app_notification_action"):
+            ctx.ha.on_event(event_type, learner.on_event)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -217,6 +228,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await ctx.llm.start()
         await ctx.gate.start()
         await ctx.council.start()
+        await ctx.learner.start()
 
         async def sync_kill_helper() -> None:
             """The helper may have been switched on while the add-on was down."""
@@ -229,6 +241,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             yield
         finally:
             helper_sync.cancel()
+            await ctx.learner.stop()
             await ctx.council.stop()
             await ctx.manager.stop()
             await ctx.gate.stop()

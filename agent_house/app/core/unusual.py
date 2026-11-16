@@ -36,7 +36,8 @@ class Unusual:
 
     def check(self, now: float | None = None) -> list[str]:
         """The notes written this time (entity ids)."""
-        table = self.store.get(KEY) or {}
+        # the learner's longer history while it is fresh (D38), else the add-on's own scan
+        table = self.store.get("learner_usual_states") or self.store.get(KEY) or {}
         if not table:
             return []
         now = now if now is not None else clock.time()

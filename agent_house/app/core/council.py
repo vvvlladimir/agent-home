@@ -42,6 +42,7 @@ from .agents import AgentConfig
 log = logging.getLogger(__name__)
 
 ORCHESTRATOR = "orchestrator"
+LEARNER = "learner"  # D38: the Jetson learner's live suggestions (core/learner.py)
 MODE_ENTITY = MODE_HELPER
 MODES = MODE_OPTIONS
 OWNER_MODES = frozenset({"guests", "work"})  # set by the owner only, never left automatically
@@ -218,6 +219,7 @@ class Council:
         self.board = Board(store, feed, clock)
         self.ownership = Ownership(agents, ha)
         self.rt = self.actuator = self.gate = self.review = self.manager = self.unusual = None
+        self.learner = None  # D38: core/learner.py
         self._asks: dict[str, deque[float]] = {}
         self._requested: str | None = None  # last mode asked for, so shadow mode does not repeat it
         self._task: asyncio.Task | None = None
@@ -226,7 +228,17 @@ class Council:
     # --- the orchestrator as an agent of the actuator --------------------------------------
     def agent_config(self, agent_id: str) -> AgentConfig | None:
         """The orchestrator's own (pseudo) agent config: it may actuate the mode helper, nothing
-        else. Shadow unless the owner set `orchestrator_mode: live` (and the global mode is live)."""
+        else. Shadow unless the owner set `orchestrator_mode: live` (and the global mode is live).
+        The learner's (D38): its live targets, shadow unless `learner_mode: live`; it acts only where
+        the orchestrator owns the entity (the actuator's `delegates`)."""
+        if agent_id == LEARNER:
+            if self.learner is None or not self.learner.configured:
+                return None
+            mode = "live" if getattr(self.settings, "learner_mode", "shadow") == "live" else "shadow"
+            return AgentConfig(
+                id=LEARNER, name="Learner", room="", mode=mode, entities=[MODE_ENTITY], entities_mode="only",
+                max_entities=1,
+            ).model_copy(update={"entities": self.learner.targets()})  # fmt: skip
         if agent_id != ORCHESTRATOR:
             return None
         mode = getattr(self.settings, "orchestrator_mode", "shadow")

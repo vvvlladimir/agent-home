@@ -702,8 +702,11 @@ def automation(p: dict, ha) -> dict:
         actions = [act]
     else:
         tag = "AGENT_HOUSE_" + "".join(ch if ch.isalnum() else "_" for ch in f"{target}_{state}").upper()
-        button = {"tag": tag, "actions": [{"action": tag, "title": state}]}
+        # a "No" is an answer too (D38): it clears the question at once and the learner counts it
+        no = f"{tag}_NO"
+        button = {"tag": tag, "actions": [{"action": tag, "title": state}, {"action": no, "title": "No"}]}
         answer = {"trigger": "event", "event_type": ASK_EVENT, "event_data": {"action": tag}, "id": "yes"}
+        refused = {"trigger": "event", "event_type": ASK_EVENT, "event_data": {"action": no}, "id": "no"}
         by_hand = {"trigger": "state", "entity_id": target, "to": state, "id": "done"}
         actions = [
             {
@@ -712,7 +715,7 @@ def automation(p: dict, ha) -> dict:
             },
             # the owner answers, or does it themselves (then the question is moot), or nothing
             {
-                "wait_for_trigger": [answer, by_hand],
+                "wait_for_trigger": [answer, refused, by_hand],
                 "timeout": {"minutes": ASK_TIMEOUT_MIN},
                 "continue_on_timeout": True,
             },

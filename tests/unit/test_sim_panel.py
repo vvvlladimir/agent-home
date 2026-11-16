@@ -33,10 +33,10 @@ def recorder(ha: fake_ha.HAState) -> list[dict]:
     seen: list[dict] = []
     orig = ha.fire_event
 
-    def fire(event_type, data=None):
+    def fire(event_type, data=None, context=None):
         if not ha.quiet:
             seen.append({"type": event_type, **(data or {})})
-        orig(event_type, data)
+        orig(event_type, data, context)
 
     ha.fire_event = fire
     return seen

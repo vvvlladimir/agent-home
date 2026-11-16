@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+- **The Jetson learns your house instead of running a small model (D38).** A new service on the
+  Jetson (`jetson/learner`) keeps the house's history on its own disk (months, not HA's 10 days) and
+  learns from it every night: the same habit predictions as before but over a longer history, a
+  stronger model that predicts live on top of them, daily routines, what follows what, which of your
+  automations (Node-RED included) you keep correcting, and the timeout a light controller should have
+  (from how often you switch the light back on). It never switches anything itself and holds no Home
+  Assistant token.
+- New option **Jetson learner URL**. The add-on forwards each change with its cause (you, a wall
+  switch, an automation, Node-RED, Agent House), fills gaps from the logbook, and shows the learner
+  in `api/learner`.
+- Its live suggestions go through the same safety layer as every agent, as agent `learner`: in
+  shadow unless you set `learner_mode: live`, only on devices no room agent owns, never with the kill
+  switch.
+- A light controller you keep correcting becomes a finding with the timeout the history asks for.
+- The orchestrator reads what the learner found (counts, no history) when it drafts and chats. With
+  no local model configured, the daily summary runs on the cloud model within the daily budget.
+- Ask notifications get a **No** button; answers go to the learner.
+
 ## 0.3.0
 
 - **Habits are predictions now (D35).** Instead of "you switched it at about 19:57 on 10 days, so

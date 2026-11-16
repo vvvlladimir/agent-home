@@ -266,6 +266,8 @@ class Insights:
 
     def __init__(self, store, feed, ha, lifecycle, settings) -> None:
         self.store, self.feed, self.ha, self.lifecycle, self.settings = store, feed, ha, lifecycle, settings
+        # D38: () → (predictions, funnel) of the learner's longer history while fresh, else None
+        self.learnt = lambda: None
 
     async def changes(self, days: int, now: datetime | None = None) -> list[Change]:
         end = now or clock.now(UTC)
@@ -336,8 +338,13 @@ class Insights:
             for entity, info in with_yaml.items()
         }  # fmt: skip
         end = (now or clock.now(UTC)).timestamp()
-        preds, funnel = predict.scan(changes, self.ha, days=days, min_days=min_days, policy=policy,
-                                     ours=mine, end=end, fires=getattr(self, "fires", {}))  # fmt: skip
+        learnt = self.learnt()
+        if learnt is not None:  # the same D35 code on the Jetson, over months instead of days
+            preds, funnel = learnt
+            funnel = {**funnel, "source": "learner"}
+        else:
+            preds, funnel = predict.scan(changes, self.ha, days=days, min_days=min_days, policy=policy,
+                                         ours=mine, end=end, fires=getattr(self, "fires", {}))  # fmt: skip
         self.store.set("event_relevance", predict.event_relevance(changes, self.ha))  # for the event gate
         self.store.set("usual_states", predict.usual_states(changes, self.ha, days=days, min_days=min_days,
                                                             policy=policy, end=end))  # fmt: skip

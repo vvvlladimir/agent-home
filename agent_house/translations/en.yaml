@@ -12,9 +12,16 @@ configuration:
     description: >-
       Base URL of the small metrics endpoint from jetson/metrics, for example
       http://192.168.1.50:9100. Optional.
+  jetson_learner_url:
+    name: Jetson learner URL
+    description: >-
+      Base URL of the learner from jetson/learner (D38), for example http://192.168.1.50:9200. The
+      add-on forwards what happens in the house to it and reads back what it learnt. Optional.
   jetson_token:
     name: Jetson token
-    description: Shared secret for the metrics endpoint's model-switch call. Optional.
+    description: >-
+      Shared secret of the Jetson (/etc/agent-house/token): the metrics endpoint's model switch and
+      every call to the learner. Optional without a learner.
   orchestrator_provider:
     name: Orchestrator provider
     description: >-

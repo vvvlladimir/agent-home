@@ -100,8 +100,8 @@ def parse_agent(payload: object) -> AgentConfig:
     except ValidationError as err:  # every problem at once, not one per attempt (QA-004)
         problems = [f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in err.errors()[:6]]
         raise ConfigError("; ".join(problems)) from None
-    if agent.id == "orchestrator":
-        raise ConfigError("id: 'orchestrator' is reserved for the orchestrator")
+    if agent.id in ("orchestrator", "learner"):
+        raise ConfigError(f"id: {agent.id!r} is reserved for the {agent.id}")
     if agent.entities and agent.entities_mode == "only":
         for index, rule in enumerate(agent.wake_rules.events):
             for pattern in rule.entities:

@@ -88,8 +88,12 @@ def test_asks_stay_within_the_budget(monkeypatch):
     assert funnel["asks_per_day"] <= predict.ASK_BUDGET
     ask = preds[0]["yaml_config"]
     assert ask["actions"][0]["action"] == predict.NOTIFY
-    answer, by_hand = ask["actions"][1]["wait_for_trigger"]
+    answer, refused, by_hand = ask["actions"][1]["wait_for_trigger"]
     assert answer["event_type"] == predict.ASK_EVENT and by_hand["trigger"] == "state", "or the owner does it"
+    tag = answer["event_data"]["action"]
+    assert refused["event_data"]["action"] == f"{tag}_NO" and refused["id"] == "no", "a No clears it too (D38)"
+    buttons = ask["actions"][0]["data"]["data"]["actions"]
+    assert [b["action"] for b in buttons] == [tag, f"{tag}_NO"]
     assert ask["actions"][2]["data"]["message"] == "clear_notification", "answered, done by hand or timed out"
     assert "wait.trigger.id == 'yes'" in ask["actions"][3]["value_template"]
     assert ask["actions"][4]["action"].endswith((".turn_on", ".turn_off"))

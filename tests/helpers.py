@@ -139,7 +139,7 @@ def make_stack(
     council = Council(store, feed, ha, agent_store, safety, settings)
     actuator = Actuator(
         store, feed, ha, safety, agent_store, runtime.scope, owner_of=council.ownership.owner_of,
-        pseudo=council.agent_config,
+        pseudo=council.agent_config, delegates={"learner": "orchestrator"},
     )  # fmt: skip
     gate = EventGate(agent_store, feed, store, runtime.scope, runtime.wake)
     runtime.actuator, runtime.gate, runtime.council = actuator, gate, council

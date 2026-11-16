@@ -1323,7 +1323,7 @@ components:
       required: [id, kind, status, title, request, data, created, updated]
       properties:
         id: {type: string, description: "stable key, e.g. habit:<entity> (one per device), undo:<ha_id>:v<n>, conflict:<entity>:<sides>"}
-        kind: {type: string, enum: [habit, undo, conflict]}
+        kind: {type: string, enum: [habit, undo, conflict, timeout], description: "timeout: a light controller the owner keeps correcting (D38 learner)"}
         status: {type: string, enum: [new, drafting, drafted, failed, dismissed]}
         title: {type: string}
         request: {type: string, description: what the orchestrator is asked to draft}

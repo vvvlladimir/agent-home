@@ -31,6 +31,7 @@ URL_FIELDS = (
     "ha_ws_url",
     "jetson_llm_url",
     "jetson_metrics_url",
+    "jetson_learner_url",
     "anthropic_base_url",
     "openai_base_url",
 )
@@ -68,6 +69,7 @@ class Settings(BaseModel):
     # Jetson (empty = not configured yet)
     jetson_llm_url: str = ""
     jetson_metrics_url: str = ""
+    jetson_learner_url: str = ""  # D38: the learner on the Jetson (jetson/learner/server.py)
     jetson_token: str = ""
 
     # Orchestrator
@@ -144,6 +146,9 @@ class RuntimeSettings(BaseModel):
     manager_enabled: bool = False
     manager_sweep_min: int = Field(default=60, ge=0, le=1440)  # 0 = escalations and manual wakes only
     manager_max_wakes_per_hour: int = Field(default=4, ge=0, le=30)
+    # D38 learner on the Jetson: its live suggestions act through the actuator as agent `learner`,
+    # in shadow unless this is live (and the global mode is live, and policy allows).
+    learner_mode: Literal["shadow", "live"] = "shadow"
 
 
 def load_runtime(data_dir: Path) -> RuntimeSettings:
@@ -175,6 +180,7 @@ _ENV = {
     "AH_ALLOWED_PEERS": "allowed_peers",
     "AH_LLM_URL": "jetson_llm_url",
     "AH_JETSON_METRICS_URL": "jetson_metrics_url",
+    "AH_LEARNER_URL": "jetson_learner_url",
     "AH_JETSON_TOKEN": "jetson_token",
     "AH_ORCHESTRATOR_PROVIDER": "orchestrator_provider",
     "AH_ANTHROPIC_API_KEY": "anthropic_api_key",
@@ -191,6 +197,7 @@ _OPTION_KEYS = (
     "log_level",
     "jetson_llm_url",
     "jetson_metrics_url",
+    "jetson_learner_url",
     "jetson_token",
     "orchestrator_provider",
     "anthropic_api_key",

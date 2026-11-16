@@ -150,3 +150,21 @@ async def get_metrics(request: Request, days: int = 7):
         return await ctx.metrics.compute(max(1, min(int(days), 30)))
     except HAError as err:
         return _error("ha_error", f"the logbook is unavailable: {err}"[:300])
+
+
+# --- D38: the Jetson learner ------------------------------------------------------------------------
+@router.get("/learner")
+async def get_learner(request: Request):
+    return request.app.state.ctx.learner.status()
+
+
+@router.post("/learner/train")
+async def train_learner(request: Request):
+    learner = request.app.state.ctx.learner
+    if not learner.configured:
+        return _error("conflict", "no learner configured (add-on option jetson_learner_url)")
+    answer = await learner.train()
+    if answer is None:
+        code = "conflict" if learner.connected else "ha_error"
+        return _error(code, learner.error or "a training is running")
+    return JSONResponse({"ok": True}, status_code=202)

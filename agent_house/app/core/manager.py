@@ -209,6 +209,10 @@ class Manager:
             woke = list(dict.fromkeys(r for r in reasons if r))[:MAX_FAILED_REASONS]
             line = f"room agent {agent_id}: {len(reasons)} run(s) {status}"
             out.append(line + (f", woken by: {' | '.join(w[:160] for w in woke)}" if woke else ""))
+        insights = getattr(self.metrics, "insights", None)
+        if insights is not None:  # D38: the learner found an automation the owner keeps correcting
+            new = [f for f in insights.list("new") if f["kind"] == "timeout"]
+            out += [f"learner: {f['title']} (finding {f['id']})" for f in new]
         out += [
             f"our automation {w['ha_id']} ({w.get('title')}): precision {w['precision']['value']}, "
             f"coverage {w['coverage']['value']} "
