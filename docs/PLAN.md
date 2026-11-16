@@ -198,17 +198,19 @@ steps are written down in `OWNER_CHECKLIST.md`.
 
 ## Jetson as the learner, the cloud as the brain — D38
 
-Go / no-go after step 1: if the learner does not beat `predict.py` on the polygon, the tree stays
-and only the room-agent part (step 5) goes ahead.
+Go / no-go after step 1: **go** (D38). Two ways out: HA automations keep coming from the tree
+(the booster cannot be distilled into HA rules), the booster runs live on the Jetson on top of them.
 
 1. Prototype on the polygon (branch `proto/learner`, nothing in the add-on)
-- [ ] Multi-person households in `sim/household.py` (two people, different bedtimes, guests)
-- [ ] Residents who correct automations by hand (light off too early → on again; brightness nudged)
-- [ ] LightGBM vs the D35 tree on the same samples, folds and utility (84 days, 3 households × 4 seeds),
-      plus sequence features (last N events, who is home) → `sim/proto_learner.py`
-- [ ] One template, "room light controller" (presence, lux, auto/manual timeouts, grace): recover
+- [x] Multi-person households (two people, one `anyone_home`, no phone tracking) → `sim/proto_learner.py` `House`
+- [x] Residents who correct automations by hand (light off too early → on again; brightness nudged)
+- [x] LightGBM vs the D35 tree on the same samples, folds and utility (84 days, 3 households × 4 seeds),
+      plus sequence features (last N events, who is home) → `sim/proto_learner.py`, booster wins 9/10
+      (+41…+57 % PIR, +0…+47 % radar); sequence features add nothing; numbers in D38
+- [x] One template, "room light controller" (presence, lux, auto/manual timeouts, grace): recover
       its parameters from corrections; distil the booster into a shallow tree that maps onto HA rules
-- [ ] Verdict with numbers in `DECISIONS.md` (D38 provisional → final)
+      → timeout learnt: yes (12.9 → 2.04 a day, best 1.85); distillation: no (−25…−45 % vs the plain tree)
+- [x] Verdict with numbers in `DECISIONS.md` (D38 provisional → final)
 
 2. Contracts
 - [ ] `contracts/schemas/house_event.schema.json`: one event as the add-on forwards it (entity, old/new,
