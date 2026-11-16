@@ -1,0 +1,4872 @@
+[
+    {
+        "id": "8238836adf9134c5",
+        "type": "subflow",
+        "name": "Circadian v2",
+        "info": "Непрерывный расчёт целевой яркости (Gain, %) и цветовой температуры (Warmth, K) без нарезки суток на периоды и без сплайнов.\n\nМодель из трёх ингредиентов:\n1. Высота солнца — дневное плато: чем выше солнце, тем чуть ярче и холоднее (smoothstep, без стыков).\n2. Часы после заката / до рассвета — вечер и утро фиксированной длительности: яркость гаснет за EVENING_HOURS_GAIN ч после заката, температура теплеет до минимума за EVENING_HOURS_TEMP ч; утренний разгон за MORNING_HOURS_* ч до рассвета. Работает одинаково зимой и летом, не зависит от астрономических сумерек (которые на широте ~48° летом почти исчезают).\n3. Уличная освещённость (лог-шкала, нормировка на p95 за 7 дней): днём пасмурно — ярче, солнечно — тусклее (вес до DAYLIGHT_COMP_MAX), плюс лёгкое влияние на температуру (TEMP_OUTDOOR_INFLUENCE). Если уличный сенсор недоступен — вес поправки становится 0, базовая кривая продолжает работать.\n\nТикает каждую минуту, улица сглаживается средним из 5 замеров. На выходе deadband: Gain публикуется при изменении >=1%, Warmth >=25K.\n\nПубликует в те же entity: sensor.sensor_light_gain и sensor.sensor_light_temperature — Adaptive Light v2 менять не нужно.",
+        "category": "",
+        "in": [
+            {
+                "x": 180,
+                "y": 160,
+                "wires": [
+                    {
+                        "id": "852c042112612efd"
+                    }
+                ]
+            }
+        ],
+        "out": [],
+        "env": [
+            {
+                "name": "LUX_SENSOR",
+                "type": "str",
+                "value": "sensor.esphome_illuminance_outdoor_illuminance_log_scale"
+            },
+            {
+                "name": "LUXMAX_SENSOR",
+                "type": "str",
+                "value": "sensor.illuminance_outdoor_log_p95_7d"
+            },
+            {
+                "name": "GAIN_MIN",
+                "type": "num",
+                "value": "30",
+                "ui": {
+                    "icon": "font-awesome/fa-adjust",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "GAIN_MAX",
+                "type": "num",
+                "value": "100",
+                "ui": {
+                    "icon": "font-awesome/fa-adjust",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "TEMP_MIN",
+                "type": "num",
+                "value": "2200",
+                "ui": {
+                    "icon": "font-awesome/fa-thermometer-quarter",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "TEMP_MAX",
+                "type": "num",
+                "value": "4000",
+                "ui": {
+                    "icon": "font-awesome/fa-thermometer-three-quarters",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "EVENING_HOURS_GAIN",
+                "type": "num",
+                "value": "4",
+                "ui": {
+                    "icon": "font-awesome/fa-moon-o",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "MORNING_HOURS_GAIN",
+                "type": "num",
+                "value": "1.5",
+                "ui": {
+                    "icon": "font-awesome/fa-sun-o",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "EVENING_HOURS_TEMP",
+                "type": "num",
+                "value": "3",
+                "ui": {
+                    "icon": "font-awesome/fa-moon-o",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "MORNING_HOURS_TEMP",
+                "type": "num",
+                "value": "1.5",
+                "ui": {
+                    "icon": "font-awesome/fa-sun-o",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "DAYLIGHT_COMP_MAX",
+                "type": "num",
+                "value": "0.5",
+                "ui": {
+                    "icon": "font-awesome/fa-cloud",
+                    "type": "spinner"
+                }
+            },
+            {
+                "name": "TEMP_OUTDOOR_INFLUENCE",
+                "type": "num",
+                "value": "0.15",
+                "ui": {
+                    "icon": "font-awesome/fa-cloud",
+                    "type": "spinner"
+                }
+            }
+        ],
+        "meta": {},
+        "color": "#FFCC66"
+    },
+    {
+        "id": "9e0bc4bd7dad8595",
+        "type": "comment",
+        "z": "8238836adf9134c5",
+        "name": "Circadian v2: sun elevation + hours after sunset + outdoor lux -> Gain / Warmth",
+        "info": "",
+        "x": 340,
+        "y": 40,
+        "wires": []
+    },
+    {
+        "id": "8eb1c556ac9c9472",
+        "type": "inject",
+        "z": "8238836adf9134c5",
+        "d": true,
+        "name": "Every 1 min",
+        "props": [],
+        "repeat": "60",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "10",
+        "topic": "",
+        "x": 130,
+        "y": 120,
+        "wires": [
+            [
+                "852c042112612efd"
+            ]
+        ]
+    },
+    {
+        "id": "852c042112612efd",
+        "type": "api-current-state",
+        "z": "8238836adf9134c5",
+        "name": "Lux max (p95 7d)",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "${LUXMAX_SENSOR}",
+        "state_type": "num",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "luxMax",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 330,
+        "y": 120,
+        "wires": [
+            [
+                "62c5ec69e71bd19f"
+            ]
+        ]
+    },
+    {
+        "id": "62c5ec69e71bd19f",
+        "type": "api-current-state",
+        "z": "8238836adf9134c5",
+        "name": "Outdoor lux (log)",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "${LUX_SENSOR}",
+        "state_type": "num",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "outdoor",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 540,
+        "y": 120,
+        "wires": [
+            [
+                "815a32de60495ee7"
+            ]
+        ]
+    },
+    {
+        "id": "815a32de60495ee7",
+        "type": "smooth",
+        "z": "8238836adf9134c5",
+        "name": "Mean of 5",
+        "property": "outdoor",
+        "action": "mean",
+        "count": "5",
+        "round": "1",
+        "mult": "single",
+        "reduce": false,
+        "x": 720,
+        "y": 120,
+        "wires": [
+            [
+                "d37a31b5c6e23dcb"
+            ]
+        ]
+    },
+    {
+        "id": "d37a31b5c6e23dcb",
+        "type": "sun-position",
+        "z": "8238836adf9134c5",
+        "name": "Sun position",
+        "positionConfig": "26f98e1b.bd1812",
+        "rules": [],
+        "onlyOnChange": "false",
+        "topic": "",
+        "outputs": 1,
+        "start": "",
+        "startType": "none",
+        "startOffset": 0,
+        "startOffsetType": "num",
+        "startOffsetMultiplier": 60000,
+        "end": "",
+        "endType": "none",
+        "endOffset": 0,
+        "endOffsetType": "num",
+        "endOffsetMultiplier": 60000,
+        "x": 890,
+        "y": 120,
+        "wires": [
+            [
+                "e976e630a9fa9626"
+            ]
+        ]
+    },
+    {
+        "id": "e976e630a9fa9626",
+        "type": "function",
+        "z": "8238836adf9134c5",
+        "name": "Circadian model",
+        "func": "const p = msg.payload || {};\nconst elev = Number(p.altitudeDegrees);\nconst nowTs = Number(p.ts);\nconst outdoor = Number(msg.outdoor);\nconst luxMax = Number(msg.luxMax);\n\nif (!Number.isFinite(elev) || !Number.isFinite(nowTs)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'no sun data' });\n    return null;\n}\n\nconst clamp01 = (v) => Math.max(0, Math.min(1, v));\nconst smooth = (v, lo, hi) => {\n    const t = clamp01((v - lo) / (hi - lo));\n    return t * t * (3 - 2 * t);\n};\nconst num = (name, dflt) => {\n    const v = Number(env.get(name));\n    return Number.isFinite(v) ? v : dflt;\n};\n\nconst H = 3600000;\nconst times = p.times || {};\nconst sunsetTs = times.sunsetStart ? Number(times.sunsetStart.ts) : NaN;\nconst sunriseTs = times.sunriseEnd ? Number(times.sunriseEnd.ts) : NaN;\nif (!Number.isFinite(sunsetTs) || !Number.isFinite(sunriseTs)) {\n    node.status({ fill: 'red', shape: 'ring', text: 'no sunrise/sunset' });\n    return null;\n}\n\nlet lastSunset = sunsetTs;\nif (lastSunset > nowTs) lastSunset -= 24 * H;\nlet nextSunrise = sunriseTs;\nif (nextSunrise < nowTs) nextSunrise += 24 * H;\n\nconst hAfterSunset = (nowTs - lastSunset) / H;\nconst hBeforeSunrise = (nextSunrise - nowTs) / H;\n\nconst darkBase = (evH, moH) => {\n    const evening = clamp01(1 - hAfterSunset / Math.max(0.1, evH));\n    const morning = clamp01(1 - hBeforeSunrise / Math.max(0.1, moH));\n    return 0.85 * Math.max(evening, morning);\n};\n\nlet luxNorm = 0;\nconst luxOk = Number.isFinite(outdoor) && Number.isFinite(luxMax) && luxMax > 0;\nif (luxOk) luxNorm = clamp01(outdoor / luxMax);\n\nlet gBase;\nif (elev > 0) {\n    gBase = 0.85 + 0.15 * smooth(elev, 0, 25);\n} else {\n    gBase = darkBase(num('EVENING_HOURS_GAIN', 4), num('MORNING_HOURS_GAIN', 1.5));\n}\n\nconst Bmax = num('DAYLIGHT_COMP_MAX', 0.5);\nconst B = luxOk ? Bmax * smooth(elev, 0, 35) : 0;\nconst gain01 = clamp01(gBase * (1 - B) + (1 - luxNorm) * B);\n\nconst gMin = num('GAIN_MIN', 30);\nconst gMax = num('GAIN_MAX', 100);\nconst gainPct = Math.round(gMin + gain01 * (gMax - gMin));\n\nlet tBase;\nif (elev > 0) {\n    tBase = 0.85 + 0.15 * smooth(elev, 5, 25);\n} else {\n    tBase = darkBase(num('EVENING_HOURS_TEMP', 3), num('MORNING_HOURS_TEMP', 1.5));\n}\n\nconst inflMax = num('TEMP_OUTDOOR_INFLUENCE', 0.15);\nconst infl = luxOk ? inflMax * smooth(elev, 0, 35) : 0;\nconst temp01 = clamp01(tBase + (luxNorm - tBase) * infl);\n\nconst tMin = num('TEMP_MIN', 2200);\nconst tMax = num('TEMP_MAX', 4000);\nconst kelvin = Math.round(tMin + temp01 * (tMax - tMin));\n\nmsg.debug = {\n    elev: Math.round(elev * 10) / 10,\n    hAfterSunset: Math.round(hAfterSunset * 100) / 100,\n    hBeforeSunrise: Math.round(hBeforeSunrise * 100) / 100,\n    luxNorm: Math.round(luxNorm * 100) / 100,\n    gBase: Math.round(gBase * 100) / 100,\n    B: Math.round(B * 100) / 100,\n    tBase: Math.round(tBase * 100) / 100,\n    infl: Math.round(infl * 100) / 100\n};\n\nnode.status({ fill: 'green', shape: 'dot', text: gainPct + '% / ' + kelvin + 'K, elev ' + elev.toFixed(1) });\n\nreturn [\n    { payload: gainPct, debug: msg.debug },\n    { payload: kelvin, debug: msg.debug }\n];",
+        "outputs": 2,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1080,
+        "y": 120,
+        "wires": [
+            [
+                "93488adbaddf14a3"
+            ],
+            [
+                "0a33b2aaff3c51cd"
+            ]
+        ]
+    },
+    {
+        "id": "93488adbaddf14a3",
+        "type": "rbe",
+        "z": "8238836adf9134c5",
+        "name": "Deadband 1%",
+        "func": "deadband",
+        "gap": "1",
+        "start": "",
+        "inout": "out",
+        "septopics": true,
+        "property": "payload",
+        "topi": "topic",
+        "x": 1280,
+        "y": 100,
+        "wires": [
+            [
+                "9897f9e4a099d8a1"
+            ]
+        ]
+    },
+    {
+        "id": "0a33b2aaff3c51cd",
+        "type": "rbe",
+        "z": "8238836adf9134c5",
+        "name": "Deadband 25K",
+        "func": "deadband",
+        "gap": "25",
+        "start": "",
+        "inout": "out",
+        "septopics": true,
+        "property": "payload",
+        "topi": "topic",
+        "x": 1280,
+        "y": 160,
+        "wires": [
+            [
+                "7c863043e2eb664a"
+            ]
+        ]
+    },
+    {
+        "id": "9897f9e4a099d8a1",
+        "type": "ha-sensor",
+        "z": "8238836adf9134c5",
+        "name": "Gain [%]",
+        "entityConfig": "b4177df491fd0ec4",
+        "version": 0,
+        "state": "payload",
+        "stateType": "msg",
+        "attributes": [],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1460,
+        "y": 100,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "7c863043e2eb664a",
+        "type": "ha-sensor",
+        "z": "8238836adf9134c5",
+        "name": "Warmth [K]",
+        "entityConfig": "39d6dc8ea6db1071",
+        "version": 0,
+        "state": "payload",
+        "stateType": "msg",
+        "attributes": [],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1470,
+        "y": 160,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "26c6c4d5.3a01e4",
+        "type": "subflow",
+        "name": "Sub Circadian NR",
+        "info": "",
+        "category": "",
+        "in": [
+            {
+                "x": 60,
+                "y": 160,
+                "wires": [
+                    {
+                        "id": "e6f57b08e4d695bb"
+                    }
+                ]
+            }
+        ],
+        "out": [
+            {
+                "x": 1380,
+                "y": 140,
+                "wires": [
+                    {
+                        "id": "e64dbfa.021204",
+                        "port": 0
+                    }
+                ]
+            },
+            {
+                "x": 1380,
+                "y": 360,
+                "wires": [
+                    {
+                        "id": "d9f0035a.28956",
+                        "port": 0
+                    }
+                ]
+            },
+            {
+                "x": 460,
+                "y": 360,
+                "wires": [
+                    {
+                        "id": "667d6dd.334db94",
+                        "port": 0
+                    }
+                ]
+            }
+        ],
+        "env": [],
+        "color": "#DDAA99"
+    },
+    {
+        "id": "dc97f68a.35ea2",
+        "type": "switch",
+        "z": "26c6c4d5.3a01e4",
+        "name": "curve switch",
+        "property": "payload.times_of_day.active.name",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "night",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "morning",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "day",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "evening",
+                "vt": "str"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 4,
+        "x": 510,
+        "y": 240,
+        "wires": [
+            [
+                "ce91189c.8bc7d8",
+                "bd8db343.5462f8"
+            ],
+            [
+                "ad9966f3.3fced",
+                "4db18fbe.9ffb6"
+            ],
+            [
+                "c2d43d53.d7ddf8",
+                "838233f4.7ffed"
+            ],
+            [
+                "eef1dc11.39342",
+                "2e9ef8a9.d7fd88"
+            ]
+        ]
+    },
+    {
+        "id": "ce91189c.8bc7d8",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "night curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.514
+            },
+            {
+                "x": 0.346,
+                "y": 0.374
+            },
+            {
+                "x": 0.56,
+                "y": 0.16
+            },
+            {
+                "x": 1,
+                "y": 0
+            }
+        ],
+        "x": 750,
+        "y": 80,
+        "wires": [
+            [
+                "eec371e1536a7aeb"
+            ]
+        ]
+    },
+    {
+        "id": "ad9966f3.3fced",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "morning curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.01
+            },
+            {
+                "x": 0.132,
+                "y": 0.01
+            },
+            {
+                "x": 0.269,
+                "y": 0.027
+            },
+            {
+                "x": 0.449,
+                "y": 0.124
+            },
+            {
+                "x": 0.676,
+                "y": 0.334
+            },
+            {
+                "x": 1,
+                "y": 0.75
+            }
+        ],
+        "x": 760,
+        "y": 120,
+        "wires": [
+            [
+                "eec371e1536a7aeb"
+            ]
+        ]
+    },
+    {
+        "id": "eef1dc11.39342",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "evening curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.85
+            },
+            {
+                "x": 0.036,
+                "y": 0.78
+            },
+            {
+                "x": 0.193,
+                "y": 0.664
+            },
+            {
+                "x": 1,
+                "y": 0.514
+            }
+        ],
+        "x": 760,
+        "y": 200,
+        "wires": [
+            [
+                "eec371e1536a7aeb"
+            ]
+        ]
+    },
+    {
+        "id": "c2d43d53.d7ddf8",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "daylight curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.744
+            },
+            {
+                "x": 0.03,
+                "y": 0.838
+            },
+            {
+                "x": 0.097,
+                "y": 0.941
+            },
+            {
+                "x": 0.183,
+                "y": 1
+            },
+            {
+                "x": 0.86,
+                "y": 0.995
+            },
+            {
+                "x": 0.943,
+                "y": 0.931
+            },
+            {
+                "x": 1,
+                "y": 0.85
+            }
+        ],
+        "x": 760,
+        "y": 160,
+        "wires": [
+            [
+                "eec371e1536a7aeb"
+            ]
+        ]
+    },
+    {
+        "id": "bd8db343.5462f8",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "night curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.5
+            },
+            {
+                "x": 0.133,
+                "y": 0.265
+            },
+            {
+                "x": 0.27,
+                "y": 0.171
+            },
+            {
+                "x": 0.9,
+                "y": 0
+            }
+        ],
+        "x": 750,
+        "y": 280,
+        "wires": [
+            [
+                "196c1d3f6cc33388"
+            ]
+        ]
+    },
+    {
+        "id": "4db18fbe.9ffb6",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "morning curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0
+            },
+            {
+                "x": 0.42,
+                "y": 0.018
+            },
+            {
+                "x": 0.54,
+                "y": 0.051
+            },
+            {
+                "x": 0.587,
+                "y": 0.101
+            },
+            {
+                "x": 0.817,
+                "y": 0.675
+            },
+            {
+                "x": 1,
+                "y": 0.85
+            }
+        ],
+        "x": 760,
+        "y": 320,
+        "wires": [
+            [
+                "196c1d3f6cc33388"
+            ]
+        ]
+    },
+    {
+        "id": "2e9ef8a9.d7fd88",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "evening curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.85
+            },
+            {
+                "x": 0.787,
+                "y": 0.598
+            },
+            {
+                "x": 1,
+                "y": 0.5
+            }
+        ],
+        "x": 760,
+        "y": 400,
+        "wires": [
+            [
+                "196c1d3f6cc33388"
+            ]
+        ]
+    },
+    {
+        "id": "838233f4.7ffed",
+        "type": "spline-curve",
+        "z": "26c6c4d5.3a01e4",
+        "name": "daylight curve",
+        "output_key": "sunCurve",
+        "input_key": "payload.times_of_day.active.perc",
+        "points": [
+            {
+                "x": 0,
+                "y": 0.85
+            },
+            {
+                "x": 0.123,
+                "y": 0.927
+            },
+            {
+                "x": 0.5,
+                "y": 1
+            },
+            {
+                "x": 0.92,
+                "y": 0.904
+            },
+            {
+                "x": 1,
+                "y": 0.85
+            }
+        ],
+        "x": 760,
+        "y": 360,
+        "wires": [
+            [
+                "196c1d3f6cc33388"
+            ]
+        ]
+    },
+    {
+        "id": "667d6dd.334db94",
+        "type": "function",
+        "z": "26c6c4d5.3a01e4",
+        "name": "Times of Day",
+        "func": "var newmsg = JSON.parse(JSON.stringify(msg));\nnewmsg.payload.times_of_day = {};\n\nconst processTimeOfDay = function(nme, obj, name_start, name_end) {\n    var ret = {};\n    ret.name  = nme;\n    ret.start = obj.times[name_start].ts;\n    ret.end   = obj.times[name_end].ts;\n    ret.perc  = (obj.ts - ret.start) / (ret.end - ret.start);\n    \n    \n    // to cover range starting before midnight and ending after it.\n    if (ret.start > ret.end)\n    {\n        var a;\n\n        // before midnight\n        if (ret.start < obj.ts) \n        {\n            a = new Date(ret.end);\n            a.setUTCDate(a.getUTCDate() + 1);\n            ret.end = a.getTime();\n             \n             \n        }\n        else if (ret.end > obj.ts) \n        {\n            a = new Date(ret.start);\n            a.setUTCDate(a.getUTCDate() - 1);\n            ret.start = a.getTime();\n\n        }\n\n    }\n    \n    ret.perc  = (obj.ts - ret.start) / (ret.end - ret.start);\n    \n    obj.times_of_day[nme] = ret;\n    if (ret.start <= obj.ts && obj.ts < ret.end ) obj.times_of_day.active = ret;\n}\n\n\nprocessTimeOfDay('night', newmsg.payload, \"astronomicalDusk\", \"astronomicalDawn\");\nprocessTimeOfDay('morning', newmsg.payload, \"astronomicalDawn\", \"goldenHourDawnEnd\");\nprocessTimeOfDay('day', newmsg.payload, \"goldenHourDawnEnd\", \"sunsetStart\");\nprocessTimeOfDay('evening', newmsg.payload, \"sunsetStart\", \"astronomicalDusk\");\n\n\nreturn newmsg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 330,
+        "y": 240,
+        "wires": [
+            [
+                "dc97f68a.35ea2"
+            ]
+        ]
+    },
+    {
+        "id": "e64dbfa.021204",
+        "type": "range",
+        "z": "26c6c4d5.3a01e4",
+        "minin": "0",
+        "maxin": "1",
+        "minout": "30",
+        "maxout": "100",
+        "action": "scale",
+        "round": true,
+        "property": "payload",
+        "name": "",
+        "x": 1260,
+        "y": 140,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "d9f0035a.28956",
+        "type": "range",
+        "z": "26c6c4d5.3a01e4",
+        "minin": "0",
+        "maxin": "1",
+        "minout": "2200",
+        "maxout": "4000",
+        "action": "scale",
+        "round": true,
+        "property": "payload",
+        "name": "",
+        "x": 1250,
+        "y": 360,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "7d4ca80d.e23468",
+        "type": "sun-position",
+        "z": "26c6c4d5.3a01e4",
+        "name": "",
+        "positionConfig": "26f98e1b.bd1812",
+        "rules": [],
+        "onlyOnChange": "true",
+        "topic": "",
+        "outputs": 1,
+        "start": "",
+        "startType": "none",
+        "startOffset": 0,
+        "startOffsetType": "num",
+        "startOffsetMultiplier": 60000,
+        "end": "",
+        "endType": "none",
+        "endOffset": 0,
+        "endOffsetType": "num",
+        "endOffsetMultiplier": 60000,
+        "x": 490,
+        "y": 160,
+        "wires": [
+            [
+                "667d6dd.334db94"
+            ]
+        ]
+    },
+    {
+        "id": "09dfa70ed2e689cd",
+        "type": "function",
+        "z": "26c6c4d5.3a01e4",
+        "name": "Update with Illuminance",
+        "func": "// ================= INPUT =================\nconst sunCurve = Number(msg.sunCurve);\nconst outdoorLog = Number(msg.outdoor);\nconst altitude = Number(msg.payload?.altitudeDegrees);\n\n// ================= VALIDATION =================\nif (!Number.isFinite(sunCurve)) return null;\nif (!Number.isFinite(outdoorLog)) return null;\nif (!Number.isFinite(altitude)) return null;\n\n// ================= LUX MODEL =================\n// Настрой под реальный диапазон outdoorLog\nconst luxMin = 0;\nconst luxMax = Number(msg.luxMax);\n\n// clamp\nconst luxClamped = Math.max(luxMin, Math.min(luxMax, outdoorLog));\nlet luxNorm = (luxClamped - luxMin) / (luxMax - luxMin);\n\n// ярко на улице → меньше света внутри\nconst luxModel = 1 - luxNorm;\n\n// ================= SUN ALTITUDE MODEL =================\nconst altMin = 0;     // горизонт\nconst altMax = 35;    // средняя высота солнца\nconst Bmax = 0.5;     // максимум влияния lux\n\nlet B = 0;\n\nif (altitude <= altMin) {\n    B = 0;\n}\nelse if (altitude >= altMax) {\n    B = Bmax;\n}\nelse {\n    const t = (altitude - altMin) / (altMax - altMin);\n\n    // Более физичная кривая через синус\n    const tSmooth = Math.sin(t * Math.PI / 2);\n\n    B = Bmax * tSmooth;\n}\n\nconst A = 1 - B;\n\n// ================= FINAL MIX =================\nlet out = (sunCurve * A) + (luxModel * B);\n\n// clamp 0..1\nout = Math.max(0, Math.min(1, out));\n\n// ================= OUTPUT =================\nmsg.payload = out;\n\nmsg.debug = {\n    sunCurve,\n    luxModel,\n    altitude,\n    A,\n    B\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1030,
+        "y": 140,
+        "wires": [
+            [
+                "e64dbfa.021204",
+                "68e7c029cb7219b2"
+            ]
+        ]
+    },
+    {
+        "id": "d5ebb46288c35ea2",
+        "type": "function",
+        "z": "26c6c4d5.3a01e4",
+        "name": "Update with Illuminance",
+        "func": "// ================= INPUT =================\nconst base = Number(msg.sunCurve);               // 0..1 после spline\nconst outdoorLog = Number(msg.outdoor);\nconst altitude = Number(msg.payload?.altitudeDegrees);\n\n// ================= VALIDATION =================\nif (!Number.isFinite(base)) return null;\nif (!Number.isFinite(outdoorLog)) return null;\nif (!Number.isFinite(altitude)) return null;\n\n// ================= LUX NORMALIZATION =================\nconst luxMin = 0;\nconst luxMax = Number(msg.luxMax);\n\nif (!Number.isFinite(luxMax) || luxMax <= luxMin) return null;\n\nconst luxClamped = Math.max(luxMin, Math.min(luxMax, outdoorLog));\nconst luxNorm = (luxClamped - luxMin) / (luxMax - luxMin);\n\n// НЕ инвертируем — как ты и хотел\nconst luxModel = luxNorm;\n\n// ================= ALTITUDE MODEL =================\nconst altMin = 0;\nconst altMax = 35;\nconst influenceMax = 0.15;\n\nlet influence = 0;\n\nif (altitude <= altMin) {\n    influence = 0;\n}\nelse if (altitude >= altMax) {\n    influence = influenceMax;\n}\nelse {\n    const t = (altitude - altMin) / (altMax - altMin);\n    const tSmooth = Math.sin(t * Math.PI / 2);\n    influence = influenceMax * tSmooth;\n}\n\n// ================= FINAL (FIXED MODEL) =================\n// Вместо умножения — controlled blend к luxModel\nlet out = base + (luxModel - base) * influence;\n\n// clamp 0..1\nout = Math.max(0, Math.min(1, out));\n\n// ================= OUTPUT =================\nmsg.payload = out;\n\nmsg.debug = {\n    base,\n    altitude,\n    luxModel,\n    influence,\n    delta: (luxModel - base),\n    appliedShift: (luxModel - base) * influence\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1030,
+        "y": 360,
+        "wires": [
+            [
+                "d9f0035a.28956"
+            ]
+        ]
+    },
+    {
+        "id": "e6f57b08e4d695bb",
+        "type": "api-current-state",
+        "z": "26c6c4d5.3a01e4",
+        "name": "Max Illuminance Outdoor LOG",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "sensor.illuminance_outdoor_log_p95_7d",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "luxMax",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 250,
+        "y": 160,
+        "wires": [
+            [
+                "7d4ca80d.e23468"
+            ]
+        ]
+    },
+    {
+        "id": "68e7c029cb7219b2",
+        "type": "debug",
+        "z": "26c6c4d5.3a01e4",
+        "d": true,
+        "name": "debug 1",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1260,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "eec371e1536a7aeb",
+        "type": "junction",
+        "z": "26c6c4d5.3a01e4",
+        "x": 900,
+        "y": 140,
+        "wires": [
+            [
+                "09dfa70ed2e689cd"
+            ]
+        ]
+    },
+    {
+        "id": "196c1d3f6cc33388",
+        "type": "junction",
+        "z": "26c6c4d5.3a01e4",
+        "x": 900,
+        "y": 360,
+        "wires": [
+            [
+                "d5ebb46288c35ea2"
+            ]
+        ]
+    },
+    {
+        "id": "26f98e1b.bd1812",
+        "type": "position-config",
+        "name": "",
+        "isValide": "true",
+        "angleType": "deg",
+        "timeZoneOffset": 99,
+        "timeZoneDST": 0,
+        "stateTimeFormat": "3",
+        "stateDateFormat": "12",
+        "contextStore": "",
+        "sunPositions": [],
+        "predefAngles": []
+    },
+    {
+        "id": "4a046bd0.e80044",
+        "type": "server",
+        "name": "Home Assistant",
+        "addon": true,
+        "rejectUnauthorizedCerts": true,
+        "ha_boolean": "",
+        "connectionDelay": false,
+        "cacheJson": false,
+        "heartbeat": false,
+        "heartbeatInterval": "",
+        "statusSeparator": "",
+        "enableGlobalContextStore": false
+    },
+    {
+        "id": "abd5c35bdd843943",
+        "type": "tab",
+        "label": "SYSTEM",
+        "disabled": false,
+        "info": "",
+        "env": []
+    },
+    {
+        "id": "0253c122dc5804ca",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "style": {
+            "stroke": "#999999",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "f1aefa569ebc823c",
+            "b2641212f08818ee",
+            "c324382b583b514d",
+            "eb614b74080ab458",
+            "21db31c048c01719",
+            "6bdba5a416d888a0",
+            "6678584d09f5e241",
+            "d3326509f70807a7",
+            "013c777372037438"
+        ],
+        "x": 114,
+        "y": 219,
+        "w": 992,
+        "h": 182
+    },
+    {
+        "id": "2a255ca2c2853b54",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "style": {
+            "stroke": "#999999",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "44ba8d8909b2e05e",
+            "1f2b18c448b04449",
+            "aae207cdf987c37f",
+            "12b574959443f833",
+            "3cdad2c9760ea39a",
+            "bac8bb8db8a9573c",
+            "bee13cdd7679cfaa",
+            "698347af6b2e6f88",
+            "9fac4dde1880552d",
+            "5ed8eeed326e4658",
+            "3523a79596ac1fa4",
+            "86cc2733503a8e83",
+            "3d2589eaad061de0",
+            "982a2dc654762408",
+            "bf412aa165722821",
+            "0e4b642a5a4da97c",
+            "42fd3347ebf6febc",
+            "2e5777c8bcb46cfa",
+            "0e9ffad4c95ed077",
+            "b3566f6896f140e9",
+            "da12d28a5302484a"
+        ],
+        "x": 1374,
+        "y": 39,
+        "w": 1312,
+        "h": 422
+    },
+    {
+        "id": "a69ff155524e94c2",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "style": {
+            "stroke": "#999999",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "2fe9c4d5ac81ace0",
+            "8079f1552a4cdcc4",
+            "d1b52e4ad90f3f1d",
+            "835b2a498dd0527d",
+            "70ed560117fa2d37",
+            "4f2f9016e9ffc48f",
+            "5c444fe6b95a4f89",
+            "54a566ef1ea0a893",
+            "704fbb8fa6fdd134",
+            "aa0bfb6db8a93653",
+            "b82a8f0b358307b3",
+            "fde4baf0b38f5252",
+            "9995452bb39e1527",
+            "bf8b4642dbb02687",
+            "5d6fc578376131a1",
+            "8ccdcadc97a954e1",
+            "9b4a3c89cb23df7f",
+            "71c654d7ba09a1d1",
+            "8a53e574dd8f2df5",
+            "af81b43e5c60b0ee",
+            "52f7a9d3cf27a679",
+            "9b6c96d75f6b7687",
+            "cd180ae2cc22f69b",
+            "7b95f3bd764571d0",
+            "3ae414ccb05efbaa",
+            "d35faa66ad2d3590"
+        ],
+        "x": 114,
+        "y": 419,
+        "w": 1072,
+        "h": 642
+    },
+    {
+        "id": "d26a02594ac89516",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "style": {
+            "stroke": "#999999",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "63a29adcf61facd1",
+            "84742e28874c8afb",
+            "7ee5dc9dc7cc353e",
+            "31f6f906d5c9564a",
+            "03eafb76f917bf4e",
+            "8795b0c30bface57",
+            "f388d41f9aa621d0"
+        ],
+        "x": 114,
+        "y": 79,
+        "w": 1052,
+        "h": 122
+    },
+    {
+        "id": "b374d6e68c14a5a2",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "style": {
+            "stroke": "#999999",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#a4a4a4"
+        },
+        "nodes": [
+            "615e13fa9452e4f4",
+            "425cc4cda774add0",
+            "e976f05b732b46dd",
+            "6fa7f7fe594d59a1",
+            "7794bd137201a78c",
+            "1714b23acc8b8529",
+            "1b150d7af9cd6f9b",
+            "5d72c1e79715e7e2",
+            "c0502b23a2b6f710",
+            "8237b3523e572d31",
+            "57d0a30981f3739c"
+        ],
+        "x": 1374,
+        "y": 1299,
+        "w": 1212,
+        "h": 242
+    },
+    {
+        "id": "a021f2f37ee31775",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "name": "Sleep Detection FSM",
+        "style": {
+            "label": true
+        },
+        "nodes": [
+            "dda3a789a3b7c319",
+            "1722fe517794a321",
+            "17613cc77c818de3",
+            "42829089bb423928",
+            "e196d27cd56c326d",
+            "fe603f0c10afc84d",
+            "c4986aa4744f0247",
+            "c8e50a9655ee9b3c",
+            "11dfceab69cd902f",
+            "8d012ae3f0cd305b"
+        ],
+        "x": 1374,
+        "y": 479,
+        "w": 822,
+        "h": 342
+    },
+    {
+        "id": "fsm2group0000001",
+        "type": "group",
+        "z": "abd5c35bdd843943",
+        "name": "Sleep Mode FSM v2",
+        "style": {
+            "stroke": "#6ab0de",
+            "stroke-opacity": "1",
+            "fill": "none",
+            "fill-opacity": "1",
+            "label": true,
+            "label-position": "nw",
+            "color": "#3d6d99"
+        },
+        "nodes": [
+            "fsm2comment00001",
+            "fsm2tick00000001",
+            "fsm2evbed0000001",
+            "fsm2evlight00001",
+            "fsm2evswitch0001",
+            "fsm2evhome000001",
+            "fsm2evactivity01",
+            "fsm2function0001",
+            "fsm2svcon0000001",
+            "fsm2svcoff000001",
+            "fsm2linkout00001",
+            "fsm2debug0000001"
+        ],
+        "x": 1374,
+        "y": 839,
+        "w": 1052,
+        "h": 442
+    },
+    {
+        "id": "3ae414ccb05efbaa",
+        "type": "junction",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "x": 260,
+        "y": 700,
+        "wires": [
+            [
+                "5d6fc578376131a1"
+            ]
+        ]
+    },
+    {
+        "id": "44ba8d8909b2e05e",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Do not disturb MODE",
+        "info": "",
+        "x": 1500,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "eb614b74080ab458",
+        "type": "subflow:26c6c4d5.3a01e4",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "0253c122dc5804ca",
+        "name": "",
+        "x": 830,
+        "y": 320,
+        "wires": [
+            [
+                "21db31c048c01719"
+            ],
+            [
+                "6bdba5a416d888a0"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "21db31c048c01719",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "0253c122dc5804ca",
+        "name": "Gain [%]",
+        "entityConfig": "b4177df491fd0ec4",
+        "version": 0,
+        "state": "payload",
+        "stateType": "msg",
+        "attributes": [],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1000,
+        "y": 300,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "6bdba5a416d888a0",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "0253c122dc5804ca",
+        "name": "Warmth [K]",
+        "entityConfig": "39d6dc8ea6db1071",
+        "version": 0,
+        "state": "payload",
+        "stateType": "msg",
+        "attributes": [],
+        "inputOverride": "allow",
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "data"
+            }
+        ],
+        "x": 1010,
+        "y": 340,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "f1aefa569ebc823c",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "0253c122dc5804ca",
+        "name": "Change Light Temperature and Gain",
+        "info": "",
+        "x": 280,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "1f2b18c448b04449",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode True",
+        "rules": [
+            {
+                "t": "change",
+                "p": "#:(file)::sleepMode",
+                "pt": "global",
+                "from": "false",
+                "fromt": "bool",
+                "to": "true",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "true",
+                "tot": "bool"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 2330,
+        "y": 160,
+        "wires": [
+            [
+                "3cdad2c9760ea39a",
+                "0e4b642a5a4da97c"
+            ]
+        ]
+    },
+    {
+        "id": "aae207cdf987c37f",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode False",
+        "rules": [
+            {
+                "t": "set",
+                "p": "#:(file)::sleepMode",
+                "pt": "global",
+                "to": "false",
+                "tot": "bool"
+            },
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "false",
+                "tot": "bool"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 2330,
+        "y": 200,
+        "wires": [
+            [
+                "3cdad2c9760ea39a",
+                "0e4b642a5a4da97c"
+            ]
+        ]
+    },
+    {
+        "id": "12b574959443f833",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Home Assistant Restarted",
+        "links": [
+            "fcbc73371f4c0dd2"
+        ],
+        "x": 2110,
+        "y": 220,
+        "wires": [
+            [
+                "aae207cdf987c37f"
+            ]
+        ],
+        "l": true
+    },
+    {
+        "id": "2fe9c4d5ac81ace0",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "weather",
+                "pt": "global",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 790,
+        "y": 700,
+        "wires": [
+            [
+                "8079f1552a4cdcc4",
+                "d1b52e4ad90f3f1d",
+                "835b2a498dd0527d",
+                "9b4a3c89cb23df7f",
+                "71c654d7ba09a1d1",
+                "8a53e574dd8f2df5",
+                "af81b43e5c60b0ee",
+                "52f7a9d3cf27a679",
+                "7b95f3bd764571d0"
+            ]
+        ]
+    },
+    {
+        "id": "8079f1552a4cdcc4",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Pressure [hPa]",
+        "entityConfig": "e14db2319cf182c5",
+        "version": 0,
+        "state": "payload.PPPP",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1020,
+        "y": 700,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "d1b52e4ad90f3f1d",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Wind Speed [m/s]",
+        "entityConfig": "415c30806e5146c2",
+        "version": 0,
+        "state": "payload.windspeed",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1030,
+        "y": 740,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "835b2a498dd0527d",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Cloudiness [%]",
+        "entityConfig": "0041f776af1a24d5",
+        "version": 0,
+        "state": "payload.Neff",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1020,
+        "y": 900,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "70ed560117fa2d37",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get Weather 5min",
+        "info": "",
+        "x": 230,
+        "y": 660,
+        "wires": []
+    },
+    {
+        "id": "3cdad2c9760ea39a",
+        "type": "link out",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode Changed",
+        "mode": "link",
+        "links": [
+            "367d11381312b16e",
+            "b88787cf96a8010a",
+            "1ce007c7bd3f7b19",
+            "434ab03c18bf28a7",
+            "035fed875e2d18dc",
+            "d3810365f551488c",
+            "4d47a19d6faa82da",
+            "650363c6cb5d38d0",
+            "8f35610f6340c597"
+        ],
+        "x": 2560,
+        "y": 180,
+        "wires": [],
+        "l": true
+    },
+    {
+        "id": "bac8bb8db8a9573c",
+        "type": "inject",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "every 30min",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "1800",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 1590,
+        "y": 160,
+        "wires": [
+            [
+                "bf412aa165722821"
+            ]
+        ]
+    },
+    {
+        "id": "bee13cdd7679cfaa",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode Change Trigger",
+        "links": [
+            "c2e5cfd93091f37b",
+            "d4da5fefd2a64256"
+        ],
+        "x": 1540,
+        "y": 120,
+        "wires": [
+            [
+                "bf412aa165722821"
+            ]
+        ],
+        "l": true
+    },
+    {
+        "id": "698347af6b2e6f88",
+        "type": "ha-switch",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Switch: Sleep Mode",
+        "version": 0,
+        "debugenabled": false,
+        "inputs": 1,
+        "outputs": 2,
+        "entityConfig": "56e7b30714f96d0f",
+        "enableInput": true,
+        "outputOnStateChange": false,
+        "outputProperties": [
+            {
+                "property": "outputType",
+                "propertyType": "msg",
+                "value": "state change",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 2550,
+        "y": 120,
+        "wires": [
+            [],
+            []
+        ]
+    },
+    {
+        "id": "4f2f9016e9ffc48f",
+        "type": "sun-position",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "positionConfig": "26f98e1b.bd1812",
+        "rules": [],
+        "onlyOnChange": "true",
+        "topic": "",
+        "outputs": 1,
+        "start": "",
+        "startType": "none",
+        "startOffset": 0,
+        "startOffsetType": "num",
+        "startOffsetMultiplier": 60000,
+        "end": "",
+        "endType": "none",
+        "endOffset": 0,
+        "endOffsetType": "num",
+        "endOffsetMultiplier": 60000,
+        "x": 410,
+        "y": 500,
+        "wires": [
+            [
+                "5c444fe6b95a4f89"
+            ]
+        ]
+    },
+    {
+        "id": "5c444fe6b95a4f89",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "#:(file)::sunPosition",
+                "pt": "global",
+                "to": "payload",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 620,
+        "y": 500,
+        "wires": [
+            [
+                "704fbb8fa6fdd134"
+            ]
+        ]
+    },
+    {
+        "id": "54a566ef1ea0a893",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get SunPosition ",
+        "info": "",
+        "x": 220,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "704fbb8fa6fdd134",
+        "type": "link out",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Sun Position changed",
+        "mode": "link",
+        "links": [
+            "66dc50d1c67101aa"
+        ],
+        "x": 860,
+        "y": 500,
+        "wires": [],
+        "l": true
+    },
+    {
+        "id": "5ed8eeed326e4658",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Get entity & delete Bedroom occupancy",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "$filter(\t  data.attributes.entity_id,\t   function($v) {$not($contains($v, \"bedroom\")) }\t)",
+                "tot": "jsonata",
+                "dc": true
+            },
+            {
+                "t": "delete",
+                "p": "data",
+                "pt": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 2100,
+        "y": 120,
+        "wires": [
+            [
+                "9fac4dde1880552d"
+            ]
+        ]
+    },
+    {
+        "id": "9fac4dde1880552d",
+        "type": "function",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "All Off?",
+        "func": "// Безопасно получаем массив entity_id\nconst entities = msg.payload;\n\nif (!Array.isArray(entities)) {\n    node.error(\"msg.payload должен быть массивом\");\n    return null;\n}\n\n// Получаем все состояния из Home Assistant\nconst ha = global.get('homeassistant');\n\nif (!ha || !ha.homeAssistant || !ha.homeAssistant.states) {\n    node.error(\"Не найден глобальный объект homeassistant. Убедитесь, что Node-RED интеграция активна\");\n    return null;\n}\n\n// Проверка: все ли состояния НЕ 'on'\nconst allOff = entities.every(id => {\n    const state = ha.homeAssistant.states[id];\n    return !state || state.state == 'off' || state.state == 'unavailable' ;\n});\n\n// Возвращаем результат\nmsg.enable = allOff;\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 2360,
+        "y": 120,
+        "wires": [
+            [
+                "698347af6b2e6f88"
+            ]
+        ]
+    },
+    {
+        "id": "3523a79596ac1fa4",
+        "type": "ha-switch",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Switch: Automation Master",
+        "version": 0,
+        "debugenabled": false,
+        "inputs": 0,
+        "outputs": 2,
+        "entityConfig": "5d65cc093dd3a57b",
+        "enableInput": false,
+        "outputOnStateChange": true,
+        "outputProperties": [
+            {
+                "property": "outputType",
+                "propertyType": "msg",
+                "value": "state change",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1530,
+        "y": 380,
+        "wires": [
+            [
+                "86cc2733503a8e83"
+            ],
+            [
+                "3d2589eaad061de0"
+            ]
+        ]
+    },
+    {
+        "id": "86cc2733503a8e83",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Set AutomationsEnable TRUE",
+        "rules": [
+            {
+                "t": "set",
+                "p": "#:(file)::automationsEnable",
+                "pt": "global",
+                "to": "true",
+                "tot": "bool"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1810,
+        "y": 380,
+        "wires": [
+            [
+                "0e9ffad4c95ed077"
+            ]
+        ]
+    },
+    {
+        "id": "3d2589eaad061de0",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Set AutomationsEnable FALSE",
+        "rules": [
+            {
+                "t": "set",
+                "p": "#:(file)::automationsEnable",
+                "pt": "global",
+                "to": "false",
+                "tot": "bool"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1810,
+        "y": 420,
+        "wires": [
+            [
+                "0e9ffad4c95ed077"
+            ]
+        ]
+    },
+    {
+        "id": "982a2dc654762408",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Anyone Home changed 5min",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.presence_anyone_home"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "5",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "data",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "eventData"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1540,
+        "y": 200,
+        "wires": [
+            [
+                "bf412aa165722821"
+            ]
+        ]
+    },
+    {
+        "id": "bf412aa165722821",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "2a255ca2c2853b54",
+        "name": "Anyone Home State",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "binary_sensor.presence_anyone_home",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "data",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entity"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 1800,
+        "y": 120,
+        "wires": [
+            [
+                "5ed8eeed326e4658"
+            ]
+        ]
+    },
+    {
+        "id": "0e4b642a5a4da97c",
+        "type": "debug",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "debug 6",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 2520,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "42fd3347ebf6febc",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode State ",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.switch_sleep_mode"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "on",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "data",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "eventData"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 2090,
+        "y": 180,
+        "wires": [
+            [
+                "1f2b18c448b04449"
+            ],
+            [
+                "aae207cdf987c37f"
+            ]
+        ]
+    },
+    {
+        "id": "aa0bfb6db8a93653",
+        "type": "http request",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get Meteostat Station",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://meteostat.p.rapidapi.com/stations/nearby?lat={{latitude}}&lon={{longitude}}",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "x-rapidapi-key",
+                "valueType": "other",
+                "valueValue": "3da61af4e9mshf719a3c9b0b1320p1375a8jsna74edd869079"
+            },
+            {
+                "keyType": "other",
+                "keyValue": "x-rapidapi-host",
+                "valueType": "other",
+                "valueValue": "meteostat.p.rapidapi.com"
+            }
+        ],
+        "x": 700,
+        "y": 600,
+        "wires": [
+            [
+                "fde4baf0b38f5252"
+            ]
+        ]
+    },
+    {
+        "id": "b82a8f0b358307b3",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Set latitude&longitude",
+        "rules": [
+            {
+                "t": "set",
+                "p": "latitude",
+                "pt": "msg",
+                "to": "#:(file)::sunPosition.latitude",
+                "tot": "global"
+            },
+            {
+                "t": "set",
+                "p": "longitude",
+                "pt": "msg",
+                "to": "#:(file)::sunPosition.longitude",
+                "tot": "global"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 480,
+        "y": 600,
+        "wires": [
+            [
+                "aa0bfb6db8a93653"
+            ]
+        ]
+    },
+    {
+        "id": "fde4baf0b38f5252",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "rules": [
+            {
+                "t": "set",
+                "p": "#:(file)::weatherStation",
+                "pt": "global",
+                "to": "payload.data[0]",
+                "tot": "msg"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 950,
+        "y": 600,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "9995452bb39e1527",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Home Assistant Restarted",
+        "links": [
+            "fcbc73371f4c0dd2"
+        ],
+        "x": 250,
+        "y": 600,
+        "wires": [
+            [
+                "b82a8f0b358307b3"
+            ]
+        ],
+        "l": true
+    },
+    {
+        "id": "bf8b4642dbb02687",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get Weather Station",
+        "info": "https://rapidapi.com/meteostat/api/meteostat/playground/apiendpoint_4462f80e-0e34-4073-b910-25aaad1ff7a9",
+        "x": 230,
+        "y": 560,
+        "wires": []
+    },
+    {
+        "id": "5d6fc578376131a1",
+        "type": "dwdweather",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "mosmixStation": "10852",
+        "lookAheadHours": "0",
+        "additionalFields": "PPPP, Neff, Td, Rad1h, RRad1",
+        "omitMessageOnStart": true,
+        "repeat": "0",
+        "topic": "",
+        "x": 470,
+        "y": 700,
+        "wires": [
+            [
+                "8ccdcadc97a954e1"
+            ]
+        ]
+    },
+    {
+        "id": "8ccdcadc97a954e1",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Converter",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload.PPPP",
+                "pt": "msg",
+                "to": "$round(payload.PPPP / 100, 2)",
+                "tot": "jsonata"
+            },
+            {
+                "t": "set",
+                "p": "payload.Td",
+                "pt": "msg",
+                "to": "$round(payload.Td - 273.15, 2)",
+                "tot": "jsonata"
+            },
+            {
+                "t": "set",
+                "p": "payload.SHI",
+                "pt": "msg",
+                "to": "(\t  $maxRad := 3600;\t  $useRRad1 := $exists(payload.RRad1) and $number(payload.RRad1) = $number(payload.RRad1);\t  $radFactor := $useRRad1\t    ? payload.RRad1 / 80\t    : payload.Rad1h / $maxRad;\t  $cloudFactor := 1 - payload.Neff / 100;\t  $round(\t    $min([\t      $max([ $radFactor * $cloudFactor * 100, 0 ]),\t      100\t    ])\t  )\t)",
+                "tot": "jsonata"
+            },
+            {
+                "t": "set",
+                "p": "payload.Rad1h",
+                "pt": "msg",
+                "to": "$round(($number(payload.Rad1h) * 1000) / 3600, 2)",
+                "tot": "jsonata"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 620,
+        "y": 700,
+        "wires": [
+            [
+                "2fe9c4d5ac81ace0"
+            ]
+        ]
+    },
+    {
+        "id": "9b4a3c89cb23df7f",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Wind Direction [°]",
+        "entityConfig": "341d904d30cd1470",
+        "version": 0,
+        "state": "payload.winddirection",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1030,
+        "y": 780,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "71c654d7ba09a1d1",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Rain Probability [%]",
+        "entityConfig": "b34ca27499df4227",
+        "version": 0,
+        "state": "payload.precipitation_perc",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1030,
+        "y": 820,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "8a53e574dd8f2df5",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Total Precipitation [mm]",
+        "entityConfig": "05c5fe8855acc50f",
+        "version": 0,
+        "state": "payload.precipitationNext24h",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1050,
+        "y": 860,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "2e5777c8bcb46cfa",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Automation Enable",
+        "info": "",
+        "x": 1490,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "0e9ffad4c95ed077",
+        "type": "link out",
+        "z": "abd5c35bdd843943",
+        "g": "2a255ca2c2853b54",
+        "name": "Automation Enable Changed",
+        "mode": "link",
+        "links": [],
+        "x": 2100,
+        "y": 400,
+        "wires": [],
+        "l": true
+    },
+    {
+        "id": "b3566f6896f140e9",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "2a255ca2c2853b54",
+        "name": "Sleep Mode ON 15min",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.switch_sleep_mode"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "on",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "15",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "data",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "eventData"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1560,
+        "y": 280,
+        "wires": [
+            [
+                "da12d28a5302484a"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "da12d28a5302484a",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "2a255ca2c2853b54",
+        "name": "All Light OFF",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "scene.turn_on",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "scene.all_light_off"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "scene",
+        "service": "turn_on",
+        "x": 1770,
+        "y": 280,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "af81b43e5c60b0ee",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Dew Point [C]",
+        "entityConfig": "6fcc39f7bdd4efff",
+        "version": 0,
+        "state": "payload.Td",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1020,
+        "y": 940,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "52f7a9d3cf27a679",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Sun Heat Index [%]",
+        "entityConfig": "5908bb345830dac0",
+        "version": 0,
+        "state": "payload.SHI",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1030,
+        "y": 980,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "9b6c96d75f6b7687",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get Weather",
+        "links": [
+            "84fe3f7e0bc94009"
+        ],
+        "x": 155,
+        "y": 700,
+        "wires": [
+            [
+                "3ae414ccb05efbaa"
+            ]
+        ]
+    },
+    {
+        "id": "cd180ae2cc22f69b",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Get SunPosition",
+        "links": [
+            "f63cb5576cd2fedd"
+        ],
+        "x": 155,
+        "y": 500,
+        "wires": [
+            [
+                "4f2f9016e9ffc48f"
+            ]
+        ]
+    },
+    {
+        "id": "b2641212f08818ee",
+        "type": "link in",
+        "z": "abd5c35bdd843943",
+        "g": "0253c122dc5804ca",
+        "name": "Get Light Temp. & Gain",
+        "links": [
+            "43624fbc439cecfc"
+        ],
+        "x": 155,
+        "y": 320,
+        "wires": [
+            [
+                "6678584d09f5e241",
+                "013c777372037438"
+            ]
+        ]
+    },
+    {
+        "id": "7b95f3bd764571d0",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "Solar Radiation [W/m²]",
+        "entityConfig": "217ccdaa89481c0a",
+        "version": 0,
+        "state": "payload.Rad1h",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "last_changed",
+                "value": "$fromMillis(payload.forecast_dt)",
+                "valueType": "jsonata"
+            },
+            {
+                "property": "weather_station",
+                "value": "#:(file)::weatherStation.id",
+                "valueType": "global"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1040,
+        "y": 1020,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "d35faa66ad2d3590",
+        "type": "inject",
+        "z": "abd5c35bdd843943",
+        "g": "a69ff155524e94c2",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 220,
+        "y": 740,
+        "wires": [
+            [
+                "3ae414ccb05efbaa"
+            ]
+        ]
+    },
+    {
+        "id": "63a29adcf61facd1",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Energy Meter changed",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "sensor.energy_main_meter_last_meter_consumption"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "current_meter",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 240,
+        "y": 160,
+        "wires": [
+            [
+                "84742e28874c8afb"
+            ]
+        ]
+    },
+    {
+        "id": "84742e28874c8afb",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "kWh at Start",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "input_number.energy_meter_value_at_start_of_contract",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "start_meter",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 430,
+        "y": 160,
+        "wires": [
+            [
+                "03eafb76f917bf4e"
+            ]
+        ]
+    },
+    {
+        "id": "7ee5dc9dc7cc353e",
+        "type": "function",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Calculation ",
+        "func": "const start = new Date(msg.start_date);   // ISO строка из input_datetime\nconst now = new Date();\n\nconst elapsedDays = (now.getTime() - start.getTime()) / 86400000;\nif (!isFinite(elapsedDays) || elapsedDays <= 0) return null;\n\nconst startMeter = Number(msg.start_meter);\nconst currentVal = Number(msg.current_meter);\n\nlet used;\nif (currentVal && startMeter) {\n  used = currentVal - startMeter;\n}\n\nif (!isFinite(used) || used < 0) return null;\n\nconst avg = used / elapsedDays;\n\nmsg.payload = Number(avg.toFixed(4));\n\nmsg.attributes = {\n  used_kwh: Number(used.toFixed(2)),\n  elapsed_days: Number(elapsedDays.toFixed(3)),\n  updated_at: now.toISOString(),\n  avg_year: Number(avg.toFixed(4)) * 365\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 750,
+        "y": 160,
+        "wires": [
+            [
+                "8795b0c30bface57"
+            ]
+        ]
+    },
+    {
+        "id": "31f6f906d5c9564a",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Energy Cost",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "input_number.energy_cost",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "cost",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 750,
+        "y": 120,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "03eafb76f917bf4e",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Start Date",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "input_datetime.energy_supply_start_date",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "start_date",
+                "propertyType": "msg",
+                "value": "string",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 580,
+        "y": 160,
+        "wires": [
+            [
+                "7ee5dc9dc7cc353e"
+            ]
+        ]
+    },
+    {
+        "id": "8795b0c30bface57",
+        "type": "ha-sensor",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Energy: Avg Consumption per Day",
+        "entityConfig": "2eb152d8f6ed36de",
+        "version": 0,
+        "state": "payload",
+        "stateType": "msg",
+        "attributes": [
+            {
+                "property": "used_kwh",
+                "value": "attributes.used_kwh",
+                "valueType": "msg"
+            },
+            {
+                "property": "elapsed_days",
+                "value": "attributes.elapsed_days",
+                "valueType": "msg"
+            },
+            {
+                "property": "avg_year",
+                "value": "attributes.avg_year",
+                "valueType": "msg"
+            }
+        ],
+        "inputOverride": "allow",
+        "outputProperties": [],
+        "x": 1000,
+        "y": 160,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "f388d41f9aa621d0",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "d26a02594ac89516",
+        "name": "Calculate Avg Day Energy Consumption ",
+        "info": "",
+        "x": 290,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "6678584d09f5e241",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "0253c122dc5804ca",
+        "name": "Outdoor Illuminance",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 1,
+        "halt_if": "",
+        "halt_if_type": "str",
+        "halt_if_compare": "is",
+        "entity_id": "sensor.esphome_illuminance_outdoor_illuminance_log_scale",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "outdoor",
+                "propertyType": "msg",
+                "value": "number",
+                "valueType": "entityState"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 460,
+        "y": 320,
+        "wires": [
+            [
+                "d3326509f70807a7"
+            ]
+        ]
+    },
+    {
+        "id": "615e13fa9452e4f4",
+        "type": "state-machine",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "",
+        "triggerProperty": "payload",
+        "triggerPropertyType": "msg",
+        "stateProperty": "fsm_state",
+        "statePropertyType": "msg",
+        "initialDelay": "0",
+        "persistOnReload": true,
+        "outputStateChangeOnly": false,
+        "throwException": false,
+        "states": [
+            "DOCKED_BLOCKED",
+            "DOCKED_CHARGING"
+        ],
+        "transitions": [
+            {
+                "name": "battery_high",
+                "from": "DOCKED_CHARGING",
+                "to": "DOCKED_BLOCKED"
+            },
+            {
+                "name": "battery_low",
+                "from": "DOCKED_BLOCKED",
+                "to": "DOCKED_CHARGING"
+            },
+            {
+                "name": "docked_need_charge",
+                "from": "DOCKED_BLOCKED",
+                "to": "DOCKED_CHARGING"
+            },
+            {
+                "name": "docked_no_charge",
+                "from": "DOCKED_CHARGING",
+                "to": "DOCKED_BLOCKED"
+            },
+            {
+                "name": "critical_low",
+                "from": "*",
+                "to": "DOCKED_CHARGING"
+            },
+            {
+                "name": "unavailable",
+                "from": "*",
+                "to": "DOCKED_BLOCKED"
+            }
+        ],
+        "x": 2040,
+        "y": 1420,
+        "wires": [
+            [
+                "1b150d7af9cd6f9b"
+            ]
+        ]
+    },
+    {
+        "id": "425cc4cda774add0",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Tablet Battery >= 80",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "sensor.kiosk_tablet_battery"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "80",
+        "ifStateType": "num",
+        "ifStateOperator": "gte",
+        "outputOnlyOnStateChange": true,
+        "for": "5",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "battery_high",
+                "valueType": "str"
+            }
+        ],
+        "x": 1730,
+        "y": 1340,
+        "wires": [
+            [
+                "615e13fa9452e4f4"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "e976f05b732b46dd",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Tablet Plugged In",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.kiosk_tablet_plugged_in"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "on",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "string",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1540,
+        "y": 1500,
+        "wires": [
+            [
+                "6fa7f7fe594d59a1"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "6fa7f7fe594d59a1",
+        "type": "api-current-state",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Battery <= 40",
+        "server": "4a046bd0.e80044",
+        "version": 3,
+        "outputs": 2,
+        "halt_if": "40",
+        "halt_if_type": "num",
+        "halt_if_compare": "lte",
+        "entity_id": "sensor.kiosk_tablet_battery",
+        "state_type": "str",
+        "blockInputOverrides": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "docked_need_charge",
+                "valueType": "str"
+            }
+        ],
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "override_topic": false,
+        "state_location": "payload",
+        "override_payload": "msg",
+        "entity_location": "data",
+        "override_data": "msg",
+        "x": 1740,
+        "y": 1500,
+        "wires": [
+            [
+                "615e13fa9452e4f4"
+            ],
+            [
+                "7794bd137201a78c"
+            ]
+        ]
+    },
+    {
+        "id": "7794bd137201a78c",
+        "type": "change",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "docked_no_charge",
+        "rules": [
+            {
+                "t": "set",
+                "p": "payload",
+                "pt": "msg",
+                "to": "docked_no_charge",
+                "tot": "str"
+            }
+        ],
+        "action": "",
+        "property": "",
+        "from": "",
+        "to": "",
+        "reg": false,
+        "x": 1950,
+        "y": 1500,
+        "wires": [
+            [
+                "615e13fa9452e4f4"
+            ]
+        ]
+    },
+    {
+        "id": "1714b23acc8b8529",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Tablet Battery <= 40",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "sensor.kiosk_tablet_battery"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "40",
+        "ifStateType": "num",
+        "ifStateOperator": "lte",
+        "outputOnlyOnStateChange": true,
+        "for": "5",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "battery_low",
+                "valueType": "str"
+            }
+        ],
+        "x": 1730,
+        "y": 1380,
+        "wires": [
+            [
+                "615e13fa9452e4f4"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "1b150d7af9cd6f9b",
+        "type": "switch",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "DOCKED_CHARGING?",
+        "property": "fsm_state",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "DOCKED_CHARGING",
+                "vt": "str"
+            },
+            {
+                "t": "else"
+            }
+        ],
+        "checkall": "true",
+        "repair": false,
+        "outputs": 2,
+        "x": 2270,
+        "y": 1420,
+        "wires": [
+            [
+                "5d72c1e79715e7e2"
+            ],
+            [
+                "c0502b23a2b6f710"
+            ]
+        ]
+    },
+    {
+        "id": "5d72c1e79715e7e2",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Charger ON",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "switch.turn_on",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "switch.socket_kiosk_tablet_charger"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "switch",
+        "service": "turn_on",
+        "x": 2490,
+        "y": 1400,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "c0502b23a2b6f710",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Charger OFF",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "switch.turn_off",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "switch.socket_kiosk_tablet_charger"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "switch",
+        "service": "turn_off",
+        "x": 2490,
+        "y": 1460,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "8237b3523e572d31",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Tablet Battery <= 20",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 2,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "sensor.kiosk_tablet_battery"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "20",
+        "ifStateType": "num",
+        "ifStateOperator": "lte",
+        "outputOnlyOnStateChange": true,
+        "for": "",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "critical_low",
+                "valueType": "str"
+            }
+        ],
+        "x": 1730,
+        "y": 1420,
+        "wires": [
+            [
+                "615e13fa9452e4f4"
+            ],
+            []
+        ]
+    },
+    {
+        "id": "57d0a30981f3739c",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "b374d6e68c14a5a2",
+        "name": "Kiosk Tablet Auto Charge ",
+        "info": "",
+        "x": 1510,
+        "y": 1340,
+        "wires": []
+    },
+    {
+        "id": "d3326509f70807a7",
+        "type": "smooth",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "0253c122dc5804ca",
+        "name": "",
+        "property": "outdoor",
+        "action": "mean",
+        "count": "5",
+        "round": "1",
+        "mult": "single",
+        "reduce": false,
+        "x": 640,
+        "y": 320,
+        "wires": [
+            [
+                "eb614b74080ab458"
+            ]
+        ]
+    },
+    {
+        "id": "c324382b583b514d",
+        "type": "inject",
+        "z": "abd5c35bdd843943",
+        "g": "0253c122dc5804ca",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 220,
+        "y": 360,
+        "wires": [
+            [
+                "6678584d09f5e241",
+                "013c777372037438"
+            ]
+        ]
+    },
+    {
+        "id": "dda3a789a3b7c319",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Sleep Detection FSM  (bed + light + radar + time, manual override 8h)",
+        "info": "Машина состояний определения сна.\n\nВходы (каждый ставит msg.topic):\n  bed   - датчик кровати\n  light - свет в спальне\n  radar - радар присутствия\n  switch- ручное изменение switch.switch_sleep_mode\n  tick  - таймер раз в минуту (нужен для таймаутов)\n\nЛогика входа: кровать занята И свет выкл И ночь(21-04), держится 5 мин.\nЛогика выхода: свет вкл -> сразу; ИЛИ кровать пуста >10мин (радар продлевает); ИЛИ утро после 10:00.\nРучное нажатие switch -> override на 8ч, автоматика не вмешивается.",
+        "x": 1640,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "1722fe517794a321",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Bed",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.pressure_bed_group_binary"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "bed",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "string",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1490,
+        "y": 580,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "17613cc77c818de3",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Bedroom Light",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.wall_switch_bedroom"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "light",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1510,
+        "y": 620,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "42829089bb423928",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Radar Occupancy",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.esphome_radar_bedroom_occupancy_ld241x"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "radar",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1510,
+        "y": 660,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "e196d27cd56c326d",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Sleep Switch (manual detect)",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.switch_sleep_mode"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "switch",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "string",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1540,
+        "y": 700,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "fe603f0c10afc84d",
+        "type": "inject",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "tick 60s",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "60",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "10",
+        "topic": "tick",
+        "payload": "",
+        "payloadType": "date",
+        "x": 1600,
+        "y": 780,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "c4986aa4744f0247",
+        "type": "function",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Sleep FSM",
+        "func": "// ===== КОНФИГ =====\nconst ENTRY_HOLD_MIN = 5;        // условия входа (сон) держатся N мин\nconst BED_EMPTY_MIN = 10;        // пустая кровать N мин до выхода (защита от туалета)\nconst AWAY_HOLD_MIN = 5;         // никого дома N мин -> away\nconst OVERRIDE_HOURS = 8;        // длительность ручного override\nconst NIGHT_START = 21;          // окно входа (сон): с 21:00\nconst NIGHT_END = 4;             // окно входа (сон): до 04:00\nconst MORNING_EXIT = 10;         // утренний выход после 10:00\n\n// entity_id\nconst E_BED = 'binary_sensor.pressure_bed_group_binary';\nconst E_LIGHT = 'switch.wall_switch_bedroom';\nconst E_RADAR = 'binary_sensor.esphome_radar_bedroom_occupancy_ld241x';\nconst E_SWITCH = 'switch.switch_sleep_mode';\nconst E_HOME = 'binary_sensor.presence_anyone_home';\n\n// ===== ЧТЕНИЕ СОСТОЯНИЙ HA =====\nconst ha = global.get('homeassistant');\nif (!ha || !ha.homeAssistant || !ha.homeAssistant.states) {\n    node.error('homeassistant global недоступен');\n    return null;\n}\nconst states = ha.homeAssistant.states;\nconst st = (id) => (states[id] ? states[id].state : 'unavailable');\n\nconst bedOn    = st(E_BED) === 'on';\nconst lightOn  = st(E_LIGHT) === 'on';\nconst radarOn  = st(E_RADAR) === 'on';\nconst switchOn = st(E_SWITCH) === 'on';\nconst homeRaw  = st(E_HOME);\nconst homeOn   = homeRaw === 'on';\nconst homeKnown = homeRaw === 'on' || homeRaw === 'off'; // не доверяем unavailable/unknown\n\n// ===== ПРОВЕРКА AUTOMATION MASTER =====\nconst automationsEnable = global.get('automationsEnable', 'file');\nif (automationsEnable === false) {\n    return null; // автоматика выключена — ничего не трогаем\n}\n\nconst now = Date.now();\nconst hour = new Date().getHours();\n\n// ===== CONTEXT =====\nlet s = flow.get('sleepFSM') || {\n    state: 'AWAKE',\n    reason: null,          // 'sleep' | 'away' — почему вошли в ASLEEP\n    entryStart: null,      // таймер условий входа (сон)\n    bedEmptyStart: null,   // таймер пустой кровати\n    awayStart: null,       // таймер отсутствия дома\n    overrideUntil: 0,      // дедлайн ручного override\n    lastAutoWrite: null,   // последнее значение, записанное автоматикой\n};\n\nconst topic = msg.topic || 'tick';\n\n// ===== ДЕТЕКТ РУЧНОГО НАЖАТИЯ =====\nif (topic === 'switch') {\n    const wrote = s.lastAutoWrite;\n    if (wrote === null || (switchOn ? 'on' : 'off') !== wrote) {\n        s.overrideUntil = now + OVERRIDE_HOURS * 3600 * 1000;\n        node.warn('Ручной override на ' + OVERRIDE_HOURS + 'ч');\n    }\n    s.state = switchOn ? 'ASLEEP' : 'AWAKE';\n    s.reason = switchOn ? 'manual' : null;\n    s.lastAutoWrite = null;\n    flow.set('sleepFSM', s);\n    return null;\n}\n\nconst overrideActive = now < s.overrideUntil;\nconst inNightWindow = (hour >= NIGHT_START) || (hour < NIGHT_END);\n\n// ===== ЛОГИКА ПЕРЕХОДОВ =====\nlet desired = null;       // null = не менять, true = ASLEEP, false = AWAKE\nlet newReason = s.reason;\n\nif (!overrideActive) {\n    if (s.state === 'AWAKE') {\n        // --- ВХОД 1: ОТСУТСТВИЕ ДОМА (приоритетнее, проверяем первым) ---\n        if (homeKnown && !homeOn) {\n            if (s.awayStart === null) s.awayStart = now;\n            const away = (now - s.awayStart) / 60000;\n            if (away >= AWAY_HOLD_MIN) {\n                desired = true;\n                newReason = 'away';\n            }\n        } else {\n            s.awayStart = null;\n        }\n\n        // --- ВХОД 2: СОН (только если не ушли по away) ---\n        if (desired === null) {\n            const entryCond = bedOn && !lightOn && inNightWindow && homeOn;\n            if (entryCond) {\n                if (s.entryStart === null) s.entryStart = now;\n                const held = (now - s.entryStart) / 60000;\n                if (held >= ENTRY_HOLD_MIN) {\n                    desired = true;\n                    newReason = 'sleep';\n                }\n            } else {\n                s.entryStart = null;\n            }\n        }\n    } else if (s.state === 'ASLEEP') {\n        if (s.reason === 'away') {\n            // --- ВЫХОД ИЗ AWAY: кто-то вернулся домой ---\n            if (homeOn) {\n                desired = false;\n            }\n        } else {\n            // --- ВЫХОД ИЗ СНА (reason 'sleep' или 'manual') ---\n            // 1) свет включили — мгновенно\n            if (lightOn) {\n                desired = false;\n            }\n            // 2) пустая кровать дольше N мин (радар продлевает)\n            else if (!bedOn) {\n                if (radarOn) {\n                    s.bedEmptyStart = null;\n                } else {\n                    if (s.bedEmptyStart === null) s.bedEmptyStart = now;\n                    const empty = (now - s.bedEmptyStart) / 60000;\n                    if (empty >= BED_EMPTY_MIN) desired = false;\n                }\n            }\n            // 3) кровать снова занята — сброс\n            else {\n                s.bedEmptyStart = null;\n            }\n            // 4) утренний выход\n            if (hour >= MORNING_EXIT && !bedOn) desired = false;\n\n            // 5) если все ушли из дома во сне — переклеить причину на away,\n            //    чтобы выход произошёл по возвращению, а не по свету/кровати\n            if (homeKnown && !homeOn) {\n                newReason = 'away';\n                desired = null; // остаёмся в ASLEEP\n            }\n        }\n    }\n}\n\n// ===== ПРИМЕНЕНИЕ РЕШЕНИЯ =====\nlet out = null;\nif (desired === true && s.state !== 'ASLEEP') {\n    s.state = 'ASLEEP';\n    s.reason = newReason;\n    s.entryStart = null;\n    s.bedEmptyStart = null;\n    s.awayStart = null;\n    if (!switchOn) {\n        s.lastAutoWrite = 'on';\n        out = { payload: true };\n    }\n} else if (desired === false && s.state !== 'AWAKE') {\n    s.state = 'AWAKE';\n    s.reason = null;\n    s.entryStart = null;\n    s.bedEmptyStart = null;\n    s.awayStart = null;\n    if (switchOn) {\n        s.lastAutoWrite = 'off';\n        out = { payload: false };\n    }\n} else {\n    // решения нет, но причина могла смениться (sleep -> away во сне)\n    s.reason = newReason;\n}\n\nflow.set('sleepFSM', s);\n\nnode.status({\n    fill: s.state === 'ASLEEP' ? 'blue' : 'green',\n    shape: 'dot',\n    text: `${s.state}${s.reason ? '/' + s.reason : ''}${overrideActive ? ' (override)' : ''} home:${homeOn?1:0} bed:${bedOn?1:0}`\n});\n\nreturn out;",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1820,
+        "y": 660,
+        "wires": [
+            [
+                "c8e50a9655ee9b3c",
+                "11dfceab69cd902f"
+            ]
+        ]
+    },
+    {
+        "id": "c8e50a9655ee9b3c",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Write Sleep Switch",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "switch.switch_sleep_mode"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "switch",
+        "service": "{{#payload}}turn_on{{/payload}}{{^payload}}turn_off{{/payload}}",
+        "x": 2080,
+        "y": 640,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "11dfceab69cd902f",
+        "type": "debug",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "debug fsm",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 2070,
+        "y": 700,
+        "wires": []
+    },
+    {
+        "id": "8d012ae3f0cd305b",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "d": true,
+        "g": "a021f2f37ee31775",
+        "name": "Anyone Home",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.presence_anyone_home"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": false,
+        "ignoreCurrentStateUnavailable": false,
+        "outputProperties": [
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "home",
+                "valueType": "str"
+            },
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "string",
+                "valueType": "entityState"
+            }
+        ],
+        "x": 1590,
+        "y": 740,
+        "wires": [
+            [
+                "c4986aa4744f0247"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2comment00001",
+        "type": "comment",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Sleep Mode FSM v2 (скоринг вместо окна времени)",
+        "info": "Вся логика в узле 'Sleep FSM'.\nТребуется включить 'Enable global context store' в конфиге сервера HA.\nКонстанты настройки — в шапке кода функции.\nИстория переходов: flow context (file) -> sleepFSM.log",
+        "x": 1600,
+        "y": 880,
+        "wires": []
+    },
+    {
+        "id": "fsm2tick00000001",
+        "type": "inject",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "тик 60с + старт",
+        "props": [
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "60",
+        "crontab": "",
+        "once": true,
+        "onceDelay": "10",
+        "topic": "tick",
+        "x": 1540,
+        "y": 940,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2evbed0000001",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Кровать (мат)",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.pressure_bed_group_binary"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": true,
+        "ignoreCurrentStateUnavailable": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1540,
+        "y": 1000,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2evlight00001",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Свет в спальне",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.wall_switch_bedroom"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": true,
+        "ignoreCurrentStateUnavailable": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1540,
+        "y": 1060,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2evswitch0001",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Свитч Sleep Mode (ручное)",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "switch.switch_sleep_mode"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": true,
+        "ignoreCurrentStateUnavailable": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1580,
+        "y": 1120,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2evhome000001",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Кто-то дома",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.presence_anyone_home"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": true,
+        "ignoreCurrentStateUnavailable": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1550,
+        "y": 1180,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2evactivity01",
+        "type": "server-state-changed",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Активность вне спальни",
+        "server": "4a046bd0.e80044",
+        "version": 6,
+        "outputs": 1,
+        "exposeAsEntityConfig": "",
+        "entities": {
+            "entity": [
+                "binary_sensor.esphome_radar_kitchen_occupancy",
+                "binary_sensor.esphome_radar_bathroom_occupancy",
+                "binary_sensor.esphome_radar_livingroom_occupancy",
+                "binary_sensor.presence_hall"
+            ],
+            "substring": [],
+            "regex": []
+        },
+        "outputInitially": false,
+        "stateType": "str",
+        "ifState": "",
+        "ifStateType": "str",
+        "ifStateOperator": "is",
+        "outputOnlyOnStateChange": true,
+        "for": "0",
+        "forType": "num",
+        "forUnits": "minutes",
+        "ignorePrevStateNull": false,
+        "ignorePrevStateUnknown": false,
+        "ignorePrevStateUnavailable": false,
+        "ignoreCurrentStateUnknown": true,
+        "ignoreCurrentStateUnavailable": true,
+        "outputProperties": [
+            {
+                "property": "payload",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "entityState"
+            },
+            {
+                "property": "topic",
+                "propertyType": "msg",
+                "value": "",
+                "valueType": "triggerId"
+            }
+        ],
+        "x": 1570,
+        "y": 1240,
+        "wires": [
+            [
+                "fsm2function0001"
+            ]
+        ]
+    },
+    {
+        "id": "fsm2function0001",
+        "type": "function",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Sleep FSM",
+        "func": "// ================= Sleep Mode FSM v2 =================\n// Вся логика определения сна — в этом узле.\n// Состояние хранится в flow context (file) и переживает рестарты NR/HA.\n// Требуется: в настройках сервера HA включить \"Enable global context store\".\n\nconst CFG = {\n    BED:           'binary_sensor.pressure_bed_group_binary',\n    BEDROOM_LIGHT: 'switch.wall_switch_bedroom',\n    BEDROOM_RADAR: 'binary_sensor.esphome_radar_bedroom_occupancy_ld241x',\n    ANYONE_HOME:   'binary_sensor.presence_anyone_home',\n    SLEEP_SWITCH:  'switch.switch_sleep_mode',\n    ILLUM:         'binary_sensor.illuminance_all_light',\n    SUN:           'sun.sun',\n    ACTIVITY: [                                   // активность вне спальни\n        'binary_sensor.esphome_radar_kitchen_occupancy',\n        'binary_sensor.esphome_radar_bathroom_occupancy',\n        'binary_sensor.esphome_radar_livingroom_occupancy',\n        'binary_sensor.presence_hall'\n    ],\n\n    // скоринг (0..3) -> требуемое непрерывное удержание условий, мин\n    HOLD_BY_SCORE: { 3: 5, 2: 20, 1: 45, 0: 90 },\n\n    QUIET_MIN: 15,            // \"тишина\": нет активности вне спальни дольше N мин\n    DARK_LUX: 20,             // порог темноты в доме, lx\n    LUX_ATTRS: ['median', 'illuminance', 'median_lux', 'lux', 'light_level'],\n\n    BED_GAP_S: 60,            // провалы мата короче N сек игнорируем (перевернулся)\n    BED_EMPTY_EXIT_MIN: 10,   // выход: кровать непрерывно пуста N мин\n    RADAR_EXTEND_CAP_MIN: 30, // радар спальни может продлить выход максимум до N мин\n    MORNING_EMPTY_MIN: 3,     // утренний выход: кровать пуста N мин...\n    MORNING_ACT_MIN: 5,       // ...и активность вне спальни за последние N мин, и солнце взошло\n    MAX_SLEEP_H: 14,          // санитарный предел длительности режима\n    OVERRIDE_H: 8,            // окно ручного override\n    AWAY_MIN: 5,              // все ушли: presence off N мин -> режим on\n    ECHO_MS: 15000            // окно распознавания \"эха\" собственной записи в свитч\n};\n\nconst now = Date.now();\nconst MIN = 60000;\n\n// ---------- доступ к состояниям HA ----------\nconst ha = global.get('homeassistant');\nconst states = ha && ha.homeAssistant && ha.homeAssistant.states;\nif (!states) {\n    node.error('Нет global.homeassistant. Включите \"Enable global context store\" в конфиге сервера HA.');\n    return null;\n}\nconst ent   = id => states[id] || null;\nconst st    = id => { const e = ent(id); return e ? e.state : null; };\nconst avail = id => { const s = st(id); return s !== null && s !== 'unavailable' && s !== 'unknown'; };\nconst isOn  = id => st(id) === 'on';\n\n// ---------- загрузка/инициализация состояния FSM ----------\nlet S = flow.get('sleepFSM', 'file');\nif (!S || typeof S !== 'object' || !S.init) {\n    // холодный старт: принимаем текущее положение свитча как истину\n    S = {\n        init: true,\n        state: isOn(CFG.SLEEP_SWITCH) ? 'ASLEEP' : 'AWAKE',\n        reason: 'init',\n        sleepMode: isOn(CFG.SLEEP_SWITCH),\n        candidateSince: null,\n        asleepSince: isOn(CFG.SLEEP_SWITCH) ? now : null,\n        bedOffSince: null,\n        bedOccupied: isOn(CFG.BED),\n        bedEmptySince: null,\n        lastActivityTs: now,\n        awaySince: null,\n        overrideUntil: null,\n        lastAutoWrite: null,\n        log: []\n    };\n}\n\nconst automationsEnable = global.get('automationsEnable', 'file');\nconst autoOk = (automationsEnable !== false); // undefined трактуем как \"разрешено\"\n\nconst topic = msg.topic || 'tick';\n\n// ---------- активность вне спальни ----------\nif (CFG.ACTIVITY.indexOf(topic) !== -1 && msg.payload === 'on') {\n    S.lastActivityTs = now;\n}\n\n// ---------- занятость кровати с дебаунсом ----------\nif (avail(CFG.BED)) {\n    if (st(CFG.BED) === 'on') {\n        S.bedOffSince = null;\n        S.bedOccupied = true;\n    } else {\n        if (S.bedOffSince === null) S.bedOffSince = now;\n        S.bedOccupied = (now - S.bedOffSince) < CFG.BED_GAP_S * 1000;\n    }\n}\n// если мат unavailable — bedOccupied замораживается на последнем значении\n\nconst bedOccupied    = S.bedOccupied;\nconst bedroomLightOn = isOn(CFG.BEDROOM_LIGHT);\nconst anyoneHome     = isOn(CFG.ANYONE_HOME);\n\n// ---------- ручное переключение (manual override) ----------\nlet manualEvent = false;\nif (topic === CFG.SLEEP_SWITCH) {\n    const v = (msg.payload === 'on');\n    const echo = S.lastAutoWrite &&\n                 S.lastAutoWrite.value === v &&\n                 (now - S.lastAutoWrite.ts) < CFG.ECHO_MS;\n    if (!echo && v !== S.sleepMode) {\n        manualEvent = true;\n        S.overrideUntil = now + CFG.OVERRIDE_H * 3600000;\n        S.state = v ? 'ASLEEP' : 'AWAKE';\n        S.reason = 'manual';\n        S.asleepSince = v ? now : null;\n        S.candidateSince = null;\n        S.bedEmptySince = null;\n        S.awaySince = null;\n    }\n}\nif (S.overrideUntil && now > S.overrideUntil) S.overrideUntil = null;\nconst override = !!S.overrideUntil;\n\n// ---------- скоринг \"похоже на ночь\" ----------\nfunction isDarkHouse() {\n    const e = ent(CFG.ILLUM);\n    if (!e) return false;\n    // пробуем найти числовой атрибут с люксами\n    if (e.attributes) {\n        for (const a of CFG.LUX_ATTRS) {\n            const v = parseFloat(e.attributes[a]);\n            if (!isNaN(v)) return v < CFG.DARK_LUX;\n        }\n    }\n    // ВНИМАНИЕ: проверьте семантику бинарного состояния датчика!\n    // Здесь предполагается: on = светло, off = темно.\n    return e.state === 'off';\n}\n\nconst sunBelow  = st(CFG.SUN) === 'below_horizon';\nconst darkHouse = isDarkHouse();\nconst quiet     = (now - S.lastActivityTs) > CFG.QUIET_MIN * MIN;\nconst score     = (sunBelow ? 1 : 0) + (darkHouse ? 1 : 0) + (quiet ? 1 : 0);\nconst holdMin   = CFG.HOLD_BY_SCORE[score];\n\n// ---------- переходы ----------\nlet changedTo = null; // true/false если состояние сменилось автоматикой\nlet cause = null;\n\nif (!manualEvent && autoOk) {\n\n    if (S.state === 'AWAKE') {\n\n        if (!override) {\n            // --- кандидат на сон: жёсткие условия ---\n            const hardOk = bedOccupied && !bedroomLightOn && anyoneHome;\n            if (hardOk) {\n                if (S.candidateSince === null) S.candidateSince = now;\n                // требуемое удержание пересчитывается каждый тик по текущему скорингу;\n                // накопленное время зачитывается\n                if ((now - S.candidateSince) >= holdMin * MIN) {\n                    S.state = 'ASLEEP'; S.reason = 'sleep';\n                    S.asleepSince = now;\n                    S.candidateSince = null;\n                    changedTo = true;\n                    cause = 'sleep (score=' + score + ', hold=' + holdMin + 'm)';\n                }\n            } else {\n                S.candidateSince = null;\n            }\n\n            // --- все ушли из дома ---\n            if (!anyoneHome) {\n                if (S.awaySince === null) S.awaySince = now;\n                if (S.state === 'AWAKE' && (now - S.awaySince) >= CFG.AWAY_MIN * MIN) {\n                    S.state = 'ASLEEP'; S.reason = 'away';\n                    S.asleepSince = now;\n                    changedTo = true;\n                    cause = 'away';\n                }\n            } else {\n                S.awaySince = null;\n            }\n        }\n\n    } else if (S.state === 'ASLEEP') {\n\n        // таймер пустой кровати\n        if (!bedOccupied) {\n            if (S.bedEmptySince === null) S.bedEmptySince = now;\n        } else {\n            S.bedEmptySince = null;\n        }\n        const emptyMin = S.bedEmptySince ? (now - S.bedEmptySince) / MIN : 0;\n        const radarSeesPerson = avail(CFG.BEDROOM_RADAR) && isOn(CFG.BEDROOM_RADAR);\n        const recentActivity = (now - S.lastActivityTs) < CFG.MORNING_ACT_MIN * MIN;\n\n        let exit = null;\n\n        if (S.reason === 'away') {\n            // режим включён по уходу: возврат кого-то домой -> мгновенный выход\n            if (anyoneHome) exit = 'presence returned';\n        } else if (!override) {\n            if (bedroomLightOn) {\n                exit = 'bedroom light on';\n            } else if (emptyMin >= CFG.BED_EMPTY_EXIT_MIN &&\n                       (!radarSeesPerson || emptyMin >= CFG.RADAR_EXTEND_CAP_MIN)) {\n                // радар лишь продлевает выход, и то с потолком (защита от залипания)\n                exit = 'bed empty ' + Math.round(emptyMin) + 'm';\n            } else if (!sunBelow && emptyMin >= CFG.MORNING_EMPTY_MIN && recentActivity) {\n                // утро: встал без света и ушёл по дому\n                exit = 'morning activity';\n            }\n        }\n\n        // санитарный предел — действует даже в override\n        if (!exit && S.asleepSince && (now - S.asleepSince) > CFG.MAX_SLEEP_H * 3600000) {\n            exit = 'max duration ' + CFG.MAX_SLEEP_H + 'h';\n        }\n\n        if (exit) {\n            S.state = 'AWAKE'; S.reason = 'auto';\n            S.asleepSince = null;\n            S.bedEmptySince = null;\n            S.candidateSince = null;\n            changedTo = false;\n            cause = exit;\n        }\n    }\n}\n\n// ---------- вывод ----------\n// out1: включить свитч, out2: выключить свитч, out3: уведомление downstream (payload bool)\nconst outputs = [null, null, null];\nconst newMode = (S.state === 'ASLEEP');\n\nif (manualEvent) {\n    // свитч уже в нужном положении (переключён человеком) — только уведомляем\n    S.sleepMode = newMode;\n    global.set('sleepMode', newMode, 'file');\n    S.log.unshift(new Date(now).toISOString() + ' MANUAL -> ' + S.state + ' (override ' + CFG.OVERRIDE_H + 'h)');\n    outputs[2] = { payload: newMode, topic: 'sleepMode', reason: 'manual' };\n} else if (changedTo !== null) {\n    S.sleepMode = newMode;\n    global.set('sleepMode', newMode, 'file');\n    S.lastAutoWrite = { value: newMode, ts: now };\n    S.log.unshift(new Date(now).toISOString() + ' AUTO -> ' + S.state + ' (' + cause + ')');\n    if (newMode) outputs[0] = { payload: 'on' };\n    else         outputs[1] = { payload: 'off' };\n    outputs[2] = { payload: newMode, topic: 'sleepMode', reason: cause };\n}\nif (S.log.length > 30) S.log.length = 30;\n\nflow.set('sleepFSM', S, 'file');\n\n// статус узла для наглядной отладки\nconst held = S.candidateSince ? Math.round((now - S.candidateSince) / MIN) : null;\nnode.status({\n    fill: newMode ? 'blue' : 'green',\n    shape: override ? 'ring' : 'dot',\n    text: S.state\n        + (held !== null ? ' | кандидат ' + held + '/' + holdMin + 'м' : '')\n        + ' | score ' + score\n        + (override ? ' | OVERRIDE' : '')\n});\n\nreturn outputs;\n",
+        "outputs": 3,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 1940,
+        "y": 1080,
+        "wires": [
+            [
+                "fsm2svcon0000001"
+            ],
+            [
+                "fsm2svcoff000001"
+            ],
+            [
+                "fsm2linkout00001",
+                "fsm2debug0000001"
+            ]
+        ],
+        "outputLabels": [
+            "switch ON",
+            "switch OFF",
+            "sleepMode changed (bool)"
+        ]
+    },
+    {
+        "id": "fsm2svcon0000001",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Sleep Switch ON",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "switch.turn_on",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "switch.switch_sleep_mode"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "switch",
+        "service": "turn_on",
+        "x": 2220,
+        "y": 1020,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fsm2svcoff000001",
+        "type": "api-call-service",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Sleep Switch OFF",
+        "server": "4a046bd0.e80044",
+        "version": 7,
+        "debugenabled": false,
+        "action": "switch.turn_off",
+        "floorId": [],
+        "areaId": [],
+        "deviceId": [],
+        "entityId": [
+            "switch.switch_sleep_mode"
+        ],
+        "labelId": [],
+        "data": "",
+        "dataType": "jsonata",
+        "mergeContext": "",
+        "mustacheAltTags": false,
+        "outputProperties": [],
+        "queue": "none",
+        "blockInputOverrides": true,
+        "domain": "switch",
+        "service": "turn_off",
+        "x": 2220,
+        "y": 1080,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "fsm2linkout00001",
+        "type": "link out",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "Sleep Mode Changed (FSM v2)",
+        "mode": "link",
+        "links": [
+            "367d11381312b16e",
+            "b88787cf96a8010a",
+            "1ce007c7bd3f7b19",
+            "434ab03c18bf28a7",
+            "035fed875e2d18dc",
+            "d3810365f551488c",
+            "4d47a19d6faa82da",
+            "650363c6cb5d38d0",
+            "8f35610f6340c597"
+        ],
+        "x": 2270,
+        "y": 1160,
+        "wires": [],
+        "l": true
+    },
+    {
+        "id": "fsm2debug0000001",
+        "type": "debug",
+        "z": "abd5c35bdd843943",
+        "g": "fsm2group0000001",
+        "name": "FSM переходы",
+        "active": false,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 2260,
+        "y": 1220,
+        "wires": []
+    },
+    {
+        "id": "013c777372037438",
+        "type": "subflow:8238836adf9134c5",
+        "z": "abd5c35bdd843943",
+        "g": "0253c122dc5804ca",
+        "name": "Circadian v2",
+        "env": [
+            {
+                "name": "EVENING_HOURS_GAIN",
+                "value": "6",
+                "type": "num"
+            },
+            {
+                "name": "EVENING_HOURS_TEMP",
+                "value": "5",
+                "type": "num"
+            }
+        ],
+        "x": 430,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "b4177df491fd0ec4",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "",
+        "name": "Sensor: Light Gain",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Sensor: Light Gain"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:brightness-percent"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "%"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": true,
+        "debugEnabled": false
+    },
+    {
+        "id": "39d6dc8ea6db1071",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "",
+        "name": "Sensor: Light Temperature",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Sensor: Light Temperature"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:brightness-6"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "K"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": true,
+        "debugEnabled": false
+    },
+    {
+        "id": "e14db2319cf182c5",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Pressure",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Pressure"
+            },
+            {
+                "property": "icon",
+                "value": ""
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "atmospheric_pressure"
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "hPa"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "415c30806e5146c2",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Wind Speed",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Wind Speed"
+            },
+            {
+                "property": "icon",
+                "value": ""
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "wind_speed"
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "m/s"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "0041f776af1a24d5",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Cloudiness",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Cloudiness"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:cloud"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "%"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "56e7b30714f96d0f",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "e415ebef201d04f4",
+        "name": "Switch: Sleep Mode",
+        "version": 6,
+        "entityType": "switch",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Switch: Sleep Mode"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:sleep"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "switch"
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "5d65cc093dd3a57b",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "e415ebef201d04f4",
+        "name": "Switch: Automation Master",
+        "version": 6,
+        "entityType": "switch",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Switch: Automation Master"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:home-automation"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "switch"
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "341d904d30cd1470",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Wind Direction",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Wind Direction"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:angle-acute"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "°"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "b34ca27499df4227",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Rain Probability",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Rain Probability"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:weather-rainy"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "%"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "05c5fe8855acc50f",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Total Precipitation",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Total Precipitation"
+            },
+            {
+                "property": "icon",
+                "value": ""
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "precipitation"
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "mm"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "6fcc39f7bdd4efff",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Dew Point",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Dew Point"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:thermometer-water"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "temperature"
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "°C"
+            },
+            {
+                "property": "state_class",
+                "value": "measurement"
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "5908bb345830dac0",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Sun Heat Index",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Sun Heat Index"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:sun-thermometer"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "%"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "217ccdaa89481c0a",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "d8dacfca60fe4072",
+        "name": "Weather: Solar Radiation",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Weather: Solar Radiation"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:sun-wireless"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": ""
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "W/m²"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "2eb152d8f6ed36de",
+        "type": "ha-entity-config",
+        "server": "4a046bd0.e80044",
+        "deviceConfig": "b2b96f5b3a607757",
+        "name": "Energy: Avg Consumption per Day",
+        "version": 6,
+        "entityType": "sensor",
+        "haConfig": [
+            {
+                "property": "name",
+                "value": "Energy: Avg Consumption per Day"
+            },
+            {
+                "property": "icon",
+                "value": "mdi:home-lightning-bolt-outline"
+            },
+            {
+                "property": "entity_picture",
+                "value": ""
+            },
+            {
+                "property": "entity_category",
+                "value": ""
+            },
+            {
+                "property": "device_class",
+                "value": "energy"
+            },
+            {
+                "property": "unit_of_measurement",
+                "value": "kWh"
+            },
+            {
+                "property": "state_class",
+                "value": ""
+            }
+        ],
+        "resend": false,
+        "debugEnabled": false
+    },
+    {
+        "id": "d8dacfca60fe4072",
+        "type": "ha-device-config",
+        "name": "Weather",
+        "hwVersion": "",
+        "manufacturer": "Node-RED",
+        "model": "",
+        "swVersion": ""
+    },
+    {
+        "id": "e415ebef201d04f4",
+        "type": "ha-device-config",
+        "name": "System",
+        "hwVersion": "",
+        "manufacturer": "Node-RED",
+        "model": "",
+        "swVersion": ""
+    },
+    {
+        "id": "b2b96f5b3a607757",
+        "type": "ha-device-config",
+        "name": "Energy",
+        "hwVersion": "",
+        "manufacturer": "Node-RED",
+        "model": "",
+        "swVersion": ""
+    },
+    {
+        "id": "0df5a53d75f06ff4",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-home-assistant-websocket": "0.82.0",
+            "node-red-node-smooth": "0.1.2",
+            "node-red-contrib-sun-position": "3.0.0-alpha2",
+            "node-red-contrib-spline-curve": "1.1.8",
+            "node-red-contrib-dwd-local-weather": "1.0.5",
+            "node-red-contrib-persistent-fsm": "1.2.1"
+        }
+    }
+]
