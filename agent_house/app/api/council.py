@@ -1,5 +1,6 @@
-"""M5 API: the agent council (house mode, shared board, ownership) and the history findings the
-daily review turns into proposals. Contract: contracts/openapi.yaml (tag `council`)."""
+"""M5 API: the council (house mode, ownership, the orchestrator's wakes), the history findings the
+daily review turns into proposals, the house manager, the accuracy metrics and the learner.
+Contract: contracts/openapi.yaml (tag `council`)."""
 
 from __future__ import annotations
 
@@ -122,7 +123,7 @@ async def get_manager(request: Request):
 @router.post("/manager/wake")
 async def wake_manager(request: Request):
     """Wake the house manager now (owner or tester). Works with manager_enabled off too, but then
-    it may only assign tasks, propose and report: the entities it owns join its scope only when on."""
+    it may only look, propose and report: the entities it owns join its scope only when on."""
     ctx = request.app.state.ctx
     try:
         body = await request.json()
@@ -137,8 +138,8 @@ async def wake_manager(request: Request):
     result["note"] = (
         "The manager is on: this run may also switch the entities it owns (in its mode)."
         if ctx.manager.enabled
-        else "The manager is off: this one run may look, give room agents tasks, propose drafts and "
-        "report to you, but switches nothing. It counts toward the hourly wake limit."
+        else "The manager is off: this one run may look, propose drafts and report to you, but switches "
+        "nothing. It counts toward the hourly wake limit."
     )
     return JSONResponse(result, status_code=202)
 

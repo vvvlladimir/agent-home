@@ -133,9 +133,9 @@ def test_status_reports_connection_and_matches_contract(ingress, ha_state):
     assert data["ha"]["areas"] == 4
     assert data["mode"] == "shadow", "shadow mode is the default"
     assert data["kill_switch"]["engaged"] is False
-    wait_for(lambda: status(ingress.base)["llm"]["state"] == "ok")
-    wait_for(lambda: status(ingress.base)["jetson"]["reachable"])
-    assert status(ingress.base)["jetson"]["metrics"]["power_mode"] == "MAXN_SUPER"
+    assert data["learner"] == {"configured": False, "connected": False, "mode": "shadow", "fresh": False,
+                               "error": None}  # fmt: skip
+    assert "llm" not in data and "jetson" not in data and "agents" not in data["counts"]
 
 
 def test_areas_and_entities(ingress):
@@ -224,13 +224,16 @@ def test_unreachable_home_assistant_does_not_break_the_gui(settings):
     from sim.server import ServerThread
 
     settings.ha_url = "http://127.0.0.1:9"  # discard port: connection refused
-    settings.jetson_llm_url = "http://127.0.0.1:9"
+    settings.jetson_learner_url = "http://127.0.0.1:9"
+    settings.anthropic_api_key = ""
     with ServerThread(create_app(settings)) as server:
         data = wait_for(lambda: (s := status(server.url))["ha"]["state"] == "unreachable" and s)
         assert httpx.get(server.url + "/").status_code == 200
         assert httpx.get(server.url + "/api/areas").json() == []
-        wait_for(lambda: status(server.url)["llm"]["state"] == "unreachable")
+        wait_for(lambda: status(server.url)["learner"]["error"])
+        assert not status(server.url)["learner"]["connected"]
         assert data["orchestrator"]["effective"] == "none"
+        assert httpx.get(server.url + "/api/dev").status_code == 200, "the developer page works offline"
 
 
 # --- safety switches, settings, diagnostics -----------------------------------------------
@@ -277,6 +280,14 @@ def test_settings_and_diagnostics_never_leak_secrets(ingress, settings):
     blob = b"".join(archive.read(name) for name in archive.namelist())
     for secret in (settings.ha_token, "sk-ant-very-secret", "sk-proj-very-secret", "jetson-very-secret"):
         assert secret.encode() not in blob
+    assert "agents.json" not in manifest["files"] and "benchmarks.json" not in manifest["files"]
+
+    dev = httpx.get(f"{ingress.base}/api/dev")
+    assert dev.status_code == 200
+    assert_matches_contract(dev.json(), "/api/dev")
+    for secret in (settings.ha_token, "sk-ant-very-secret", "sk-proj-very-secret", "jetson-very-secret"):
+        assert secret not in dev.text
+    assert dev.json()["config"]["options"]["anthropic_api_key"] == "***"
 
 
 def test_unknown_paths_404_with_a_pointer_and_wrong_methods_405(ingress):
@@ -286,9 +297,11 @@ def test_unknown_paths_404_with_a_pointer_and_wrong_methods_405(ingress):
     assert "POST /api/migration/import" in bare.json()["detail"]
     assert "GET /api/migration/originals" in bare.json()["detail"]
     assert httpx.get(f"{ingress.base}/api/not-in-this-build").status_code == 404
-    wrong = httpx.get(f"{ingress.base}/api/agents/x/prompt-preview")
+    wrong = httpx.get(f"{ingress.base}/api/manager/wake")
     assert wrong.status_code == 405 and wrong.headers["allow"] == "POST"
     assert wrong.json()["error"] == "method_not_allowed" and "use POST" in wrong.json()["detail"]
+    for gone in ("agents", "agents/kitchen", "models/profiles", "benchmarks"):  # D40
+        assert httpx.get(f"{ingress.base}/api/{gone}").status_code == 404, gone
 
 
 def test_logs_endpoint(ingress):
@@ -319,3 +332,37 @@ def test_reconnect_after_a_working_session_is_quick(ingress, ha_state):
         ha_state.drop_ws()
         wait_for(lambda b=before: status(ingress.base)["ha"]["reconnects"] > b, timeout=4)
         wait_for(lambda: status(ingress.base)["ha"]["connected"], timeout=4)
+
+
+def test_an_install_from_0_4_starts_and_ignores_what_d40_removed(settings):
+    """D40 upgrade: room agent files, removed settings and options, old rows of room agents in the
+    database: nothing crashes, nothing of it acts, the rest is kept."""
+    import yaml
+
+    from app.main import create_app
+    from app.store.db import Store
+    from sim.server import ServerThread
+
+    data = settings.data_dir
+    (data / "agents").mkdir()
+    (data / "agents" / "living_room.yaml").write_text(yaml.safe_dump(
+        {"id": "living_room", "name": "Living room", "room": "living_room", "mode": "live"}))  # fmt: skip
+    (data / "settings.yaml").write_text(yaml.safe_dump({"llm_timeout_s": 300, "learner_mode": "live"}))
+    (data / "options.json").write_text(json.dumps({"jetson_llm_url": "http://10.0.0.5:8080",
+                                                   "orchestrator_provider": "local"}))  # fmt: skip
+    old = Store(data / "agent_house.db")
+    old.execute("INSERT INTO runs (id, agent_id, status, wake_source, started) VALUES "
+                "('r_old', 'living_room', 'running', 'event', 1.0)")  # fmt: skip
+    old.execute("INSERT INTO board (ts, agent_id, kind, text, expires) VALUES (1, 'living_room', 'fact', 'x', 2)")
+    old.close()
+    with ServerThread(create_app(settings)) as server:
+        data_ = wait_for(lambda: (s := status(server.url))["ha"]["connected"] and s)
+        assert data_["orchestrator"]["provider"] == "auto"
+        runtime = httpx.get(server.url + "/api/settings").json()["runtime"]
+        assert runtime["learner_mode"] == "live" and "llm_timeout_s" not in runtime
+        [run] = httpx.get(server.url + "/api/runs").json()
+        assert run["agent_id"] == "living_room" and run["status"] == "error", "an old run stays readable"
+        action = httpx.get(server.url + "/api/actions").json()
+        assert action == []
+        assert httpx.get(server.url + "/api/agents").status_code == 404
+        assert httpx.get(server.url + "/api/dev").status_code == 200

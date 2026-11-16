@@ -496,17 +496,15 @@ def _decide(tree, features, record, cost: float, days: int) -> dict | None:
     return best
 
 
-# --- what events matter (the event gate, D35) -------------------------------------------------------
+# --- what events matter (D36; computed by the learner, shown on the developer page since D40) ------
 FOLLOW_S = 600.0
-QUIET_MIN_EVENTS = 20  # an event kind seen this often …
-QUIET_SHARE = 0.05  # … and followed by something the owner did this rarely is "quiet"
 
 
 def event_relevance(changes, ha) -> dict[str, list[int]]:
     """ "entity|state" → [followed, seen]: how often a change of an entity to a state was followed
     within `FOLLOW_S` by something the owner did by hand to a device in the same area (anywhere for an
-    entity without one). Only non-device entities (sensors, people, sun, helpers): those are what
-    agents are woken by. Counts, no model; the gate slows down wakes on quiet event kinds."""
+    entity without one). Only non-device entities (sensors, people, sun, helpers). Counts, no model.
+    The event gate that slowed wakes on quiet kinds went with the room agents (D40)."""
     hands_by_area: dict[str | None, list[float]] = defaultdict(list)
     for c in changes:
         if c.manual and c.entity_id.split(".", 1)[0] in ACT_DOMAINS and c.state not in SKIP_STATES:
@@ -525,14 +523,6 @@ def event_relevance(changes, ha) -> dict[str, list[int]]:
         item[1] += 1
         item[0] += int(j < len(hands) and hands[j] <= c.ts + FOLLOW_S)
     return out
-
-
-def quiet(relevance: dict[str, list[int]], entity_id: str, state: str) -> tuple[int, int] | None:
-    """(followed, seen) when this event kind is quiet, else None."""
-    item = relevance.get(f"{entity_id}|{state}")
-    if item and item[1] >= QUIET_MIN_EVENTS and item[0] < QUIET_SHARE * item[1]:
-        return item[0], item[1]
-    return None
 
 
 # --- what states are usual (unusual-state notes, D35) ----------------------------------------------

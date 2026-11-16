@@ -1,8 +1,8 @@
 # Home Assistant add-on ("app") manifest. Field reference: docs/RESEARCH.md §1.
 name: Agent House
-version: "0.4.0"
+version: "0.5.0"
 slug: agent_house
-description: LLM agents that watch your rooms, propose automations and act within strict safety tiers
+description: Learns your habits on a Jetson, drafts automations with a cloud model, acts only within strict safety tiers
 url: https://github.com/vvvlladimir/agent-home
 arch:
   - aarch64
@@ -19,8 +19,6 @@ map:
     read_only: true
 options:
   log_level: info
-  jetson_llm_url: ""
-  jetson_metrics_url: ""
   jetson_learner_url: ""
   orchestrator_provider: auto
   anthropic_model: claude-haiku-5-5
@@ -30,10 +28,9 @@ options:
   t3_whitelist: []
 schema:
   log_level: list(debug|info|warning|error)
-  jetson_llm_url: str?
-  jetson_metrics_url: str?
   jetson_learner_url: str?
   jetson_token: password?
+  # `local` stays valid so an install from before 0.5.0 keeps its options; it is read as `auto` (D40)
   orchestrator_provider: list(auto|anthropic|openai|local)
   anthropic_api_key: password?
   anthropic_model: str

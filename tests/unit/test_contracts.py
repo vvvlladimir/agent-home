@@ -47,32 +47,14 @@ def test_json_schemas_are_valid(path):
     assert schema["$id"] == path.name
 
 
-def test_agent_config_example_and_defaults():
-    schema = json.loads((ROOT / "contracts/schemas/agent_config.schema.json").read_text())
-    example = {
-        "id": "kitchen",
-        "name": "Kitchen",
-        "room": "kitchen",
-        "entities": ["light.kitchen", "binary_sensor.kitchen_motion"],
-        "wake_rules": {
-            "events": [{"entities": ["binary_sensor.kitchen_motion"], "to": ["on"], "cooldown_s": 60}],
-            "cron": [{"expr": "0 7 * * *", "reason": "morning check"}],
-        },
-    }
-    jsonschema.validate(example, schema)
-    assert schema["properties"]["mode"]["default"] == "shadow", "agents must default to shadow mode"
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**example, "mode": "yolo"}, schema)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate({**example, "entities": [f"light.l{i}" for i in range(26)]}, schema)
-
-
-def test_implemented_operations_are_not_answered_by_the_501_fallback():
-    """Guards against the contract and the router drifting apart."""
-    from app.api.agents import router as agents_router
+def test_the_contract_and_the_routes_match_both_ways():
+    """Guards against the contract and the router drifting apart: every operation of a finished
+    milestone is routed, and every route is in the contract (the GUI codes against it, D40)."""
+    from app.api.activity import router as activity_router
     from app.api.automations import router as automations_router
     from app.api.chat import router as chat_router
     from app.api.council import router as council_router
+    from app.api.dev import router as dev_router
     from app.api.migration import router as migration_router
     from app.api.routes import router
 
@@ -80,7 +62,8 @@ def test_implemented_operations_are_not_answered_by_the_501_fallback():
     routes = {
         (r.path, m.lower())
         for r in (
-            *agents_router.routes,
+            *activity_router.routes,
+            *dev_router.routes,
             *router.routes,
             *automations_router.routes,
             *migration_router.routes,
@@ -96,3 +79,8 @@ def test_implemented_operations_are_not_answered_by_the_501_fallback():
                 assert (path, method) in routes, (
                     f"{method} {path} is {operation['x-milestone']} but not implemented"
                 )
+    documented = {(path, m) for path, item in spec["paths"].items() for m in item if m != "parameters"}
+    undocumented = sorted(r for r in routes - documented if r[1] != "head")
+    assert undocumented == [], f"routes missing from contracts/openapi.yaml: {undocumented}"
+    for gone in ("/api/agents", "/api/models/profiles", "/api/benchmarks", "/api/runs/{run_id}/replay"):
+        assert gone not in spec["paths"], f"{gone} went with the room agents (D40)"

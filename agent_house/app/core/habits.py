@@ -18,7 +18,7 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import datetime
 
-from .agents import NEVER_OWNED, is_noise
+from .entities import NEVER_OWNED, is_noise
 from .policy import resolve_tier
 
 ACT_DOMAINS = frozenset(

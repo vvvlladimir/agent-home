@@ -1,4 +1,5 @@
-"""Accuracy of every automation of ours and of every room agent, and one score for the whole house.
+"""Accuracy of every automation of ours and of every actor of ours (the house manager and the
+learner acting live), and one score for the whole house.
 
 Deterministic, no model. Source: the same logbook changes as the history scan (`insights.py`),
 so a cause is what HA says it was. Each automated change is an outcome with implicit feedback:
@@ -14,7 +15,8 @@ so a cause is what HA says it was. Each automated change is an outcome with impl
 
 Per automation:  precision = kept / (kept + undone),  coverage = kept / (kept + missed),
                  f1 = harmonic mean of the two.
-Room agents get precision only (they act on events; there is no fixed intent to miss).
+Actors (`agents`: `orchestrator`, `learner`) get precision only (they act on events; there is no
+fixed intent to miss).
 
 The house (program) score pools the counts (micro-average, so a busy automation weighs more than
 one that fired twice): precision over automations and agents, coverage over automations, and

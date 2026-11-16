@@ -18,9 +18,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from .. import __version__
 from ..config import RuntimeSettings, redact_url, save_runtime
-from ..core import clock, profiles
-from ..core.bench import BenchBusy
-from ..core.monitor import JetsonError
+from ..core import clock
 from ..core.policy import READ_ONLY_DOMAINS, resolve_tier
 from ..logbuf import ring
 
@@ -31,6 +29,18 @@ def _iso(ts: float | None) -> str | None:
     return datetime.fromtimestamp(ts, UTC).isoformat() if ts else None
 
 
+def _learner_brief(ctx) -> dict:
+    """The learner on the top bar: configured, connected, mode, fresh model (D38)."""
+    learner = ctx.learner
+    return {
+        "configured": learner.configured,
+        "connected": learner.connected,
+        "mode": learner.mode,
+        "fresh": learner.model() is not None,
+        "error": learner.error,
+    }
+
+
 def build_status(ctx) -> dict:
     kill = ctx.safety.kill
     return {
@@ -39,15 +49,13 @@ def build_status(ctx) -> dict:
         "mode": ctx.safety.mode,
         "kill_switch": kill,
         "ha": ctx.ha.status(),
-        "llm": ctx.llm.status(),
-        "jetson": ctx.monitor.jetson_status(),
+        "learner": _learner_brief(ctx),
         "orchestrator": ctx.orchestrator.status(),
         "counts": {
-            "agents": len(ctx.agents.agents),
             "pending_approvals": ctx.actuator.pending_count(),
             "draft_proposals": ctx.lifecycle.count_open(),
             "deployed_automations": ctx.lifecycle.count_deployed(),
-            "runs_today": ctx.agents_rt.runs_today(),
+            "runs_today": ctx.runs.today(),
         },
     }
 
@@ -86,9 +94,6 @@ async def set_kill_switch(body: KillBody, request: Request) -> dict:
 async def list_areas(request: Request) -> list[dict]:
     reg = request.app.state.ctx.ha.registry
     states = request.app.state.ctx.ha.states
-    by_room: dict[str, str] = {}
-    for agent in request.app.state.ctx.agents.list():
-        by_room.setdefault(agent.room, agent.id)
     out = []
     for area_id, area in sorted(reg.areas.items(), key=lambda kv: (kv[1].get("name") or kv[0]).lower()):
         count = sum(1 for e in reg.entities_in(area_id) if e in states and not reg.is_hidden(e))
@@ -97,7 +102,6 @@ async def list_areas(request: Request) -> list[dict]:
                 "area_id": area_id,
                 "name": area.get("name") or area_id,
                 "entity_count": count,
-                "agent_id": by_room.get(area_id),
             }
         )
     return out
@@ -219,73 +223,10 @@ async def put_settings(request: Request):
         return _error("invalid", f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}", 422)
     if updated != ctx.runtime:
         save_runtime(ctx.settings.data_dir, updated)
-        ctx.runtime = ctx.llm.runtime = ctx.agents_rt.settings = updated
+        ctx.runtime = ctx.learner.runtime = updated
         ctx.council.settings = ctx.insights.settings = ctx.review.settings = ctx.manager.settings = updated
         ctx.feed.add("system", "Settings changed", data={"changed": sorted(changes)})
     return _settings_view(ctx)
-
-
-# --- models & benchmarks (M2) -----------------------------------------------------------------
-
-
-@router.get("/models/profiles")
-async def list_profiles(request: Request) -> list[dict]:
-    active = request.app.state.ctx.llm.active_profile
-    return [{**profile, "active": profile["name"] == active} for profile in profiles.PROFILES]
-
-
-class ProfileBody(BaseModel):
-    profile: str = Field(max_length=64)
-
-
-@router.put("/models/active")
-async def set_active_profile(body: ProfileBody, request: Request) -> JSONResponse:
-    ctx = request.app.state.ctx
-    known = {p["name"] for p in profiles.PROFILES}
-    if body.profile not in known:
-        return _error("not_found", f"unknown profile; known: {', '.join(sorted(known))}", 404)
-    if not ctx.monitor.can_switch:
-        return _error(
-            "not_configured", "set jetson_metrics_url and jetson_token in the add-on configuration", 409
-        )
-    if ctx.bench.running:
-        return _error("busy", "a benchmark is running", 409)
-    if ctx.llm.swapping:
-        return _error("busy", "a model swap is already in progress", 409)
-    ctx.llm.begin_swap(body.profile)
-    try:
-        await ctx.monitor.switch_profile(body.profile)
-    except JetsonError as err:
-        ctx.llm.end_swap()
-        await ctx.llm.probe()
-        ctx.feed.add("system", f"Model swap to {body.profile} failed: {err}", level="error")
-        return _error("jetson_error", str(err), 502)
-    ctx.feed.add("system", f"Model profile switching to {body.profile}", level="warning")
-    await ctx.llm.probe()
-    return JSONResponse(ctx.llm.status(), status_code=202)
-
-
-@router.get("/benchmarks")
-async def list_benchmarks(request: Request) -> list[dict]:
-    return request.app.state.ctx.bench.list()
-
-
-class BenchBody(BaseModel):
-    profile: str | None = Field(default=None, max_length=64)
-    quick: bool = False
-
-
-@router.post("/benchmarks")
-async def run_benchmark(request: Request, body: BenchBody | None = None) -> JSONResponse:
-    ctx = request.app.state.ctx
-    body = body or BenchBody()
-    active = ctx.llm.active_profile
-    if body.profile and active and body.profile != active:
-        return _error("wrong_profile", f"{active} is loaded; activate {body.profile} first", 409)
-    try:
-        return JSONResponse({"id": ctx.bench.start(quick=body.quick)}, status_code=202)
-    except BenchBusy as err:
-        return _error("busy", str(err), 409)
 
 
 @router.get("/logs")
@@ -313,10 +254,9 @@ async def get_diagnostics(request: Request) -> Response:
         },
         "feed.json": ctx.feed.recent(limit=300),
         "runtime_settings.json": ctx.runtime.model_dump(mode="json"),
-        "benchmarks.json": ctx.bench.list(limit=20),
-        "agents.json": [agent.dump() for agent in ctx.agents.list()],
+        "learner.json": ctx.learner.status(),
         "policy.json": ctx.safety.policy,
-        "runs.json": ctx.agents_rt.list_runs(limit=50),
+        "runs.json": ctx.runs.list(limit=50),
         "actions.json": ctx.actuator.list(limit=100),
         "proposals.json": ctx.lifecycle.list(),
         "automations.json": ctx.lifecycle.deployed(),
@@ -339,7 +279,7 @@ async def get_diagnostics(request: Request) -> Response:
             "entities": len(ha.states),
         },
         "ingress": ctx.ingress_stats,
-        "jetson": ctx.monitor.jetson_status(),
+        "learner": _learner_brief(ctx),
         "files": [*files, "log.txt"],
     }
     buffer = io.BytesIO()

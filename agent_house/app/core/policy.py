@@ -208,14 +208,15 @@ def decide(
 ) -> Decision:
     """May `agent` call `domain.service` on `entity_id` right now?
 
-    - `agent`: the agent's config as a dict (`enabled`, `mode`, `tier_overrides`, `limits`);
-    - `scope`: the entity ids the agent is allowed to see and touch (its allowlist);
+    - `agent`: the actor's config as a dict (`id`, `enabled`, `mode`, `tier_overrides`, `limits`;
+      `council.Council.actor`: the orchestrator / house manager and the learner);
+    - `scope`: the entity ids the actor is allowed to touch (its allowlist);
     - `recent`: actions counted in the last minute: {"entity": n, "agent": n, "global": n};
     - `approved`: the owner approved this very action (lets a T2 action through, nothing else);
     - `force_shadow`: replays never actuate;
     - `protected`: entity ids no agent may ever actuate (the kill switch helper);
-    - `owner`: the id of the agent that owns `entity_id` (M5 council: exactly one owner per entity).
-      Only the owner may actuate; anything but the agent's own id (None included) denies.
+    - `owner`: the id of the actor that owns `entity_id` (council: exactly one owner per entity, or
+      None). Only the owner may actuate; anything but the actor's own id (None included) denies.
 
     Verdicts: `denied`; `shadow` (would be allowed, the mode says do not send); `pending` (T2,
     waits for the owner); `allow`. Invariants (tests/unit/test_policy_decide.py): an engaged kill
@@ -264,11 +265,11 @@ def _decide(
         return deny(f"{entity_id} is not in this agent's allowlist", tier)
     if not isinstance(protected, set | frozenset | tuple | list) or entity_id in protected:
         return deny(f"{entity_id} is reserved for the owner", tier)
-    # 2b. ownership: one owner agent per entity; a neighbour asks the orchestrator instead
+    # 2b. ownership: one owner per entity (the orchestrator, D40); the learner acts as its delegate
     agent_id = agent.get("id")
     if not isinstance(agent_id, str) or not agent_id or owner != agent_id:
         held = owner if isinstance(owner, str) and owner else "nobody"
-        return deny(f"{entity_id} is owned by {held}, not by this agent; ask through ask_agent", tier)
+        return deny(f"{entity_id} is owned by {held}, not by {agent_id or 'this actor'}", tier)
 
     # 3. service allowlist (a call always targets an entity of its own domain)
     if domain != entity_id.split(".", 1)[0]:

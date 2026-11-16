@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+- **Room agents are gone (D40).** The small models that watched single rooms, their wake rules,
+  traces, chat and the Agents page are removed, and so is the local model on the Jetson with its
+  profiles and benchmarks. What runs now: the **learner** on the Jetson (learns, never actuates), the
+  **house manager** and the **cloud orchestrator** (drafts, chat, the daily review, explanations), and
+  your automations in Home Assistant. The planned comparison against room agents was skipped on the
+  owner's decision.
+- The house manager now looks after every switchable device of the house (it used to be only the
+  ones without a room agent), still in shadow until you set the orchestrator mode to live, still only
+  through the safety policy.
+- The orchestrator uses Claude and OpenAI only. The option `local` (no longer offered) works like
+  `auto`: the clouds you gave a key, within the daily budget, prompts redacted.
+- Upgrading keeps your settings: the old Jetson URLs, the model settings and the stored agents are
+  ignored. An exported config from 0.4 still imports (its agents are ignored and listed).
+- New **developer snapshot** `api/dev`: what the learner came up with (habits, routines, corrections,
+  timeouts, live suggestions and their verdicts), the house manager's prefilter, the orchestrator's
+  last calls (no prompts), the policy's recent decisions; secrets masked.
+- On the Jetson: `jetson/setup.sh` only prepares the learner now; `setup_learner.sh --stop-llm`
+  disables the llama-server and metrics services of an older install.
+
 ## 0.4.0
 
 - **The Jetson learns your house instead of running a small model (D38).** A new service on the

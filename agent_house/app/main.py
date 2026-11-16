@@ -13,29 +13,26 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api.agents import router as agents_router
+from .api.activity import router as activity_router
 from .api.automations import router as automations_router
 from .api.chat import router as chat_router
 from .api.council import router as council_router
+from .api.dev import router as dev_router
 from .api.migration import router as migration_router
 from .api.routes import router
 from .config import RuntimeSettings, Settings, load_runtime, load_settings
 from .core.actuator import Actuator
-from .core.agents import AgentStore
-from .core.bench import BenchRunner
-from .core.council import Council
-from .core.gate import EventGate
+from .core.council import ORCHESTRATOR, Council
+from .core.inbox import Inbox
 from .core.insights import Insights
 from .core.learner import LEARNER, LearnerLink
 from .core.lifecycle import Lifecycle
-from .core.llm import LLMManager
 from .core.manager import Manager
 from .core.metrics import Metrics
 from .core.migration import Migration
-from .core.monitor import JetsonMonitor
 from .core.orchestrator import Orchestrator
 from .core.review import Review
-from .core.runtime import AgentRuntime, WakeRefused
+from .core.runs import Runs
 from .core.safety import KILL_EVENT, Safety
 from .core.unusual import Unusual
 from .ha.client import HAClient
@@ -53,15 +50,11 @@ class Context:
     store: Store
     feed: Feed
     ha: HAClient
-    monitor: JetsonMonitor
     runtime: RuntimeSettings
-    llm: LLMManager
-    bench: BenchRunner
     safety: Safety
-    agents: AgentStore
-    agents_rt: AgentRuntime
+    inbox: Inbox
+    runs: Runs
     actuator: Actuator
-    gate: EventGate
     lifecycle: Lifecycle
     orchestrator: Orchestrator
     migration: Migration
@@ -117,70 +110,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     setup_logging(settings.log_level)
     store = Store(settings.data_dir / "agent_house.db")
     feed = Feed(store)
-    monitor = JetsonMonitor(settings)
     runtime = load_runtime(settings.data_dir)
-    llm = LLMManager(settings, runtime, monitor)
     ha = HAClient(settings)
     safety = Safety(store, feed, settings.data_dir, settings.t3_whitelist)
-    agents = AgentStore(settings.data_dir)
-    agents_rt = AgentRuntime(
-        agents=agents, ha=ha, llm=llm, store=store, feed=feed, safety=safety, runtime_settings=runtime
-    )
+    inbox = Inbox(store, feed)
 
     def kill_entity() -> set[str]:
         return {ctx.runtime.kill_switch_entity} if ctx.runtime.kill_switch_entity else set()
 
-    council = Council(store, feed, ha, agents, safety, runtime)
+    council = Council(store, feed, ha, safety, runtime)
     owner_of = council.ownership.owner_of
     actuator = Actuator(
-        store, feed, ha, safety, agents, agents_rt.scope, protected=kill_entity, owner_of=owner_of,
-        pseudo=council.agent_config, delegates={LEARNER: "orchestrator"},
+        store, feed, ha, safety, council.actor, protected=kill_entity, owner_of=owner_of,
+        delegates={LEARNER: ORCHESTRATOR},
     )  # fmt: skip
-
-    def wake(agent_id: str, **kwargs) -> None:
-        try:
-            agents_rt.wake(agent_id, **kwargs)
-        except WakeRefused as err:
-            feed.add("gate_drop", f"{agent_id}: not woken, {err}", level="debug", agent_id=agent_id)
-
-    def unwatched(entity_id: str, old: str | None, new: str, reason: str) -> None:
-        """An alarm rule matched, but no enabled agent watches the entity: tell the owner directly."""
-        agents_rt.inbox_add(
-            "house", None, "alarm",
-            f"{entity_id} changed {old} → {new}. {reason} No enabled agent watches it, so nobody "
-            "checked it: please look yourself.",
-        )  # fmt: skip
-
-    gate = EventGate(agents, feed, store, agents_rt.scope, wake, unwatched=unwatched)
     lifecycle = Lifecycle(store, feed, ha, safety, protected=kill_entity, owner_of=owner_of)
-    orchestrator = Orchestrator(settings, llm, store, feed, ha, safety, lifecycle, agents_rt)
-    agents_rt.actuator, agents_rt.gate, agents_rt.orchestrator = actuator, gate, orchestrator
-    agents_rt.council = orchestrator.council = council
-    council.rt, council.actuator, council.gate = agents_rt, actuator, gate
+    orchestrator = Orchestrator(settings, store, feed, ha, safety, lifecycle, inbox)
+    orchestrator.council, council.actuator = council, actuator
     insights = Insights(store, feed, ha, lifecycle, runtime)
     learner = LearnerLink(settings, runtime, store, feed, ha, insights, safety)  # D38
     learner.actuator, council.learner, orchestrator.learner = actuator, learner, learner
     insights.learnt = learner.habits  # the D35 predictions over the learner's longer history
-    # quiet event kinds wake less (D35), from the learner's longer history while it is fresh (D38)
-    gate.relevance = lambda: store.get("learner_event_relevance") or store.get("event_relevance") or {}
-    council.unusual = Unusual(store, ha, agents_rt)  # unusual-state notes (D35)
-    council.review = Review(store, feed, orchestrator, insights, council, agents_rt, runtime, lifecycle)
+    council.unusual = Unusual(store, ha, inbox)  # unusual-state notes (D35)
+    council.review = Review(store, feed, orchestrator, insights, council, inbox, runtime, lifecycle)
     metrics = council.review.metrics = Metrics(store, insights, lifecycle)
-    council.manager = Manager(orchestrator, council, actuator, metrics, runtime)
+    council.manager = Manager(orchestrator, council, actuator, metrics, runtime, inbox)
     ctx = Context(
         settings=settings,
         store=store,
         feed=feed,
         ha=ha,
-        monitor=monitor,
         runtime=runtime,
-        llm=llm,
-        bench=BenchRunner(llm, monitor, store, feed),
         safety=safety,
-        agents=agents,
-        agents_rt=agents_rt,
+        inbox=inbox,
+        runs=Runs(store),
         actuator=actuator,
-        gate=gate,
         lifecycle=lifecycle,
         orchestrator=orchestrator,
         migration=Migration(settings, store, feed, ha, lifecycle, orchestrator, safety),
@@ -209,7 +173,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         safety.set_kill(engaged, str(data.get("reason") or "")[:200] or None, source="Home Assistant event")
 
     ctx.ha.on_state_changed(on_state)
-    ctx.ha.on_state_changed(gate.on_state)
     ctx.ha.on_state_changed(council.on_state)
     ctx.ha.on_event(KILL_EVENT, on_kill_event)
     if learner.configured:  # D38: the house goes to the learner, with its causes
@@ -224,9 +187,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             log.error("no Home Assistant token: SUPERVISOR_TOKEN is missing (is homeassistant_api enabled?)")
         ctx.feed.add("system", f"Agent House {__version__} started")
         await ctx.ha.start()
-        await ctx.monitor.start()
-        await ctx.llm.start()
-        await ctx.gate.start()
         await ctx.council.start()
         await ctx.learner.start()
 
@@ -244,18 +204,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await ctx.learner.stop()
             await ctx.council.stop()
             await ctx.manager.stop()
-            await ctx.gate.stop()
             await ctx.orchestrator.stop()
-            await ctx.agents_rt.stop()
-            await ctx.bench.stop()
-            await ctx.llm.stop()
-            await ctx.monitor.stop()
             await ctx.ha.stop()
             store.close()
 
     app = FastAPI(title="Agent House", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.ctx = ctx
-    app.include_router(agents_router)  # before `router`: its catch-all answers 501 for the rest
+    app.include_router(activity_router)  # before `router`: its catch-all answers 404/405 for the rest
+    app.include_router(dev_router)
     app.include_router(automations_router)
     app.include_router(migration_router)
     app.include_router(chat_router)

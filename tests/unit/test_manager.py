@@ -1,34 +1,28 @@
-"""D27 house manager: a deterministic prefilter decides whether the model is called; everything it
-does goes through the actuator (policy, shadow) or the draft lifecycle; caps and the kill switch hold."""
+"""D27 house manager (D40: the whole house is its scope): a deterministic prefilter decides whether
+the model is called; everything it does goes through the actuator (policy, shadow) or the draft
+lifecycle; caps and the kill switch hold."""
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 from app.config import RuntimeSettings
 from app.core.council import MODE_ENTITY, ORCHESTRATOR
 from app.core.lifecycle import Lifecycle
 from app.core.manager import Manager
-from app.core.orchestrator import Orchestrator
-from tests.helpers import AutomationHA, call, make_stack
+from tests.helpers import AutomationHA, ScriptedProvider, call, make_stack
 
 
 def stack(tmp_path, *script, **settings):
     runtime = RuntimeSettings(**{"manager_enabled": True, "manager_sweep_min": 60, **settings})
     s = make_stack(tmp_path, ha=AutomationHA(), settings=runtime)
-    s.ha.add("light.hall", "on")  # no area: no room agent owns it, the orchestrator does
-    s.ha.add("lock.front", "locked")  # also unowned, but T3
+    s.ha.add("light.hall", "on")  # no area: the orchestrator owns it like everything else (D40)
+    s.ha.add("lock.front", "locked")  # owned too, but T3 and not a switchable domain
     s.ha.add("person.owner", "not_home")
-    s.llm.steps = list(script)
     s.lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety, owner_of=s.council.ownership.owner_of)
-    orch_settings = SimpleNamespace(orchestrator_provider="local", anthropic_api_key="", anthropic_model="m",
-                                    anthropic_base_url="", openai_api_key="", openai_model="m", openai_base_url="",
-                                    daily_budget_eur=1.0, redact_cloud=True)  # fmt: skip
-    s.orch = Orchestrator(orch_settings, s.llm, s.store, s.feed, s.ha, s.safety, s.lifecycle, s.rt)
-    s.orch.council = s.council
-    s.rt.orchestrator = s.orch
+    s.orch.lifecycle = s.lifecycle
+    s.cloud = s.orch.cloud = ScriptedProvider(list(script))
+    s.orch.openai = ScriptedProvider(name="openai")
     s.now = [1_000_000.0]
-    s.manager = Manager(s.orch, s.council, s.actuator, None, runtime, now=lambda: s.now[0])
+    s.manager = Manager(s.orch, s.council, s.actuator, None, runtime, s.inbox, now=lambda: s.now[0])
     s.council.manager = s.manager
     return s
 
@@ -37,13 +31,13 @@ def run_status(s, run_id: str) -> str:
     return s.store.query("SELECT status FROM runs WHERE id=?", (run_id,))[0]["status"]
 
 
-def test_scope_is_the_mode_helper_plus_unowned_switchables_only_when_enabled(tmp_path):
+def test_scope_is_the_mode_helper_plus_the_houses_switchables_only_when_enabled(tmp_path):
     s = stack(tmp_path)
-    assert "light.hall" in s.manager.owned() and "light.room_lamp" not in s.manager.owned()
-    assert "lock.front" not in s.manager.owned()  # not a switchable domain
-    assert set(s.council.agent_config(ORCHESTRATOR).entities) == {MODE_ENTITY, "light.hall"}
+    assert {"light.hall", "light.room_lamp", "switch.room_heater"} <= set(s.manager.owned())
+    assert "lock.front" not in s.manager.owned() and "binary_sensor.room_motion" not in s.manager.owned()
+    assert set(s.council.actor(ORCHESTRATOR)["entities"]) == {MODE_ENTITY, *s.manager.owned()}
     s.manager.settings = s.council.settings = RuntimeSettings(manager_enabled=False)
-    assert s.council.agent_config(ORCHESTRATOR).entities == [MODE_ENTITY]
+    assert s.council.actor(ORCHESTRATOR)["entities"] == [MODE_ENTITY]
 
 
 def test_device_settings_and_pairing_switches_are_never_owned(tmp_path):
@@ -57,7 +51,7 @@ def test_device_settings_and_pairing_switches_are_never_owned(tmp_path):
     assert (
         "switch.zigbee2mqtt_bridge_permit_join" not in owned and "switch.laptop_internet_access" not in owned
     )
-    assert "no room agent" in s.manager.status()["owned_note"]
+    assert "no room agents" in s.manager.status()["owned_note"]
 
 
 async def test_a_sweep_with_nothing_to_do_never_calls_the_model(tmp_path):
@@ -67,7 +61,7 @@ async def test_a_sweep_with_nothing_to_do_never_calls_the_model(tmp_path):
     s.now[0] += 3601
     await s.manager.tick()
     await s.manager.wait()
-    assert s.llm.requests == [] and s.manager.anomalies() == []
+    assert s.cloud.requests == [] and s.manager.anomalies() == []
 
 
 async def test_lights_left_on_with_nobody_home_wake_it_and_its_call_runs_in_shadow(tmp_path):
@@ -77,7 +71,7 @@ async def test_lights_left_on_with_nobody_home_wake_it_and_its_call_runs_in_shad
     s.now[0] += 3601
     await s.manager.tick()
     await s.manager.wait()
-    assert len(s.llm.requests) == 2
+    assert len(s.cloud.requests) == 2
     [action] = s.store.query("SELECT agent_id, entity_ids, verdict FROM actions")
     assert action["agent_id"] == ORCHESTRATOR and "light.hall" in action["entity_ids"]
     assert action["verdict"] == "shadow"
@@ -90,7 +84,7 @@ async def test_a_manual_wake_sees_the_findings_and_an_off_manager_owns_nothing(t
     s = stack(tmp_path, {"text": "Reported the lights."}, manager_enabled=False)
     assert s.manager.request("manual: look", force=True)["status"] == "started"
     await s.manager.wait()
-    sent = str(s.llm.requests[0])
+    sent = str(s.cloud.requests[0])
     assert "Found by the deterministic check" in sent and "nobody is home and still on" in sent
     assert "the manager is off, you switch nothing" in sent
     status = s.manager.status()
@@ -103,18 +97,22 @@ async def test_a_report_naming_an_entity_that_does_not_exist_is_sent_back(tmp_pa
               call("report", severity="info", summary="person.person_1 is away, light.hall is on"),
               call("report", severity="info", summary="Nobody is home (person.owner); light.hall is on"),
               {"text": "Reported."})  # fmt: skip
+    s.orch.settings.redact_cloud = False  # redacted, person.person_1 would be the alias of person.owner
     s.manager.request("manual: look", force=True)
     await s.manager.wait()
     inbox = [r["summary"] for r in s.store.query("SELECT summary FROM inbox")]
     assert inbox == ["Nobody is home (person.owner); light.hall is on"]
-    assert "unknown entity ids person.person_1" in str(s.llm.requests[1])
+    assert "unknown entity ids person.person_1" in str(s.cloud.requests[1])
 
 
-async def test_it_cannot_act_on_a_room_agents_entity_or_a_t3_one(tmp_path):
+async def test_it_cannot_act_on_a_t3_entity_or_a_pairing_switch(tmp_path):
     s = stack(tmp_path,
-              call("call_service", domain="light", service="turn_off", entity_id="light.room_lamp", data={}),
+              call("call_service", domain="switch", service="turn_on", entity_id="switch.zb_permit_join", data={}),
               call("call_service", domain="lock", service="unlock", entity_id="lock.front", data={}),
               {"text": "Done."})  # fmt: skip
+    s.ha.add("switch.zb_permit_join", "off")
+    s.settings = s.council.settings = s.manager.settings = s.settings.model_copy(update={"orchestrator_mode": "live"})
+    s.safety.set_mode("live")
     s.manager.request("manual: test", force=True)
     await s.manager.wait()
     verdicts = [r["verdict"] for r in s.store.query("SELECT verdict FROM actions ORDER BY ts")]
@@ -138,15 +136,6 @@ async def test_a_proposal_for_an_automation_that_is_not_ours_is_refused(tmp_path
     [run] = s.store.query("SELECT trace FROM runs WHERE agent_id='orchestrator'")
     assert "is not one of our deployed automations" in run["trace"]
     assert s.store.query("SELECT COUNT(*) AS n FROM proposals")[0]["n"] == 0
-
-
-async def test_an_escalation_without_an_owner_goes_to_the_manager(tmp_path):
-    s = stack(tmp_path, {"text": "Noted."})
-    result = s.council.escalate("room", "the hall light flickers", source="event")
-    assert "house manager" in result["note"]
-    await s.manager.wait()
-    [run] = s.store.query("SELECT wake_reason, status FROM runs WHERE agent_id='orchestrator'")
-    assert "the hall light flickers" in run["wake_reason"] and run["status"] == "ok"
 
 
 def manager_runs(s) -> int:
@@ -179,53 +168,22 @@ async def test_the_same_finding_is_handed_to_the_model_once_until_it_changes(tmp
     assert manager_runs(s) == 3
 
 
-async def test_an_escalation_from_a_task_run_does_not_wake_the_manager_again(tmp_path):
-    """The answer to its own task stays on the board for its next run (no manager → task →
-    escalation → manager loop)."""
-    s = stack(tmp_path)
-    result = s.council.escalate("room", "the hall light is still on (shadow)", source="task")
-    assert result["status"] == "on_board" and "next run" in result["note"]
-    await s.manager.wait()
-    assert manager_runs(s) == 0
-    assert any("still on (shadow)" in r["text"] for r in s.council.board.since(0))
-
-
 async def test_a_spent_cloud_budget_stops_wakes_and_tells_the_owner_once_a_day(tmp_path):
     s = stack(tmp_path)
     s.orch.settings.orchestrator_provider, s.orch.settings.anthropic_api_key = "anthropic", "key"
+    s.cloud.available = False  # what AnthropicProvider says once the budget is spent
     s.orch.budget.add("anthropic", "m", 0, 0, 1.2)
     first = s.manager.request("sweep: lights")
     assert first["status"] == "refused" and "budget" in first["detail"]
     assert s.manager.request("manual: look", force=True)["status"] == "refused"
     await s.manager.wait()
-    assert manager_runs(s) == 0 and s.llm.requests == []
+    assert manager_runs(s) == 0 and s.cloud.requests == []
     inbox = s.store.query("SELECT severity, summary FROM inbox")
     assert len(inbox) == 1 and inbox[0]["severity"] == "warning" and "budget" in inbox[0]["summary"]
 
 
-
-async def test_a_failed_room_run_names_what_woke_it(tmp_path):
-    """Stories 2026-11-15: the balcony agent timed out on "the fridge lost power"; the sweep said
-    only "1 run timeout" and the fridge was lost."""
-    s = stack(tmp_path)
-    s.store.execute(
-        "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow) "
-        "VALUES ('r1', 'room', 'timeout', 'event', 'switch.fridge changed on → off. A fridge lost power.', ?, 1)",
-        (s.now[0] - 60,),
-    )
-    s.store.execute(
-        "INSERT INTO runs (id, agent_id, status, wake_source, wake_reason, started, shadow) "
-        "VALUES ('r2', 'room', 'timeout', 'cron', 'Scheduled check.', ?, 1)",
-        (s.now[0] - 30,),
-    )
-    [line] = [a for a in s.manager.anomalies() if a.startswith("room agent room")]
-    assert line == ("room agent room: 2 run(s) timeout, woken by: "
-                    "switch.fridge changed on → off. A fridge lost power.")  # fmt: skip
-
-
-async def test_in_shadow_the_manager_gives_no_tasks_and_cannot_claim_what_did_not_happen(tmp_path):
-    """Stories 2026-11-15: in shadow every task came back as a "could not" warning (18 a day), and
-    agents told the owner things were done or awaited approval (QA-007)."""
+async def test_in_shadow_the_manager_cannot_claim_what_did_not_happen(tmp_path):
+    """Stories 2026-11-15: the house was told things were done or awaited approval (QA-007)."""
     s = stack(tmp_path,
               call("call_service", domain="light", service="turn_off", entity_id="light.hall", data={}),
               call("report", severity="info", summary="I turned off light.hall."),
@@ -233,8 +191,27 @@ async def test_in_shadow_the_manager_gives_no_tasks_and_cannot_claim_what_did_no
               {"text": "Reported."})  # fmt: skip
     s.manager.request("manual: look", force=True)
     await s.manager.wait()
-    first = s.llm.requests[0]
-    assert "assign_task" not in str(first["tools"]) and "Shadow mode: you give no tasks" in str(first)
-    assert "this run's actions were only recorded" in str(s.llm.requests[2])
+    first = s.cloud.requests[0]
+    assert "assign_task" not in first["tools"] and "Shadow mode: your call_service is recorded" in str(first)
+    assert "this run's actions were only recorded" in str(s.cloud.requests[2])
     assert [r["summary"] for r in s.store.query("SELECT summary FROM inbox")] == [
         "I would switch off light.hall; nothing was changed."]  # fmt: skip
+
+
+async def test_a_new_learner_finding_wakes_the_manager_once(tmp_path):
+    """D38: a light controller the owner keeps correcting is a prefilter finding."""
+    from types import SimpleNamespace
+
+    s = stack(tmp_path)
+    s.ha.states["light.hall"]["state"] = "off"
+    found = [{"id": "timeout:light.hall:automation.hall", "kind": "timeout", "title": "Hall: off too early"}]
+    s.manager.metrics = SimpleNamespace(insights=SimpleNamespace(list=lambda status: found), compute=None)
+    s.manager.refresh_metrics = lambda: _none()
+    assert s.manager.anomalies() == ["learner: Hall: off too early (finding timeout:light.hall:automation.hall)"]
+    await sweep(s)
+    await sweep(s)
+    assert manager_runs(s) == 1, "the same finding is handed over once"
+
+
+async def _none() -> None:
+    return None

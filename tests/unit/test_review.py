@@ -1,17 +1,15 @@
-"""M5 daily review and the orchestrator's per-task providers: the scan is deterministic, the
-summary is a routine (local) task, findings become one proposal each, the cloud is the expert."""
+"""M5 daily review and the orchestrator's providers: the scan is deterministic, the summary is a
+routine task on the cloud (D40: no local model), findings become one proposal each."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from types import SimpleNamespace
 
 from app.config import RuntimeSettings
 from app.core.insights import Insights
 from app.core.lifecycle import Lifecycle
-from app.core.orchestrator import Orchestrator, Turn
 from app.core.review import Review
-from tests.helpers import AutomationHA, call, make_stack
+from tests.helpers import AutomationHA, ScriptedProvider, call, make_stack
 
 GOOD = """alias: Lamp after motion
 triggers: [{trigger: state, entity_id: binary_sensor.room_motion, to: "on"}]
@@ -25,17 +23,15 @@ def submit(yaml: str) -> dict:
                 yaml=yaml)  # fmt: skip
 
 
-def stack(tmp_path, *script, provider="local"):
+def stack(tmp_path, *script, provider="auto"):
     s = make_stack(tmp_path, ha=AutomationHA(), settings=RuntimeSettings(habit_days=14, habit_min_repeats=5))
-    s.llm.steps = list(script)
     s.lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety, owner_of=s.council.ownership.owner_of)
-    settings = SimpleNamespace(orchestrator_provider=provider, anthropic_api_key="", anthropic_model="claude-haiku-5-5",
-                               anthropic_base_url="", openai_api_key="", openai_model="gpt-6.1-sol",
-                               openai_base_url="", daily_budget_eur=1.0, redact_cloud=True)  # fmt: skip
-    s.orch = Orchestrator(settings, s.llm, s.store, s.feed, s.ha, s.safety, s.lifecycle, s.rt)
-    s.orch.council = s.council
-    s.insights = Insights(s.store, s.feed, s.ha, s.lifecycle, s.rt.settings)
-    s.review = Review(s.store, s.feed, s.orch, s.insights, s.council, s.rt, s.rt.settings, s.lifecycle)
+    s.orch.lifecycle = s.lifecycle
+    s.orch.settings.orchestrator_provider = provider
+    s.cloud = s.orch.cloud = ScriptedProvider(list(script))
+    s.openai = s.orch.openai = ScriptedProvider(name="openai")
+    s.insights = Insights(s.store, s.feed, s.ha, s.lifecycle, s.settings)
+    s.review = Review(s.store, s.feed, s.orch, s.insights, s.council, s.inbox, s.settings, s.lifecycle)
     return s
 
 
@@ -65,23 +61,26 @@ async def test_the_review_scans_summarises_and_drafts_one_proposal_per_finding(t
     assert finding["id"].startswith("habit:light.room_lamp:") and finding["proposal_id"]
     proposal = s.lifecycle.get(finding["proposal_id"])
     assert proposal["origin_agent"] == "orchestrator" and "Situation: " in proposal["rationale"]
-    assert "light.room_lamp" in proposal["yaml"] and len(s.llm.requests) == 1, "built, not asked for"
-    inbox = s.rt.inbox()[0]
+    assert "light.room_lamp" in proposal["yaml"] and len(s.cloud.requests) == 1, "built, not asked for"
+    inbox = s.inbox.list()[0]
     assert inbox["agent_id"] == "orchestrator" and inbox["summary"].startswith("Daily review: Quiet day.")
-    summary_request = s.llm.requests[0]
-    assert summary_request["tools"] == [] and "light.room_lamp" in summary_request["messages"][1]["content"]
+    summary_request = s.cloud.requests[0]
+    assert summary_request["tools"] == [] and "light.room_lamp" in summary_request["transcript"][0]["text"]
     # the same finding is never drafted twice
-    s.llm.steps = [{"text": "Again quiet."}]
+    s.cloud.steps = [{"text": "Again quiet."}]
     again = await s.review.run()
     assert again["drafted"] == [] and len(s.lifecycle.list()) == 1
 
 
 async def test_the_review_works_without_a_model(tmp_path):
-    from app.core.llm import LLMError
-
-    s = stack(tmp_path, {"raise": LLMError("down")}, {"raise": LLMError("down")})
+    s = stack(tmp_path, {"raise": "down"})
+    s.openai.steps = [{"raise": "down too"}]
     result = await s.review.run()
     assert "Review of the 24 h" in result["summary"] and result["run_id"] is None
+    keyless = stack(tmp_path)
+    keyless.cloud.has_key = keyless.openai.has_key = False  # auto uses only the clouds with a key
+    result = await keyless.review.run()
+    assert "Review of the 24 h" in result["summary"] and keyless.cloud.requests == []
 
 
 def test_the_review_is_due_once_a_day_and_not_hours_late(tmp_path):
@@ -94,36 +93,29 @@ def test_the_review_is_due_once_a_day_and_not_hours_late(tmp_path):
     assert not s.review.due(day.replace(hour=4, minute=45))
 
 
-class FakeCloud:
-    name, has_key, available = "anthropic", True, True
-
-    def __init__(self) -> None:
-        self.turns = [Turn(calls=[{"id": "c1", "name": "submit_automation", "input": {
-            "title": "Lamp", "rationale": "expert", "expected_triggers": "motion", "yaml": GOOD}}],
-            provider="anthropic"), Turn(text="Done.", provider="anthropic")]  # fmt: skip
-        self.calls = 0
-
-    async def turn(self, system, transcript, tools, priority):
-        self.calls += 1
-        return self.turns.pop(0)
-
-
-async def test_routine_stays_local_and_the_cloud_is_the_expert_for_blocked_drafts(tmp_path):
-    s = stack(tmp_path, submit(BAD), {"text": "I cannot fix it."}, provider="auto")
-    s.orch.cloud = FakeCloud()
-    assert s.orch.providers("routine") == [s.orch.local]
-    assert s.orch.providers("draft", expert=True) == [s.orch.cloud]
+async def test_auto_falls_back_from_claude_to_openai_and_local_reads_as_auto(tmp_path):
+    s = stack(tmp_path, {"raise": "overloaded"})
+    s.openai.steps = [submit(GOOD)]
     proposal = await s.orch.draft("lamp on motion", task="habit")
-    assert proposal["status"] == "draft" and s.orch.cloud.calls == 1
-    blocked = [p for p in s.lifecycle.list() if p["status"] == "rejected"]
-    assert len(blocked) == 1 and "expert" in blocked[0]["note"]
+    assert proposal["status"] == "draft" and len(s.cloud.requests) == 1 and len(s.openai.requests) == 1
+    assert [(c["provider"], c["ok"], c["task"]) for c in s.orch.calls] == [
+        ("anthropic", False, "habit"), ("openai", True, "habit")]  # fmt: skip
+    s.orch.settings.orchestrator_provider = "local"  # an option from before 0.5.0
+    assert s.orch.choice() == "auto" and s.orch.status()["provider"] == "auto"
+    assert s.orch.choice("local") == "auto" and s.orch.choice("openai") == "openai"
+    assert set(s.orch.status()["choices"]) == {"anthropic", "openai"}
 
 
-async def test_no_expert_without_auto(tmp_path):
-    s = stack(tmp_path, submit(BAD), {"text": "I cannot fix it."}, provider="local")
-    s.orch.cloud = FakeCloud()
-    proposal = await s.orch.draft("lamp on motion", task="habit")
-    assert proposal["status"] == "blocked" and s.orch.cloud.calls == 0
+async def test_a_pick_of_one_cloud_uses_only_that_one(tmp_path):
+    s = stack(tmp_path, {"raise": "overloaded"}, provider="anthropic")
+    s.openai.steps = [submit(GOOD), {"text": "Done."}]
+    import pytest
+
+    from app.core.orchestrator import OrchestratorError
+
+    with pytest.raises(OrchestratorError) as err:
+        await s.orch.draft("lamp on motion", task="habit")
+    assert err.value.code == "unavailable" and s.openai.requests == []
 
 
 # --- conflicts: one proposal per conflict, never two of ours fighting; one proposal per entity ----
@@ -199,7 +191,7 @@ async def test_one_proposal_per_entity_per_review_and_none_beside_an_open_one(tm
     assert (
         s.insights.get("habit:lamp")["status"] == "new" and s.insights.get("habit:ceiling")["status"] == "new"
     )
-    s.llm.steps = []
+    s.cloud.steps = []
     assert await s.review.draft_new() == [], "the lamp now has an open proposal of ours"
 
 
@@ -213,7 +205,7 @@ async def test_the_first_look_drafts_right_away_and_only_once(tmp_path):
         "on and off: one per entity per review"
     )
     assert result["habits"]["relevant"] >= 1
-    [note] = [i for i in s.rt.inbox() if i["summary"].startswith("First look")]
+    [note] = [i for i in s.inbox.list() if i["summary"].startswith("First look")]
     assert "Proposed:" in note["summary"] and "light.room_lamp" in note["summary"]
     assert s.store.get("habits_first_look")["drafted"] == len(result["drafted"])
     s.ha.connected = True

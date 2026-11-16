@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "setup_check.schema.json",
   "title": "SetupCheck",
-  "description": "Written by `jetson/setup.sh --check --json` to owner-reports/setup/<date>_check.json. Read-only facts about the Jetson; nothing is changed by --check.",
+  "description": "Written by `jetson/setup.sh --check --json` to owner-reports/setup/<date>_check.json. Read-only facts about the Jetson before the learner is installed; nothing is changed by --check.",
   "type": "object",
   "required": ["schema_version", "kind", "created", "checks"],
   "properties": {
@@ -14,7 +14,6 @@
     "l4t_version": {"type": ["string", "null"]},
     "jetpack_major": {"type": ["integer", "null"]},
     "ubuntu": {"type": ["string", "null"]},
-    "cuda_version": {"type": ["string", "null"]},
     "ram_total_mb": {"type": ["number", "null"]},
     "ram_available_mb": {"type": ["number", "null"]},
     "swap_total_mb": {"type": ["number", "null"]},
@@ -23,8 +22,6 @@
     "power_modes_available": {"type": "array", "items": {"type": "string"}, "description": "`id:name` pairs parsed from `nvpmodel -p --verbose`"},
     "default_target": {"type": ["string", "null"], "description": "systemctl get-default"},
     "disk_free_gb": {"type": ["number", "null"]},
-    "llama_server_path": {"type": ["string", "null"]},
-    "llama_server_version": {"type": ["string", "null"]},
     "checks": {
       "type": "array",
       "items": {

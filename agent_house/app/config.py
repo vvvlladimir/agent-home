@@ -29,8 +29,6 @@ SECRET_FIELDS = ("ha_token", "anthropic_api_key", "openai_api_key", "jetson_toke
 URL_FIELDS = (
     "ha_url",
     "ha_ws_url",
-    "jetson_llm_url",
-    "jetson_metrics_url",
     "jetson_learner_url",
     "anthropic_base_url",
     "openai_base_url",
@@ -67,13 +65,11 @@ class Settings(BaseModel):
     allowed_peers: list[str] = Field(default_factory=lambda: [SUPERVISOR_INGRESS_IP])
 
     # Jetson (empty = not configured yet)
-    jetson_llm_url: str = ""
-    jetson_metrics_url: str = ""
     jetson_learner_url: str = ""  # D38: the learner on the Jetson (jetson/learner/server.py)
     jetson_token: str = ""
 
     # Orchestrator
-    orchestrator_provider: str = "auto"  # auto | local | anthropic | openai
+    orchestrator_provider: str = "auto"  # auto | anthropic | openai (`local`, before 0.5.0, = auto)
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-5-5"  # D11
     anthropic_base_url: str = ""  # only the simulator sets this
@@ -118,17 +114,10 @@ class RuntimeSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    llm_timeout_s: float = Field(default=120.0, ge=5, le=900)  # one request, including retries
-    llm_max_retries: int = Field(default=2, ge=0, le=5)
-    llm_stale_after_s: float = Field(
-        default=120.0, ge=1, le=3600
-    )  # queued agent wakes older than this are dropped
-    llm_max_queue: int = Field(default=16, ge=1, le=100)
-    # None = the active profile's value. The benchmark compares the vendor's 1.5 against 0.
-    llm_presence_penalty: float | None = Field(default=None, ge=0, le=2)
-    # An HA helper that mirrors the kill switch: on = engaged, off = released. No agent may touch it.
+    # An HA helper that mirrors the kill switch: on = engaged, off = released. Nothing of ours may touch it.
     kill_switch_entity: str | None = Field(default=None, pattern=r"^input_boolean\.[a-z0-9_]+$")
-    # M5 council. The orchestrator actuates only `input_select.agent_house_mode`, in shadow by default.
+    # The orchestrator actuates `input_select.agent_house_mode` (and, as the house manager, the
+    # switchable devices), in shadow by default.
     orchestrator_mode: Literal["shadow", "live"] = "shadow"
     auto_house_mode: bool = False  # home / away / night from people in HA and the night window
     night_window: str = Field(
@@ -142,7 +131,7 @@ class RuntimeSettings(BaseModel):
     # Node-RED, AppDaemon or pyscript are found on their own when HA lists its users.
     automation_users: str | None = Field(default=None, max_length=2000)
     # D27 house manager: the orchestrator looks after the house between reviews (core/manager.py).
-    # It acts on entities no room agent owns, in shadow unless orchestrator_mode is live.
+    # It acts on the switchable devices, in shadow unless orchestrator_mode is live.
     manager_enabled: bool = False
     manager_sweep_min: int = Field(default=60, ge=0, le=1440)  # 0 = escalations and manual wakes only
     manager_max_wakes_per_hour: int = Field(default=4, ge=0, le=30)
@@ -151,12 +140,26 @@ class RuntimeSettings(BaseModel):
     learner_mode: Literal["shadow", "live"] = "shadow"
 
 
+# GUI settings of the room agents' local model, removed in 0.5.0 (D40): dropped when read, so an
+# upgraded install keeps the rest of its settings.yaml
+REMOVED_RUNTIME = frozenset(
+    {"llm_timeout_s", "llm_max_retries", "llm_stale_after_s", "llm_max_queue", "llm_presence_penalty"}
+)
+
+
 def load_runtime(data_dir: Path) -> RuntimeSettings:
     file = data_dir / "settings.yaml"
     if not file.is_file():
         return RuntimeSettings()
     try:
-        return RuntimeSettings(**(yaml.safe_load(file.read_text()) or {}))
+        stored = yaml.safe_load(file.read_text()) or {}
+        if isinstance(stored, dict) and REMOVED_RUNTIME & set(stored):
+            log.info(
+                "settings.yaml: ignoring removed settings %s",
+                ", ".join(sorted(REMOVED_RUNTIME & set(stored))),
+            )
+            stored = {k: v for k, v in stored.items() if k not in REMOVED_RUNTIME}
+        return RuntimeSettings(**stored)
     except (OSError, yaml.YAMLError, ValidationError, TypeError) as err:
         log.warning("ignoring %s, using defaults: %s", file, str(err).splitlines()[0])
         return RuntimeSettings()
@@ -178,8 +181,6 @@ _ENV = {
     "AH_HA_WS_URL": "ha_ws_url",
     "AH_HA_TOKEN": "ha_token",
     "AH_ALLOWED_PEERS": "allowed_peers",
-    "AH_LLM_URL": "jetson_llm_url",
-    "AH_JETSON_METRICS_URL": "jetson_metrics_url",
     "AH_LEARNER_URL": "jetson_learner_url",
     "AH_JETSON_TOKEN": "jetson_token",
     "AH_ORCHESTRATOR_PROVIDER": "orchestrator_provider",
@@ -195,8 +196,6 @@ _ENV = {
 }
 _OPTION_KEYS = (
     "log_level",
-    "jetson_llm_url",
-    "jetson_metrics_url",
     "jetson_learner_url",
     "jetson_token",
     "orchestrator_provider",

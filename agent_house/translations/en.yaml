@@ -2,16 +2,6 @@ configuration:
   log_level:
     name: Log level
     description: How much the add-on writes to its log.
-  jetson_llm_url:
-    name: Jetson inference URL
-    description: >-
-      Base URL of llama-server on the Jetson, for example http://192.168.1.50:8080.
-      Leave empty until the Jetson is set up.
-  jetson_metrics_url:
-    name: Jetson metrics URL
-    description: >-
-      Base URL of the small metrics endpoint from jetson/metrics, for example
-      http://192.168.1.50:9100. Optional.
   jetson_learner_url:
     name: Jetson learner URL
     description: >-
@@ -20,13 +10,14 @@ configuration:
   jetson_token:
     name: Jetson token
     description: >-
-      Shared secret of the Jetson (/etc/agent-house/token): the metrics endpoint's model switch and
-      every call to the learner. Optional without a learner.
+      Shared secret of the Jetson learner (/etc/agent-house/token), sent with every call to it.
+      Optional without a learner.
   orchestrator_provider:
     name: Orchestrator provider
     description: >-
-      auto uses the local model first and, when it is down, Claude and then OpenAI (only those
-      with an API key, only while the daily budget lasts). anthropic, openai or local use only that one.
+      auto uses Claude and, when it fails, OpenAI (only those with an API key, only while the daily
+      budget lasts). anthropic or openai use only that one. local (from before 0.5.0: there is no
+      local model any more) works like auto.
   anthropic_api_key:
     name: Anthropic API key
     description: Only needed when the orchestrator may use Claude. Stored by Home Assistant, never shown in the GUI.
@@ -48,5 +39,5 @@ configuration:
   t3_whitelist:
     name: T3 exceptions
     description: >-
-      Exact entity ids (for example lock.front_door) agents may act on despite a T3 domain such as
-      locks or alarms. They become T2: every action waits for your approval. Only settable here.
+      Exact entity ids (for example lock.front_door) the house manager and the learner may act on
+      despite a T3 domain such as locks or alarms. They become T2: every action waits for your approval. Only settable here.

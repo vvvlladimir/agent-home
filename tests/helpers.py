@@ -1,25 +1,21 @@
-"""In-process stand-ins for unit tests of the agent stack: a stub Home Assistant, a scripted model
-and the wiring the application factory does."""
+"""In-process stand-ins for unit tests of the safety layer and its actors: a stub Home Assistant and
+the wiring the application factory does (council, actuator, the orchestrator as house manager)."""
 
 from __future__ import annotations
 
-import asyncio
 from types import SimpleNamespace
 
+from app.config import RuntimeSettings
 from app.core.actuator import Actuator
-from app.core.agents import AgentStore, parse_agent
-from app.core.council import Council
-from app.core.gate import EventGate
-from app.core.llm import LLMResult
-from app.core.runtime import AgentRuntime
+from app.core.council import LEARNER, ORCHESTRATOR, Council
+from app.core.inbox import Inbox
+from app.core.manager import Manager
+from app.core.orchestrator import Orchestrator, ProviderError, Turn
 from app.core.safety import Safety
-from app.core.toolcalls import extract_tool_calls, visible_text
-from app.core.tools import TOOL_NAMES
 from app.ha.client import HAError
 from app.ha.registry import Registry
 from app.store.db import Store
 from app.store.feed import Feed
-from sim.fake_llm import LLMSim, _message
 
 ROOM = [
     {"entity_id": "light.room_ceiling", "state": "off"},
@@ -27,11 +23,11 @@ ROOM = [
     {"entity_id": "scene.room_movie", "state": "scening"},
     {"entity_id": "climate.room", "state": "heat", "attributes": {"temperature": 21}},
     {"entity_id": "switch.room_heater", "state": "off"},
+    {"entity_id": "humidifier.room", "state": "off"},
     {"entity_id": "lock.room_door", "state": "locked"},
     {"entity_id": "binary_sensor.room_motion", "state": "off"},
     {"entity_id": "sensor.room_illuminance", "state": "4", "attributes": {"unit_of_measurement": "lx"}},
 ]
-AGENT = {"id": "room", "name": "Room", "room": "room"}
 
 
 class StubHA:
@@ -75,102 +71,82 @@ class StubHA:
         ]
 
 
+def cloud_settings(**over) -> SimpleNamespace:
+    """The add-on options the orchestrator reads; no key, so no cloud call can leave a test."""
+    base = dict(orchestrator_provider="auto", anthropic_api_key="", anthropic_model="claude-haiku-5-5",
+                anthropic_base_url="", openai_api_key="", openai_model="gpt-6.1-sol", openai_base_url="",
+                daily_budget_eur=1.0, redact_cloud=True)  # fmt: skip
+    return SimpleNamespace(**{**base, **over})
+
+
+class FakeLearner:
+    """What the council asks of core/learner.py: configured, and the live targets of a fresh model."""
+
+    configured = True
+
+    def __init__(self, targets: list[str] | None = None) -> None:
+        self._targets = list(targets or [])
+
+    def targets(self) -> list[str]:
+        return list(self._targets)
+
+
 def call(name: str, **arguments) -> dict:
     """One scripted model turn with one tool call."""
     return {"tool_calls": [{"name": name, "arguments": arguments}]}
 
 
-def turn_on(entity_id: str, **extra) -> dict:
-    return call(
-        "call_service", domain=entity_id.split(".")[0], service="turn_on", entity_id=entity_id, **extra
-    )
+class ScriptedProvider:
+    """A cloud provider of the orchestrator that answers from a list of steps (`{"text": ...}`,
+    `call(...)`, `{"raise": "why"}`), then says "Done."; it records what it was sent."""
 
+    def __init__(self, steps: list[dict] | None = None, name: str = "anthropic") -> None:
+        self.name, self.steps, self.requests = name, list(steps or []), []
+        self.has_key = self.available = True
 
-class ScriptedLLM:
-    """Answers `chat()` from a list of fake-llama-server steps (sim/fake_llm.py), then says "Done."."""
-
-    active_profile = "scripted"
-
-    def __init__(self, steps: list[dict] | None = None) -> None:
-        self.steps = list(steps or [])
-        self.requests: list[dict] = []
-        self._sim = LLMSim()
-
-    async def chat(self, messages, tools=None, *, max_tokens=None, **options) -> LLMResult:
-        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools, **options})
+    async def turn(self, system: str, transcript: list[dict], tools: list[dict]) -> Turn:
+        self.requests.append({"system": system, "transcript": transcript, "tools": [t["name"] for t in tools]})
         step = self.steps.pop(0) if self.steps else {"text": "Done."}
         if step.get("raise"):
-            raise step["raise"]
-        if step.get("sleep"):
-            await asyncio.sleep(step["sleep"])
-        message, finish = _message(step, self._sim)
-        finish = step.get("finish", finish)
-        return LLMResult(
-            message=message,
-            text=visible_text(message),
-            tool_calls=extract_tool_calls(
-                message, finish, [t["function"]["name"] for t in tools or []] or TOOL_NAMES
-            ),
-            finish_reason=finish,
-            timings={"prompt_tokens": 100, "predicted_n": 10},
-            ttft_ms=1.0,
-            total_ms=float(step.get("ms", 10)),
-            queued_ms=0.0,
-            attempts=1,
-            model="scripted",
-        )
+            raise ProviderError(step["raise"])
+        calls = [{"id": f"c{len(self.requests)}_{i}", "name": c["name"], "input": c.get("arguments") or {}}
+                 for i, c in enumerate(step.get("tool_calls") or [])]  # fmt: skip
+        return Turn(text=step.get("text", ""), calls=calls, stop_reason="tool_use" if calls else "end_turn",
+                    tokens_in=100, tokens_out=10, provider=self.name, model="scripted")  # fmt: skip
 
 
-def make_stack(
-    tmp_path, ha=None, llm=None, agents: list[dict] | None = None, settings=None
-) -> SimpleNamespace:
-    """The agent stack wired like app.main.create_app, on a stub HA and an in-memory database."""
+def make_stack(tmp_path, ha=None, settings: RuntimeSettings | None = None, learner=None) -> SimpleNamespace:
+    """The actors wired like app.main.create_app, on a stub HA and an in-memory database. The house
+    manager is on, so the orchestrator may act on the switchable devices (still in shadow)."""
     ha = ha or StubHA()
-    llm = llm or ScriptedLLM()
+    settings = settings or RuntimeSettings(manager_enabled=True)
     store = Store(":memory:")
     feed = Feed(store)
     safety = Safety(store, feed, tmp_path)
-    agent_store = AgentStore(tmp_path)
-    for config in [AGENT] if agents is None else agents:
-        agent_store.save(parse_agent(config))
-    runtime = AgentRuntime(
-        agents=agent_store, ha=ha, llm=llm, store=store, feed=feed, safety=safety, runtime_settings=settings
-    )
-    council = Council(store, feed, ha, agent_store, safety, settings)
+    inbox = Inbox(store, feed)
+    council = Council(store, feed, ha, safety, settings)
     actuator = Actuator(
-        store, feed, ha, safety, agent_store, runtime.scope, owner_of=council.ownership.owner_of,
-        pseudo=council.agent_config, delegates={"learner": "orchestrator"},
+        store, feed, ha, safety, council.actor, owner_of=council.ownership.owner_of,
+        delegates={LEARNER: ORCHESTRATOR},
     )  # fmt: skip
-    gate = EventGate(agent_store, feed, store, runtime.scope, runtime.wake)
-    runtime.actuator, runtime.gate, runtime.council = actuator, gate, council
-    council.rt, council.actuator, council.gate = runtime, actuator, gate
+    council.actuator = actuator
+    orch = Orchestrator(cloud_settings(), store, feed, ha, safety, None, inbox)
+    orch.council = council
+    council.manager = Manager(orch, council, actuator, None, settings, inbox)
+    council.learner = learner
     return SimpleNamespace(
-        ha=ha, llm=llm, store=store, feed=feed, safety=safety, agents=agent_store, rt=runtime,
-        actuator=actuator, gate=gate, council=council,
+        ha=ha, store=store, feed=feed, safety=safety, inbox=inbox, council=council, actuator=actuator,
+        orch=orch, manager=council.manager, settings=settings,
     )  # fmt: skip
 
 
-def go_live(stack, *agent_ids: str) -> None:
+def go_live(stack, *actors: str) -> None:
+    """The global mode and the actors' own modes live (default: the orchestrator)."""
     stack.safety.set_mode("live")
-    for agent_id in agent_ids or list(stack.agents.agents):
-        stack.agents.save(stack.agents.get(agent_id).model_copy(update={"mode": "live"}))
-
-
-async def settle(stack) -> None:
-    """Wait until every queued run has finished."""
-    while stack.rt._tasks:
-        await asyncio.gather(*list(stack.rt._tasks), return_exceptions=True)
-        await asyncio.sleep(0)  # gather over finished tasks does not yield; their callbacks must run
-
-
-async def run(stack, agent_id: str = "room", reason: str = "test wake", source: str = "manual") -> dict:
-    run_id = stack.rt.wake(agent_id, source=source, reason=reason)
-    await settle(stack)
-    return stack.rt.get_run(run_id)
-
-
-def steps(run: dict, kind: str) -> list[dict]:
-    return [s["data"] for s in run["trace"] if s["type"] == kind]
+    for actor in actors or (ORCHESTRATOR,):
+        key = "learner_mode" if actor == LEARNER else "orchestrator_mode"
+        stack.settings = stack.settings.model_copy(update={key: "live"})
+    stack.council.settings = stack.manager.settings = stack.settings
 
 
 class AutomationHA(StubHA):

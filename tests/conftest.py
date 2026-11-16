@@ -6,7 +6,7 @@ import pytest
 
 from app.config import Settings
 from app.main import create_app
-from sim import fake_ha, fake_ingress, fake_jetson, fake_llm
+from sim import fake_anthropic, fake_ha, fake_ingress
 from sim.server import ServerThread
 
 INGRESS_PREFIX = "/api/hassio_ingress/simtoken"
@@ -24,43 +24,34 @@ def ha_server(ha_state):
 
 
 @pytest.fixture
-def llm_sim():
-    return fake_llm.LLMSim()
+def claude_sim():
+    """The orchestrator's model in tests (D40: there is no local one): a fake Claude Messages API."""
+    return fake_anthropic.AnthropicSim()
 
 
 @pytest.fixture
-def llm_server(llm_sim):
-    with ServerThread(fake_llm.create_app(llm_sim)) as server:
+def claude_server(claude_sim):
+    with ServerThread(fake_anthropic.create_app(claude_sim)) as server:
+        server.sim = claude_sim
         yield server
 
 
 @pytest.fixture
-def jetson_sim():
-    return fake_jetson.JetsonSim()
-
-
-@pytest.fixture
-def jetson_server(jetson_sim):
-    with ServerThread(fake_jetson.create_app(jetson_sim)) as server:
-        yield server
-
-
-@pytest.fixture
-def settings(tmp_path, ha_server, ha_state, llm_server, jetson_server):
+def settings(tmp_path, ha_server, ha_state, claude_server, claude_sim):
     return Settings(
         data_dir=tmp_path,
         ha_url=ha_server.url,
         ha_token=ha_state.token,
         allowed_peers=["127.0.0.1"],
-        jetson_llm_url=llm_server.url,
-        jetson_metrics_url=jetson_server.url,
         jetson_token="jetson-sim",
+        anthropic_api_key=claude_sim.api_key,
+        anthropic_base_url=claude_server.url,
     )
 
 
 @pytest.fixture
 def app_server(settings):
-    """The real app, served over HTTP, with its lifespan (HA connection, monitors) running."""
+    """The real app, served over HTTP, with its lifespan (HA connection, council, learner link) running."""
     app = create_app(settings)
     with ServerThread(app) as server:
         server.app = app

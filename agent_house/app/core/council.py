@@ -1,29 +1,21 @@
-"""Agent council (M5): who owns what, what the agents tell each other, and the house mode.
+"""The council (M5, D40): who may act on what, and the house mode.
 
-- Ownership: every entity has exactly one owner. An entity in an area belongs to the room agent of
-  that area (several agents in one area: the one that lists the entity, else the lowest id); an
-  entity without an area, or in an area without an agent, belongs to the orchestrator. Only the
-  owner may actuate an entity (`policy.decide`, step 2b) or have a room agent's automation act on it
-  (`lifecycle`). Ownership does not depend on `enabled`, so switching an agent off moves nothing.
-- Shared board: short facts with an expiry ("bedroom: went to bed 23:10"). Every wake sees its
-  neighbours' fresh facts in the prompt. It replaces free agent-to-agent chat: nothing on the board
-  wakes anyone, so there are no loops, and the prompt share is bounded (`MAX_FACTS_IN_PROMPT`).
-- House mode: `input_select.agent_house_mode` (home / away / night / guests / work), owned by the
-  orchestrator. With `auto_house_mode` on, a deterministic rule (people at home, night window) asks
-  for home / away / night through the actuator like any agent action (policy, shadow, trace);
-  guests and work are the owner's and are never changed automatically. Deployed automations and
-  room agents read the helper, so the instant reactions between rooms run in HA, not in a model.
-- Tasks down, escalation up: a mode change gives every room a task ("away: check that everything
-  is off"); the run's final answer is posted to the board as a report. `ask_agent` no longer wakes
-  a neighbour directly: it goes to the orchestrator, which forwards it as a task to the owner of the
-  thing asked about. A task cannot ask further (depth 1). `report(severity=escalate)` lands on the
-  board for the orchestrator (and in the owner's inbox, as before); when it names an entity owned
-  by another agent, the orchestrator forwards it as a task to that owner through the same bounded
-  path as `ask` (rate limit per agent, depth 1, never from a task or chat run). Deterministic, no
-  model. Everything else waits on the board for the daily review.
+- Ownership: every entity has exactly one owner, and since room agents are gone (D40) that is the
+  orchestrator, for every entity but the network pairing switches (`NEVER_OWNED`: nobody). Only the
+  owner may actuate an entity (`policy.decide`, step 2b); the learner acts for the orchestrator
+  (`Actuator.delegates`), nobody else can act at all.
+- Actors: the orchestrator (the house mode helper; with the house manager on, the switchable
+  devices `Manager.scope` lists) and the learner (the devices of its fresh model's live targets).
+  Each is shadow unless its own mode (`orchestrator_mode` / `learner_mode`) and the global mode
+  are live; tiers, the kill switch and the rate limits apply to both like to anyone.
+- House mode: `input_select.agent_house_mode` (home / away / night / guests / work). With
+  `auto_house_mode` on, a deterministic rule (people at home, night window) asks for home / away /
+  night through the actuator as the orchestrator (policy, shadow, trace); guests and work are the
+  owner's and are never changed automatically. Deployed automations read the helper, so the
+  instant reactions between rooms run in HA, not in a model.
 - The orchestrator's wake rules are fixed (`WAKES`) and shown with the last time each fired
-  (kv `orchestrator_wakes`): house mode changes, people coming and going (with `auto_house_mode`),
-  the daily review, escalations.
+  (kv `orchestrator_wakes`): people coming and going (with `auto_house_mode`), the daily review,
+  the house manager's sweep.
 """
 
 from __future__ import annotations
@@ -31,13 +23,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections import deque
-from collections.abc import Callable
 from datetime import datetime
 
 from ..ha.client import MODE_HELPER, MODE_OPTIONS
 from . import clock
-from .agents import AgentConfig
+from .entities import NEVER_OWNED
+from .learner import LIVE_DOMAINS
 
 log = logging.getLogger(__name__)
 
@@ -46,37 +37,14 @@ LEARNER = "learner"  # D38: the Jetson learner's live suggestions (core/learner.
 MODE_ENTITY = MODE_HELPER
 MODES = MODE_OPTIONS
 OWNER_MODES = frozenset({"guests", "work"})  # set by the owner only, never left automatically
-KINDS = ("fact", "task", "report", "escalation")
-TEXT_MAX = 160
-FACT_TTL_S = 3600.0
-FACT_TTL_MAX_S = 12 * 3600.0
-MAX_FACTS_IN_PROMPT = 8
-MAX_POSTS_PER_RUN = 2
-ASKS_PER_HOUR = 6  # per asking agent, forwarded through the orchestrator
 TICK_S = 30.0
-NO_FORWARD_SOURCES = frozenset({"task", "chat", "poke", "replay"})  # depth 1: these never wake another agent
+ACTIONS_PER_MINUTE = 6  # per actor, on top of the policy's per-entity and global limits
 WAKES = (
-    ("house_mode", "the house mode changes: rooms get a task (away, night)"),
     ("person", "a person comes or goes (only with auto_house_mode): the mode is re-evaluated"),
     ("daily_review", "the daily review time: scan, digest, drafts"),
-    (
-        "escalation",
-        "a room escalates: forwarded to the owner of an entity it names, else to the "
-        "house manager (manager_enabled) or the review",
-    ),
     ("manager_sweep", "every manager_sweep_min: the manager's prefilter; the model only if it finds work"),
 )
 WAKES_KEY = "orchestrator_wakes"
-MODE_TASKS = {
-    "away": "House mode is now away (nobody is home). Check your room: lights, media and heaters "
-    "that should be off. Switch off what is allowed, report the rest. Finish with one short sentence.",
-    "night": "House mode is now night. Check your room for lights or media left on and doors or "
-    "windows left open. Act only where your tiers allow it. Finish with one short sentence.",
-}
-
-
-def _clean(text: object) -> str:
-    return " ".join(str(text or "").split())[:TEXT_MAX]
 
 
 def parse_window(text: str) -> tuple[int, int] | None:
@@ -100,18 +68,17 @@ def in_window(window: tuple[int, int] | None, now: datetime) -> bool:
 
 # --- ownership --------------------------------------------------------------------------------
 class Ownership:
-    def __init__(self, agents, ha) -> None:
-        self.agents, self.ha = agents, ha
+    """Every entity belongs to the orchestrator (D40: no room agents), except network pairing
+    switches, which belong to nobody: nothing of ours may ever switch them."""
 
-    def owner_of(self, entity_id: str) -> str:
-        area = self.ha.registry.area_of(entity_id) if isinstance(entity_id, str) else None
-        if area is None:
-            return ORCHESTRATOR
-        room = [a for a in self.agents.list() if a.room == area]
-        if not room:
-            return ORCHESTRATOR
-        listing = [a for a in room if entity_id in a.entities]
-        return (listing or room)[0].id  # `list()` is sorted by id
+    def __init__(self, ha) -> None:
+        self.ha = ha
+
+    @staticmethod
+    def owner_of(entity_id: str) -> str | None:
+        if not isinstance(entity_id, str) or "." not in entity_id or NEVER_OWNED.search(entity_id):
+            return None
+        return ORCHESTRATOR
 
     def owned_by(self, agent_id: str) -> list[str]:
         return sorted(e for e in self.ha.states if self.owner_of(e) == agent_id)
@@ -119,138 +86,50 @@ class Ownership:
     def summary(self) -> dict:
         counts: dict[str, int] = {}
         for entity_id in self.ha.states:
-            owner = self.owner_of(entity_id)
+            owner = self.owner_of(entity_id) or "nobody"
             counts[owner] = counts.get(owner, 0) + 1
-        shared: dict[str, list[str]] = {}
-        for agent in self.agents.list():
-            shared.setdefault(agent.room, []).append(agent.id)
-        return {
-            "counts": counts,
-            # several agents in one area: legal, but the owner of each entity is decided as above
-            "shared_rooms": {room: ids for room, ids in shared.items() if len(ids) > 1},
-        }
-
-
-# --- shared board -----------------------------------------------------------------------------
-class Board:
-    def __init__(self, store, feed, clock: Callable[[], float] = time.time) -> None:
-        self.store, self.feed, self.clock = store, feed, clock
-
-    def post(
-        self,
-        agent_id: str,
-        text: str,
-        *,
-        kind: str = "fact",
-        ttl_s: float = FACT_TTL_S,
-        target: str | None = None,
-        run_id: str | None = None,
-    ) -> dict:
-        if kind not in KINDS:
-            raise ValueError(f"unknown board kind {kind!r}")
-        text = _clean(text)
-        if not text:
-            raise ValueError("empty board text")
-        now = self.clock()
-        ttl = min(FACT_TTL_MAX_S, max(60.0, float(ttl_s)))
-        cursor = self.store.execute(
-            "INSERT INTO board (ts, agent_id, kind, text, expires, target, run_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (now, agent_id, kind, text, now + ttl, target, run_id),
-        )
-        self.feed.add(
-            "board",
-            f"{agent_id} [{kind}]: {text}" + (f" → {target}" if target else ""),
-            level="warning" if kind == "escalation" else "info",
-            agent_id=agent_id,
-            run_id=run_id,
-        )
-        return {"id": cursor.lastrowid, "ts": now, "agent_id": agent_id, "kind": kind, "text": text,
-                "expires": now + ttl, "target": target, "run_id": run_id}  # fmt: skip
-
-    def fresh(
-        self, *, exclude: str | None = None, kinds=("fact", "report"), limit: int = MAX_FACTS_IN_PROMPT
-    ):
-        """Unexpired entries, newest first, one per (agent, text)."""
-        marks = ",".join("?" * len(kinds))
-        rows = self.store.query(
-            f"SELECT * FROM board WHERE expires>? AND kind IN ({marks}) AND agent_id<>? ORDER BY id DESC "
-            "LIMIT 100",
-            (self.clock(), *kinds, exclude or ""),
-        )
-        seen, out = set(), []
-        for row in rows:
-            key = (row["agent_id"], row["text"])
-            if key not in seen:
-                seen.add(key)
-                out.append(row)
-        return out[:limit]
-
-    def lines(self, exclude: str | None = None) -> list[str]:
-        now = self.clock()
-        return [
-            f"- {row['agent_id']} ({max(0, int((now - row['ts']) // 60))} min ago): {row['text']}"
-            for row in self.fresh(exclude=exclude)
-        ]
-
-    def list(self, limit: int = 100, include_expired: bool = False) -> list[dict]:
-        where = "" if include_expired else " WHERE expires>?"
-        params = () if include_expired else (self.clock(),)
-        return self.store.query(f"SELECT * FROM board{where} ORDER BY id DESC LIMIT ?", (*params, limit))
-
-    def since(self, ts: float, kinds=KINDS) -> list[dict]:
-        marks = ",".join("?" * len(kinds))
-        return self.store.query(
-            f"SELECT * FROM board WHERE ts>=? AND kind IN ({marks}) ORDER BY id", (ts, *kinds)
-        )
-
-    def prune(self) -> None:
-        self.store.execute("DELETE FROM board WHERE expires<?", (self.clock() - 7 * 86400,))
+        return {"counts": counts}
 
 
 # --- the council ------------------------------------------------------------------------------
 class Council:
-    """Wiring: `rt` (agent runtime), `actuator`, `gate` and `review` are set by the app factory."""
+    """Wiring: `actuator`, `review`, `manager`, `unusual` and `learner` are set by the app factory."""
 
-    def __init__(self, store, feed, ha, agents, safety, runtime_settings, clock=time.time) -> None:
-        self.store, self.feed, self.ha, self.agents, self.safety = store, feed, ha, agents, safety
+    def __init__(self, store, feed, ha, safety, runtime_settings, clock=time.time) -> None:
+        self.store, self.feed, self.ha, self.safety = store, feed, ha, safety
         self.settings = runtime_settings
         self.clock = clock
-        self.board = Board(store, feed, clock)
-        self.ownership = Ownership(agents, ha)
-        self.rt = self.actuator = self.gate = self.review = self.manager = self.unusual = None
+        self.ownership = Ownership(ha)
+        self.actuator = self.review = self.manager = self.unusual = None
         self.learner = None  # D38: core/learner.py
-        self._asks: dict[str, deque[float]] = {}
         self._requested: str | None = None  # last mode asked for, so shadow mode does not repeat it
         self._task: asyncio.Task | None = None
         self._evaluate: asyncio.Task | None = None
 
-    # --- the orchestrator as an agent of the actuator --------------------------------------
-    def agent_config(self, agent_id: str) -> AgentConfig | None:
-        """The orchestrator's own (pseudo) agent config: it may actuate the mode helper, nothing
-        else. Shadow unless the owner set `orchestrator_mode: live` (and the global mode is live).
-        The learner's (D38): its live targets, shadow unless `learner_mode: live`; it acts only where
-        the orchestrator owns the entity (the actuator's `delegates`)."""
+    # --- the actors the actuator knows ---------------------------------------------------------
+    def actor(self, agent_id: object) -> dict | None:
+        """The policy's view of an actor (`policy.decide` reads id, enabled, mode, tier_overrides,
+        limits; `entities` is its allowlist), or None: unknown ids are denied.
+
+        - `orchestrator`: the house mode helper; with the house manager on, also the switchable
+          devices `Manager.scope` lists (D27). Shadow unless `orchestrator_mode: live`.
+        - `learner` (D38/D39): the devices among the live targets of its fresh model, never a
+          helper. Shadow unless `learner_mode: live`. Only when a learner is configured.
+        The global mode must be live too; tiers, ownership and the kill switch apply to both."""
         if agent_id == LEARNER:
             if self.learner is None or not self.learner.configured:
                 return None
-            mode = "live" if getattr(self.settings, "learner_mode", "shadow") == "live" else "shadow"
-            return AgentConfig(
-                id=LEARNER, name="Learner", room="", mode=mode, entities=[MODE_ENTITY], entities_mode="only",
-                max_entities=1,
-            ).model_copy(update={"entities": self.learner.targets()})  # fmt: skip
-        if agent_id != ORCHESTRATOR:
+            live = getattr(self.settings, "learner_mode", "shadow") == "live"
+            # the link filters too (LearnerLink.targets); a helper never, whatever reaches here
+            entities = [e for e in self.learner.targets() if e.split(".", 1)[0] in LIVE_DOMAINS]
+        elif agent_id == ORCHESTRATOR:
+            live = getattr(self.settings, "orchestrator_mode", "shadow") == "live"
+            manager = self.manager is not None and self.manager.enabled
+            entities = sorted(self.manager.scope()) if manager else [MODE_ENTITY]
+        else:
             return None
-        mode = getattr(self.settings, "orchestrator_mode", "shadow")
-        config = AgentConfig(
-            id=ORCHESTRATOR, name="Orchestrator", room="", mode="live" if mode == "live" else "shadow",
-            entities=[MODE_ENTITY], entities_mode="only", max_entities=1,
-        )  # fmt: skip
-        if self.manager is None or not self.manager.enabled:
-            return config
-        # D27: with the house manager on, also the entities no room agent owns (switchable domains).
-        # model_copy skips the 25-entity cap meant for room prompts; policy still checks each call.
-        return config.model_copy(update={"entities": sorted(self.manager.scope())})
+        return {"id": agent_id, "enabled": True, "mode": "live" if live else "shadow", "tier_overrides": {},
+                "limits": {"max_actions_per_minute": ACTIONS_PER_MINUTE}, "entities": entities}  # fmt: skip
 
     # --- lifecycle ---------------------------------------------------------------------------
     async def start(self) -> None:
@@ -272,7 +151,6 @@ class Council:
 
     async def tick(self, now: datetime | None = None) -> None:
         now = now or clock.local()
-        self.board.prune()
         await self.evaluate_mode("time", now)
         if self.review is not None:
             self.review.maybe_first_look()
@@ -326,148 +204,18 @@ class Council:
         return action
 
     def on_state(self, entity_id: str, old: dict | None, new: dict | None) -> None:
-        """HA state listener: mode changes hand out tasks; people coming and going re-evaluate."""
+        """HA state listener: people coming and going re-evaluate the mode (`auto_house_mode`)."""
         old_state, new_state = (old or {}).get("state"), (new or {}).get("state")
         if old_state == new_state or new_state is None:
             return
         if entity_id == MODE_ENTITY:
             self._requested = None
-            if new_state in MODES:
-                self.mode_changed(old_state, new_state)
         elif entity_id.startswith("person.") and getattr(self.settings, "auto_house_mode", False):
             self.wake_fired("person")
             if self._evaluate is None or self._evaluate.done():
                 self._evaluate = asyncio.get_running_loop().create_task(
                     self.evaluate_mode(f"{entity_id} is {new_state}"), name="council-mode"
                 )
-
-    def mode_changed(self, old: str | None, new: str) -> list[str]:
-        self.wake_fired("house_mode")
-        self.board.post(ORCHESTRATOR, f"house mode is {new} (was {old or 'unknown'})", ttl_s=FACT_TTL_MAX_S)
-        task = MODE_TASKS.get(new)
-        if not task:
-            return []
-        return [
-            run for agent in self.agents.list() if agent.enabled and (run := self.assign_task(agent.id, task))
-        ]
-
-    # --- tasks down -------------------------------------------------------------------------
-    def assign_task(self, agent_id: str, text: str, asked_by: str | None = None) -> str | None:
-        """Wake a room agent with a task from the orchestrator. None when the agent cannot run."""
-        agent = self.agents.get(agent_id)
-        if agent is None or not agent.enabled or self.rt is None:
-            return None
-        origin = f" (asked by {asked_by})" if asked_by else ""
-        reason = f"Task from the orchestrator{origin}: {text}"
-        if self.gate is not None and not self.gate.allow_task(agent):
-            self.feed.add("council", f"{agent_id}: task not given, hourly wake cap", level="warning",
-                          agent_id=agent_id)  # fmt: skip
-            return None
-        try:
-            run_id = self.rt.wake(agent_id, source="task", reason=reason[:500])
-        except Exception as err:  # noqa: BLE001 - WakeRefused and friends: the task is not given
-            self.feed.add(
-                "council", f"{agent_id}: task not given ({err})", level="warning", agent_id=agent_id
-            )
-            return None
-        self.board.post(ORCHESTRATOR, text, kind="task", target=agent_id, run_id=run_id, ttl_s=3600)
-        return run_id
-
-    def task_done(self, agent_id: str, run_id: str, status: str, summary: str | None) -> None:
-        """The answer of a task run is the room's report on the board."""
-        text = summary or f"task ended: {status}"
-        try:
-            self.board.post(agent_id, text, kind="report", target=ORCHESTRATOR, run_id=run_id, ttl_s=2 * 3600)
-        except ValueError:
-            pass
-
-    # --- escalation up ----------------------------------------------------------------------
-    def ask(self, from_agent: str, target: str, question: str, run_id: str | None = None) -> dict:
-        """`ask_agent`: a room's question goes to the orchestrator, which forwards it as a task to
-        the agent asked for (or to the owner of an entity named in it). Bounded per hour."""
-        if not self._may_ask(from_agent):
-            return {"ok": False, "error": f"at most {ASKS_PER_HOUR} questions per hour; report it instead"}
-        recipient = self._recipient(target, question)
-        if recipient is None or recipient == from_agent:
-            known = [a.id for a in self.agents.list() if a.enabled and a.id != from_agent]
-            return {"ok": False, "error": f"unknown agent {target!r}; agents: {', '.join(known) or 'none'}"}
-        self._asks[from_agent].append(self.clock())
-        self.board.post(from_agent, question, kind="escalation", target=recipient, run_id=run_id, ttl_s=3600)
-        if recipient == ORCHESTRATOR:
-            return {"ok": True, "status": "escalated", "note": "the orchestrator and the owner will see it"}
-        if self.assign_task(recipient, question, asked_by=from_agent) is None:
-            return {"ok": False, "error": f"{recipient} cannot take a task right now; report it instead"}
-        note = "the answer is posted to the shared board; you will see it on a later wake"
-        return {"ok": True, "status": "forwarded", "to": recipient, "note": note}
-
-    def _may_ask(self, from_agent: str) -> bool:
-        """The hourly bound shared by `ask` and forwarded escalations (one budget per agent)."""
-        recent = self._asks.setdefault(from_agent, deque())
-        now = self.clock()
-        while recent and recent[0] <= now - 3600:
-            recent.popleft()
-        return len(recent) < ASKS_PER_HOUR
-
-    @staticmethod
-    def _entity_words(text: str):
-        for word in text.replace(",", " ").split():
-            yield word.strip(".?!:;()'\"")
-
-    def _recipient(self, target: object, question: str) -> str | None:
-        """The agent asked for; else the owner of an entity named in the question; else the
-        orchestrator itself when it was asked; else nobody."""
-        agent = self.agents.get(target) if isinstance(target, str) else None
-        if agent is not None and agent.enabled:
-            return agent.id
-        for word in self._entity_words(question):
-            if word in self.ha.states:
-                owner = self.ownership.owner_of(word)
-                if owner == ORCHESTRATOR or self.agents.get(owner) is not None:
-                    return owner
-        return ORCHESTRATOR if target == ORCHESTRATOR else None
-
-    def escalate(
-        self, agent_id: str, summary: str, run_id: str | None = None, source: str | None = None
-    ) -> dict:
-        """`report(severity=escalate)`: on the board for the orchestrator; forwarded as a task to
-        the owner of the first entity it names that belongs to another (enabled) room agent. Never
-        from a task, chat or replay run (depth 1), and within the hourly bound of `ask`."""
-        self.wake_fired("escalation")
-        recipient = self._escalation_owner(agent_id, summary)
-        if recipient is None:
-            note = "no other owner named"
-        elif source is None or source in NO_FORWARD_SOURCES:
-            note, recipient = f"not forwarded from a {source or 'unknown'} run", None
-        elif not self._may_ask(agent_id):
-            note, recipient = f"at most {ASKS_PER_HOUR} per hour", None
-        else:
-            self._asks[agent_id].append(self.clock())
-            note = ""
-        target = recipient or ORCHESTRATOR
-        self.board.post(agent_id, summary, kind="escalation", target=target, run_id=run_id, ttl_s=6 * 3600)
-        if recipient is None:
-            if self.manager is not None and self.manager.enabled:
-                if source in NO_FORWARD_SOURCES:  # depth 1: a task's answer must not wake the one who
-                    # asked again (stories 2026-11-15: manager → task → escalation → manager, all day)
-                    return {"status": "on_board", "note": f"for the house manager's next run ({note})"}
-                self.manager.on_escalation(agent_id, summary)
-                return {"status": "on_board", "note": f"for the house manager ({note})"}
-            return {"status": "on_board", "note": f"kept for the daily review ({note})"}
-        if self.assign_task(recipient, summary, asked_by=agent_id) is None:
-            self._asks[agent_id].pop()  # nothing was forwarded: the hourly slot is not used up
-            return {"status": "on_board", "note": f"{recipient} cannot take a task now; kept for the review"}
-        return {"status": "forwarded", "to": recipient}
-
-    def _escalation_owner(self, agent_id: str, text: str) -> str | None:
-        """The owner of the first entity named in `text` that belongs to another enabled room agent."""
-        for word in self._entity_words(text):
-            if word not in self.ha.states:
-                continue
-            owner = self.ownership.owner_of(word)
-            agent = self.agents.get(owner) if owner not in (ORCHESTRATOR, agent_id) else None
-            if agent is not None and agent.enabled:
-                return owner
-        return None
 
     # --- the orchestrator's wake rules ------------------------------------------------------
     def wake_fired(self, wake: str) -> None:
@@ -488,15 +236,6 @@ class Council:
             for wake, rule in WAKES
         ]
 
-    # --- prompt -----------------------------------------------------------------------------
-    def prompt_lines(self, agent_id: str) -> list[str]:
-        mode = self.mode
-        lines = [f"House mode: {mode or 'unknown'}"]
-        facts = self.board.lines(exclude=agent_id)
-        if facts:
-            lines += ["Neighbours (shared board):", *facts]
-        return lines
-
     def status(self) -> dict:
         return {
             "mode": self.mode,
@@ -505,8 +244,8 @@ class Council:
             "modes": list(MODES),
             "auto_house_mode": bool(getattr(self.settings, "auto_house_mode", False)),
             "orchestrator_mode": getattr(self.settings, "orchestrator_mode", "shadow"),
+            "learner_mode": getattr(self.settings, "learner_mode", "shadow"),
             "night_window": getattr(self.settings, "night_window", ""),
             "ownership": self.ownership.summary(),
-            "board": self.board.list(50),
             "orchestrator_wakes": self.wakes(),
         }

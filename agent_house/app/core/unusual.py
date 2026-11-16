@@ -30,8 +30,8 @@ def _ts(value) -> float | None:
 
 
 class Unusual:
-    def __init__(self, store, ha, rt) -> None:
-        self.store, self.ha, self.rt = store, ha, rt
+    def __init__(self, store, ha, inbox) -> None:
+        self.store, self.ha, self.inbox = store, ha, inbox
         self._told: set[tuple[str, str]] = set()
 
     def check(self, now: float | None = None) -> list[str]:
@@ -67,7 +67,7 @@ class Unusual:
                 f"{share:.0%} of the time (last {counts[1] // 60} h of such times). Nothing was switched."
             )
             try:
-                self.rt.inbox_add("house", None, "info", text[:500], entity_id=entity_id)
+                self.inbox.add("house", None, "info", text[:500], entity_id=entity_id)
             except Exception:  # noqa: BLE001 - a note must never stop the tick
                 log.exception("unusual-state note for %s failed", entity_id)
                 continue

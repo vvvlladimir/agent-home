@@ -1,20 +1,14 @@
 # jetson/
 
-Runs on the Jetson Orin Nano, **not** inside the add-on. Step-by-step for the owner:
-`docs/OWNER_CHECKLIST.md` → M2.
+Runs on the Jetson Orin Nano, **not** inside the add-on. Since 0.5.0 (D40) the Jetson serves no
+model: it is the learner (D38). Step-by-step for the owner: `docs/OWNER_CHECKLIST.md` → D38 learner.
 
 | File | What |
 |---|---|
-| `setup.sh` | power mode, clocks, swap, headless, packages, token, systemd units; `--check [--json]` changes nothing, `--dry-run` prints every command |
-| `build_llamacpp.sh` | native CUDA build of `llama-server` for sm_87 (`--dry-run`) |
-| `profiles/*.env`, `models.md` | one file per model profile; which models and why |
-| `run_llama_server.sh`, `llama-server.service` | the server's command line from the active profile (`--print-cmd`) |
-| `switch_profile.sh` | point `/var/lib/agent-house/active.env` at a profile and restart the server |
-| `metrics/server.py`, `agent-house-metrics.service` | tegrastats → `GET /metrics.json` (`contracts/schemas/jetson_metrics.schema.json`); `POST /profile/<name>` with the bearer token |
-| `bench/bench.py`, `bench/run_all.sh` | one report per profile → `owner-reports/bench/*.json` (`contracts/schemas/bench_report.schema.json`) |
-| `learner/server.py`, `learner/*.py`, `agent-house-learner.service` | D38: the learner — journal, nightly training, live suggestions, replay (`contracts/learner.openapi.yaml`); imports the add-on's `core/predict.py` |
-| `learner/setup_learner.sh` | uv + Python 3.12 venv, the unit, `--data` on the NVMe, `--stop-llm` (`--dry-run`) |
-| `bench/toolcall_eval.yaml` | link to the eval shared with the add-on (`agent_house/app/core/toolcall_eval.yaml`) |
+| `setup.sh` | power mode, packages, the token the add-on and the learner share; `--check [--json]` changes nothing, `--dry-run` prints every command |
+| `learner/setup_learner.sh` | uv + Python 3.12 venv, the unit, `--data` on the NVMe, `--stop-llm` disables the llama-server of an older install (`--dry-run`) |
+| `learner/server.py`, `learner/*.py`, `agent-house-learner.service` | the learner: journal, nightly training, live suggestions, replay (`contracts/learner.openapi.yaml`); imports the add-on's `core/predict.py` and `core/insights.py` |
 
-Tested in CI against a fake sysroot, the fake llama-server and the fake Jetson
-(`tests/unit/test_jetson_files.py`); nothing here has run on hardware yet [UNVERIFIED-ON-HW].
+Tested in CI against a fake sysroot and in-process (`tests/unit/test_jetson_files.py`,
+`tests/unit/test_learner.py`, `tests/integration/test_learner_loop.py`); nothing here has run on
+hardware yet [UNVERIFIED-ON-HW].

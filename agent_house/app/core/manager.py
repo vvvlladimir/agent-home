@@ -1,29 +1,26 @@
-"""The orchestrator as house manager (D27): looks after the house between the daily reviews.
+"""The orchestrator as house manager (D27, D40): looks after the house between the daily reviews.
 
 Wakes are deterministic and cheap; the model is only called when one of them finds work
 (CLAUDE.md: a prefilter decides whether any LLM is called):
 
-- an escalation that stayed on the board for the orchestrator (no room owner was named);
 - the sweep every `manager_sweep_min` minutes, and only if `anomalies()` finds something it has
-  not handed to the model yet: nobody home (or night) and lights / media / fans still on; room
-  runs that ended in error or escalated (not the answers to its own tasks); deployed automations
-  of ours whose precision or coverage fell below `metrics.WEAK`. A finding that stays as it was
-  is not sent again (in shadow the lights it asked about stay on); one that clears and comes back is;
+  not handed to the model yet: nobody home (or night) and lights / media / fans still on; a new
+  learner finding (a light controller the owner keeps correcting, D38); deployed automations of
+  ours whose precision or coverage fell below `metrics.WEAK`. A finding that stays as it was is not
+  sent again (in shadow the lights it asked about stay on); one that clears and comes back is;
 - the owner or a tester: `POST /api/manager/wake`.
 At most `manager_max_wakes_per_hour`, one run at a time, never with the kill switch engaged, and
 not while no model can answer (the cloud budget is spent): the owner is told once that day.
 
 What the manager may do, and through what (nothing reaches HA any other way):
-- `call_service` on entities it owns (no area, or an area without a room agent) → the actuator,
-  as agent `orchestrator`: policy (tiers, ownership, service allowlist), shadow unless
-  `orchestrator_mode: live` and the global mode is live, action log, trace;
-- `assign_task` to the room agent that owns an entity → `council.assign_task` (depth 1, hourly cap);
-  live only: in shadow a room could only record, so the manager reports what it would ask instead;
+- `call_service` on the switchable devices it owns (`owned`: with no room agents, D40, every
+  visible device of a switchable domain) → the actuator, as agent `orchestrator`: policy (tiers,
+  ownership, service allowlist), shadow unless `orchestrator_mode: live` and the global mode is
+  live, action log, trace;
 - `propose_automation`: a new automation, or a change to one of ours (`ha_id`) → a draft through
   `orchestrator.draft`: checked, and deployed only when the owner (or a tester) approves it;
 - `report` to the owner's inbox.
-It runs on the orchestrator's providers (the cloud model with `orchestrator_provider: openai` /
-`anthropic`), with the same redaction and daily budget as drafts.
+It runs on the orchestrator's cloud providers, with the same redaction and daily budget as drafts.
 """
 
 from __future__ import annotations
@@ -35,11 +32,10 @@ import re
 from collections import deque
 
 from . import clock
-from .agents import NEVER_OWNED, is_noise
 from .claims import false_claim
 from .council import MODE_ENTITY, ORCHESTRATOR
+from .entities import NEVER_OWNED, is_noise
 from .insights import ACT_DOMAINS
-from .llm import Priority
 from .metrics import is_weak
 from .orchestrator import MAX_TURNS, OrchestratorError, _Trace
 from .orchestrator import TOOLS as ORCH_TOOLS
@@ -50,50 +46,40 @@ log = logging.getLogger(__name__)
 STILL_ON = " and still on: "
 LEFT_ON = frozenset({"light", "media_player", "fan", "switch"})
 ON_STATES = frozenset({"on", "playing", "paused"})
-MAX_TASKS_PER_RUN = 3
 MAX_CALLS_PER_RUN = 6
 MAX_PROPOSALS_PER_RUN = 1
 TEXT_MAX = 500
-MAX_FAILED_REASONS = 3  # event wakes named per failed room agent in a sweep finding
 ENTITY_ID = re.compile(r"\b[a-z][a-z0-9_]*\.[a-z0-9_]+\b")
 OWNED_NOTE = (
-    "Owned: switchable devices that no room agent looks after (no area, or an area without a room "
-    "agent), so the house manager is the one that may act on them. Device settings and diagnostics "
-    "(entity_category config / diagnostic), hidden or disabled entities and network pairing "
-    "switches are never owned. The manager is {enabled}. Off: it is never woken by itself and switches "
-    "nothing; a manual wake still runs it once to look, give room agents tasks, propose drafts and "
-    "report to you. On: it is also woken by the sweep and may switch these, through the safety "
-    "policy, in {mode} mode (shadow: recorded, not done). Give a room "
-    "an agent, or set its area in Home Assistant, to hand an entity to that room."
+    "Owned: the switchable devices of the house (D40: there are no room agents), so the house "
+    "manager is the one that may act on them. Device settings and diagnostics (entity_category "
+    "config / diagnostic), hidden or disabled entities and network pairing switches are never owned. "
+    "The manager is {enabled}. Off: it is never woken by itself and switches nothing; a manual wake "
+    "still runs it once to look, propose drafts and report to you. On: it is also woken by the sweep "
+    "and may switch these, through the safety policy, in {mode} mode (shadow: recorded, not done)."
 )
 
 SHADOW_NOTE = (
-    "Shadow mode: you give no tasks to room agents (they could only record). Your call_service is "
-    "recorded, not done. For what a room should do, report it to the owner as what you would do, in "
-    "one report: never say it is done or waits for approval."
+    "Shadow mode: your call_service is recorded, not done. Report what you would do in one report: "
+    "never say it is done or waits for approval."
 )
 
-SYSTEM = """You are the house manager of Agent House, the orchestrator of a smart home. Room agents \
-(small local models) look after single rooms; you look after the whole house between the owner's \
-daily reviews. You are woken only when something needs attention; the reasons are listed.
+SYSTEM = """You are the house manager of Agent House, the orchestrator of a smart home. You look \
+after the whole house between the owner's daily reviews. You are woken only when something needs \
+attention; the reasons are listed.
 
 What you can do:
-- call_service on entities listed under "Yours" (no room agent owns them). Everything goes through \
-the safety policy; the result tells you if it ran, ran in shadow, waits for the owner or was denied.
-- assign_task to the room agent that owns an entity in its room ("Rooms"): one clear sentence.
+- call_service on entities listed under "Yours". Everything goes through the safety policy; the \
+result tells you if it ran, ran in shadow, waits for the owner or was denied.
 - propose_automation when something keeps happening: a new automation, or a change to one of ours \
 (give its ha_id). The owner reviews every proposal; nothing is deployed by you.
 - report to the owner when they must know or decide something.
 - find_entities to look entities up.
 The context lists what the deterministic check found. Each finding must be handled: act on what \
-is yours, assign_task to the room agent that owns the room, or report it to the owner when nobody \
-can act on it (for example lights on in a room without an agent while nobody is home). A room \
-agent that failed on an event ("woken by: …") never handled it: look at that entity now and handle \
-the event yourself, give the room a task, or report it. Never leave a finding unmentioned in your \
-final sentence.
+is yours, propose an automation, or report it to the owner when you cannot act on it. Never leave \
+a finding unmentioned in your final sentence.
 Rules: act only on what the data shows; never invent entity ids or states. Prefer the smallest \
-action. Do not repeat what a room agent is already doing. When done, answer with one short sentence \
-and no tool call."""
+action. When done, answer with one short sentence and no tool call."""
 
 TOOLS = [
     ORCH_TOOLS[0],  # find_entities
@@ -107,12 +93,6 @@ TOOLS = [
             "data": {"type": "object", "description": "service data, or {}"},
         },
         "required": ["domain", "service", "entity_id", "data"],
-    },
-    {
-        "name": "assign_task",
-        "description": "Give a room agent a task in its own room, in one sentence.",
-        "properties": {"agent_id": {"type": "string"}, "task": {"type": "string"}},
-        "required": ["agent_id", "task"],
     },
     {
         "name": "propose_automation",
@@ -134,10 +114,11 @@ TOOLS = [
 
 
 class Manager:
-    """Wiring (app factory): `orch`, `council`, `actuator`, `metrics` and the runtime settings."""
+    """Wiring (app factory): `orch`, `council`, `actuator`, `metrics`, `inbox` and the runtime settings."""
 
-    def __init__(self, orch, council, actuator, metrics, settings, now=None) -> None:
+    def __init__(self, orch, council, actuator, metrics, settings, inbox, now=None) -> None:
         self.orch, self.council, self.actuator, self.metrics = orch, council, actuator, metrics
+        self.inbox = inbox
         # house time (D32): the sweep interval, the hourly cap and "runs since" are wall-clock
         # meaning; on real time the polygon's lived days never reached a sweep (stories run 2026-11-14)
         self.settings, self.clock = settings, now or clock.time
@@ -161,7 +142,8 @@ class Manager:
 
     # --- scope: what the actuator lets the orchestrator touch ---------------------------------
     def owned(self) -> list[str]:
-        """Entities the manager may actuate: owned by the orchestrator, of a switchable domain."""
+        """Entities the manager may actuate: owned by the orchestrator (D40: every entity but the
+        pairing switches), of a switchable domain, visible, no setting, no device noise."""
         registry = self.ha.registry
         return [
             e for e in self.council.ownership.owned_by(ORCHESTRATOR)
@@ -175,7 +157,6 @@ class Manager:
 
     # --- deterministic prefilter -------------------------------------------------------------
     def anomalies(self) -> list[str]:
-        since = self._last_run or (self.clock() - 3600)
         out: list[str] = []
         mode = self.council.mode
         people = [s.get("state") for e, s in self.ha.states.items() if e.startswith("person.")]
@@ -190,25 +171,6 @@ class Manager:
             if left:
                 why = "nobody is home" if nobody else f"house mode is {mode}"
                 out.append(f"{why}{STILL_ON}{', '.join(left[:12])}")
-        # a task run that escalates is the answer to a task (ours, or a room's question): it is on
-        # the board already, and counting it would wake the manager about its own request again
-        rows = self.store.query(
-            "SELECT agent_id, status, wake_source, wake_reason FROM runs WHERE started>=? AND agent_id<>? "
-            "AND status IN ('error', 'escalated', 'timeout') "
-            "AND NOT (status='escalated' AND wake_source='task') ORDER BY started",
-            (since, ORCHESTRATOR),
-        )
-        failed: dict[tuple[str, str], list[str]] = {}
-        for r in rows:
-            failed.setdefault((r["agent_id"], r["status"]), []).append(
-                str(r["wake_reason"] or "") if r["wake_source"] == "event" else ""
-            )
-        for (agent_id, status), reasons in failed.items():
-            # what woke it, so the change is not lost with the run (stories 2026-11-15: a fridge
-            # losing power, the run timed out, and the sweep only said "1 run timeout")
-            woke = list(dict.fromkeys(r for r in reasons if r))[:MAX_FAILED_REASONS]
-            line = f"room agent {agent_id}: {len(reasons)} run(s) {status}"
-            out.append(line + (f", woken by: {' | '.join(w[:160] for w in woke)}" if woke else ""))
         insights = getattr(self.metrics, "insights", None)
         if insights is not None:  # D38: the learner found an automation the owner keeps correcting
             new = [f for f in insights.list("new") if f["kind"] == "timeout"]
@@ -233,11 +195,6 @@ class Manager:
         self.weak = [a for a in result["automations"] if is_weak(a)]
 
     # --- wakes --------------------------------------------------------------------------------
-    def on_escalation(self, agent_id: str, summary: str) -> None:
-        """An escalation stayed on the board for the orchestrator."""
-        if self.enabled:
-            self.request(f"escalation from {agent_id}: {summary}"[:TEXT_MAX])
-
     async def tick(self) -> None:
         """From the council loop: the sweep, when due and when the prefilter finds something."""
         every = float(getattr(self.settings, "manager_sweep_min", 60)) * 60
@@ -270,7 +227,7 @@ class Manager:
         """Why no model could answer a wake now, or None. Only the budget is known in advance."""
         state = self.orch.budget.today()
         if not state["exhausted"] or any(p.available for p in self.orch.providers("manage")):
-            return None  # a local model may still answer; other failures are the run's to record
+            return None  # other failures are the run's to record
         self.orch.budget_notice()
         spent, limit = state["spent_today_eur"], state["daily_limit_eur"]
         return f"the cloud budget for today is spent ({spent:.2f} of {limit:.2f} EUR)"
@@ -318,27 +275,20 @@ class Manager:
     # --- one run --------------------------------------------------------------------------------
     def context(self, reasons: list[str], found: list[str] | None = None) -> str:
         lines = [f"Woken because: {'; '.join(reasons)}"]
-        if found:  # a manual wake or an escalation still sees what the sweep would have
+        if found:  # a manual wake still sees what the sweep would have
             lines.append("Found by the deterministic check:")
             lines += [f"- {f}" for f in found]
         lines.append(self.orch.house_summary())
         people = {e: s.get("state") for e, s in self.ha.states.items() if e.startswith("person.")}
         if people:
             lines.append("People: " + ", ".join(f"{e} = {v}" for e, v in sorted(people.items())))
-        agents = [a for a in self.council.agents.list() if a.enabled]
-        if agents:
-            lines.append("Rooms (agent: room): " + ", ".join(f"{a.id}: {a.room}" for a in agents))
         mine = self.owned() if self.enabled else []
-        lines.append("Yours (no room agent owns them):")
+        lines.append("Yours (switchable devices of the house):")
         lines += [f"- {e} = {(self.ha.states.get(e) or {}).get('state')}" for e in mine[:40]] or [
-            "(none: the manager is off, you switch nothing; assign, propose or report)"
+            "(none: the manager is off, you switch nothing; propose or report)"
             if not self.enabled
             else "(none)"
         ]
-        board = [r for r in self.council.board.since(self.clock() - 6 * 3600) if r["kind"] != "fact"]
-        if board:
-            lines.append("Board (last 6 h):")
-            lines += [f"- {r['agent_id']} [{r['kind']}]: {r['text']}" for r in board[-12:]]
         deployed = self.orch.lifecycle.deployed()
         if deployed:
             lines.append("Our automations (ha_id: title):")
@@ -359,19 +309,17 @@ class Manager:
         self._last_run_id = trace.run_id
         shadow = self.shadow
         self.store.execute("UPDATE runs SET shadow=? WHERE id=?", (int(shadow), trace.run_id))
-        tools = [t for t in TOOLS if not (shadow and t["name"] == "assign_task")]
-        if shadow:  # no tasks: a room can only record, and its "could not" answers were noise
+        tools = TOOLS
+        if shadow:
             user += "\n" + SHADOW_NOTE
         trace.step("context", {"system": SYSTEM, "user": user})
         redactor = Redactor.for_home(self.ha)
         transcript: list[dict] = [{"role": "user", "text": user}]
-        used = {"call_service": 0, "assign_task": 0, "propose_automation": 0}
+        used = {"call_service": 0, "propose_automation": 0}
         final = ""
         try:
             for _ in range(MAX_TURNS):
-                turn = await self.orch.turn(
-                    SYSTEM, transcript, tools, Priority.BACKGROUND, redactor, "manage"
-                )
+                turn = await self.orch.turn(SYSTEM, transcript, tools, redactor, "manage")
                 trace.llm(turn)
                 if not turn.calls:
                     final = str(redactor.restore(turn.text)).strip()
@@ -416,8 +364,7 @@ class Manager:
                 self.orch.find_entities(str(args.get("query") or ""), str(args.get("area") or "") or None)
             )
         if name in used:
-            limit = {"call_service": MAX_CALLS_PER_RUN, "assign_task": MAX_TASKS_PER_RUN,
-                     "propose_automation": MAX_PROPOSALS_PER_RUN}[name]  # fmt: skip
+            limit = {"call_service": MAX_CALLS_PER_RUN, "propose_automation": MAX_PROPOSALS_PER_RUN}[name]
             if used[name] >= limit:
                 return answer(f"limit reached: at most {limit} {name} per run", True)
             used[name] += 1
@@ -431,14 +378,6 @@ class Manager:
             return answer(
                 {"verdict": action["verdict"], "reason": action["reason"]}, action["verdict"] == "denied"
             )
-        if name == "assign_task" and self.shadow:
-            return answer("shadow mode: no tasks are given; report what the room should do instead", True)
-        if name == "assign_task":
-            agent_id, text = str(args.get("agent_id") or ""), str(args.get("task") or "").strip()[:300]
-            if not text:
-                return answer("empty task", True)
-            run_id = self.council.assign_task(agent_id, text, asked_by=ORCHESTRATOR)
-            return answer({"given": bool(run_id), "run_id": run_id}, not run_id)
         if name == "propose_automation":
             return answer(await self._propose(args, trace))
         if name == "report":
@@ -461,7 +400,7 @@ class Manager:
                 "SELECT verdict FROM actions WHERE run_id=?", (trace.run_id,))]  # fmt: skip
             if why := false_claim(summary, verdicts):  # QA-007
                 return answer(f"not sent: {why}. Rewrite it: say what you would have done.", True)
-            self.orch.agents_rt.inbox_add(ORCHESTRATOR, trace.run_id, severity, summary)
+            self.inbox.add(ORCHESTRATOR, trace.run_id, severity, summary)
             return answer("in the owner's inbox")
         return answer(f"unknown tool {name}", True)
 
@@ -477,7 +416,7 @@ class Manager:
             try:
                 await self.orch.draft(
                     request, origin_agent=ORCHESTRATOR, run_id=trace.run_id, ha_id=ha_id,
-                    priority=Priority.BACKGROUND, task="undo" if ha_id else "draft",
+                    task="undo" if ha_id else "draft", source="poke",
                 )  # fmt: skip
             except Exception as err:  # noqa: BLE001 - OrchestratorError, LifecycleError
                 self.feed.add("proposal", f"manager: no draft ({err})"[:300], level="warning",

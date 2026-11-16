@@ -11,11 +11,11 @@
     POST /replay               contracts/schemas/learner_replay.schema.json
 
 API: contracts/learner.openapi.yaml. Every path but /healthz needs `Authorization: Bearer <token>`
-(the Jetson's token file, shared with the metrics endpoint). It never talks to Home Assistant.
+(the Jetson's token file, written by jetson/setup.sh). It never talks to Home Assistant.
 
-Runs from a checkout of the repository with the venv `jetson/setup.sh --learner` makes (Python ≥ 3.12,
-agent_house/requirements.txt + numpy + scikit-learn): it imports core/predict.py and core/insights.py from
-the add-on so both read the house the same way (like jetson/bench imports core/benchkit.py).
+Runs from a checkout of the repository with the venv `jetson/learner/setup_learner.sh` makes (Python ≥
+3.12, agent_house/requirements.txt + numpy + scikit-learn): it imports core/predict.py and core/insights.py
+from the add-on so both read the house the same way.
 
 Environment: AH_ETC (/etc/agent-house: the token), AH_LEARNER_DATA (/var/lib/agent-house/learner: the
 journal, the registry and the last model — put it on the NVMe), AH_LEARNER_HOST (0.0.0.0),
@@ -69,7 +69,14 @@ def _schema(name: str) -> jsonschema.Draft202012Validator:
 class Learner:
     """Everything the server does, without HTTP (tests drive it directly)."""
 
-    def __init__(self, data_dir: Path, train_at: str = "03:30", retention_days: float = 400.0) -> None:
+    def __init__(
+        self, data_dir: Path, train_at: str = "03:30", retention_days: float = 400.0, clock=time.time,
+        follow_time_zone: bool = True,
+    ) -> None:
+        """`clock`: seconds since the epoch; the polygon passes the add-on's house time (sim/days.py).
+        `follow_time_zone`: set the process's TZ to the house's; off in the simulator, where the
+        learner shares its process with the add-on and the house's own clock."""
+        self.clock, self.follow_time_zone = clock, follow_time_zone
         self.journal = Journal(data_dir / "journal.db")
         self.model_file = data_dir / "model.json"
         self.registry_file = data_dir / "registry.json"
@@ -102,6 +109,8 @@ class Learner:
     def _apply_time_zone(self) -> None:
         """Hours and weekdays mean the house's (core/predict.py reads local time)."""
         tz = (self.registry or {}).get("time_zone")
+        if not self.follow_time_zone:
+            return
         if isinstance(tz, str) and tz and os.environ.get("TZ") != tz and hasattr(time, "tzset"):
             os.environ["TZ"] = tz
             time.tzset()
@@ -135,7 +144,7 @@ class Learner:
     # --- output -----------------------------------------------------------------------------------
     def now(self, now: float | None = None, touched: set[str] | None = None) -> dict:
         """Suggestions worth asking or acting on (mode ≠ wait), for the models whose context changed."""
-        t = now or time.time()
+        t = now or self.clock()
         out = []
         with self.lock:
             for m in self.live:
@@ -168,7 +177,7 @@ class Learner:
     # --- training ---------------------------------------------------------------------------------
     def next_training(self, now: float | None = None) -> float:
         hour, minute = (int(x) for x in self.train_at.split(":"))
-        moment = datetime.fromtimestamp(now or time.time()).astimezone()
+        moment = datetime.fromtimestamp(now or self.clock()).astimezone()
         due = moment.replace(hour=hour, minute=minute, second=0, microsecond=0)
         if due <= moment:
             due += timedelta(days=1)
@@ -178,6 +187,7 @@ class Learner:
         """Synchronous; `start_training` runs it on a thread."""
         self.training.update(state="running", started=time.time(), error=None)
         try:
+            now = now or self.clock()
             self.journal.prune(self.retention_days, now)
             doc, live, lines = brain.train(self.journal, self.registry, now)
             with self.lock:
@@ -211,7 +221,7 @@ class Learner:
             self.start_training()
         while not stop.is_set():
             due = self.next_training()
-            if stop.wait(max(1.0, due - time.time())):
+            if stop.wait(max(1.0, due - self.clock())):
                 return
             self.start_training()
 

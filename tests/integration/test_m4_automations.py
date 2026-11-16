@@ -1,7 +1,7 @@
-"""M4 acceptance, through the ingress prefix against fake Home Assistant, fake llama-server and fake
-Anthropic: drafts never reach HA, approve deploys `agent_house_*` with versions and rollback, the
-orchestrator drafts locally or in the cloud (redacted, within budget), the kill switch halts it all,
-the owner's own automations are never touched."""
+"""M4 acceptance, through the ingress prefix against fake Home Assistant and fake Claude / OpenAI:
+drafts never reach HA, approve deploys `agent_house_*` with versions and rollback, the orchestrator
+drafts in the cloud (redacted, within budget; D40: no local model), the kill switch halts it all, the
+owner's own automations are never touched."""
 
 from __future__ import annotations
 
@@ -156,31 +156,24 @@ def test_blocked_drafts_and_the_kill_switch(base, ha_state):
     assert [p["id"] for p in listed] == [blocked["id"]]
 
 
-def test_the_local_model_drafts_and_fixes_its_draft(base, llm_sim, ha_state):
+def submit_step(yaml: str, title: str = "Lamp on motion") -> dict:
+    return {"tool_use": [{"name": "submit_automation", "input": {
+        "title": title, "rationale": "dark evenings", "expected_triggers": "motion", "yaml": yaml}}]}  # fmt: skip
+
+
+def test_the_orchestrator_drafts_and_fixes_its_draft(base, claude_sim, ha_state):
     bad = GOOD.replace("light.living_room_lamp", "lock.front_door")
-    submit = {
-        "name": "submit_automation",
-        "arguments": {
-            "title": "Lamp on motion",
-            "rationale": "dark evenings",
-            "expected_triggers": "motion",
-            "yaml": bad,
-        },
-    }
-    fixed = {"tool_calls": [{**submit, "arguments": {**submit["arguments"], "yaml": GOOD}}]}
-    llm_sim.script[:] = [{"tool_calls": [submit]}, fixed, {"text": "Submitted."}]
+    claude_sim.script[:] = [submit_step(bad), submit_step(GOOD), {"text": "Submitted."}]
     response = httpx.post(f"{base}/api/proposals", json={"request": "Turn the lamp on at motion", "room": "living_room"},
                           timeout=30)  # fmt: skip
     assert response.status_code == 201, response.text
     proposal = response.json()
     assert proposal["status"] == "draft" and proposal["title"] == "Lamp on motion"
-    first_prompt = llm_sim.requests[0]["body"] if "body" in llm_sim.requests[0] else llm_sim.requests[0]
-    assert "light.living_room_lamp" in str(first_prompt) and "light.kitchen" not in str(
-        first_prompt["messages"][1]
-    )
-    assert "lock.front_door" not in str(first_prompt["messages"][1]), "only the room's entities"
+    first_prompt = claude_sim.requests[0]["body"]["messages"][0]["content"]
+    assert "light.living_room_lamp" in first_prompt and "light.kitchen" not in first_prompt
+    assert "lock.front_door" not in first_prompt, "only the room's entities"
     run = httpx.get(f"{base}/api/runs/{proposal['run_id']}").json()
-    assert run["agent_id"] == "orchestrator" and run["provider"] == "local" and run["status"] == "ok"
+    assert run["agent_id"] == "orchestrator" and run["provider"] == "anthropic" and run["status"] == "ok"
     assert [s["data"]["status"] for s in run["trace"] if s["type"] == "tool"] == ["blocked", "draft"]
     assert ha_state.config_writes == []
 
@@ -229,25 +222,10 @@ def test_cloud_drafts_are_redacted_and_paid_from_the_budget(settings, cloud, ha_
         app.close()
 
 
-def test_auto_falls_back_to_the_cloud_when_the_local_model_fails(settings, cloud, llm_sim):
-    app = serve(settings, orchestrator_provider="auto", anthropic_api_key=cloud.sim.api_key,
-                anthropic_base_url=cloud.url)  # fmt: skip
-    try:
-        llm_sim.script[:] = [{"status": 500}] * 6
-        decline = {"tool_use": [{"name": "decline", "input": {"reason": "no lamp in that room"}}]}
-        cloud.sim.script[:] = [decline, decline]  # the first decline is sent back: "search first"
-        response = httpx.post(
-            f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60
-        )
-        assert response.status_code == 422 and "no lamp" in response.json()["detail"]
-        assert len(cloud.sim.requests) == 2
-    finally:
-        app.close()
-
-
 def test_status_and_contract(base):
     orchestrator = status(base)["orchestrator"]
-    assert orchestrator["provider"] == "auto" and orchestrator["effective"] == "local"
+    assert orchestrator["provider"] == "auto" and orchestrator["effective"] == "anthropic"
+    assert orchestrator["choices"] == {"anthropic": True, "openai": False}
     assert orchestrator["budget"]["daily_limit_eur"] == 1.0 and orchestrator["budget"]["exhausted"] is False
     paths = [
         p
@@ -307,32 +285,58 @@ def test_openai_drafts_through_the_responses_api_redacted_and_budgeted(settings,
         app.close()
 
 
-def test_auto_skips_clouds_without_a_key_and_uses_openai(settings, openai_cloud, llm_sim):
+def test_auto_falls_back_from_claude_to_openai(settings, openai_cloud, claude_sim):
     app = serve(settings, orchestrator_provider="auto", openai_api_key=openai_cloud.sim.api_key,
                 openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
     try:
-        llm_sim.script[:] = [{"status": 500}] * 6
+        claude_sim.script[:] = [{"status": 529}] * 6
         decline = {"function_calls": [{"name": "decline", "arguments": {"reason": "no attic"}}]}
         openai_cloud.sim.script[:] = [decline, decline]
         response = httpx.post(
             f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60
         )
         assert response.status_code == 422 and "no attic" in response.json()["detail"]
+        assert len(claude_sim.requests) == 2 and len(openai_cloud.sim.requests) == 2
     finally:
         app.close()
 
 
-def test_the_orchestrator_searches_before_it_may_decline(base, llm_sim):
+def test_auto_skips_clouds_without_a_key_and_local_reads_as_auto(settings, openai_cloud, claude_sim):
+    app = serve(settings, orchestrator_provider="local", anthropic_api_key="",
+                openai_api_key=openai_cloud.sim.api_key, openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
+    try:
+        orchestrator = status(app.base)["orchestrator"]
+        assert orchestrator["provider"] == "auto" and orchestrator["effective"] == "openai"
+        openai_cloud.sim.script[:] = [{"function_calls": [{"name": "decline", "arguments": {"reason": "x"}}]}] * 2
+        response = httpx.post(f"{app.base}/api/proposals", json={"request": "lamp on in the attic"}, timeout=60)
+        assert response.status_code == 422 and claude_sim.requests == []
+    finally:
+        app.close()
+
+
+def test_without_any_key_drafts_are_unavailable_not_sent_anywhere(settings, claude_sim):
+    app = serve(settings, anthropic_api_key="")
+    try:
+        assert status(app.base)["orchestrator"]["effective"] == "none"
+        response = httpx.post(f"{app.base}/api/proposals", json={"request": "lamp on"}, timeout=30)
+        assert response.status_code == 503 and response.json()["error"] == "unavailable"
+        assert claude_sim.requests == []
+    finally:
+        app.close()
+
+
+def test_the_orchestrator_searches_before_it_may_decline(base, claude_sim):
     """Owner, 2026-11-13: "lamp at my desk" was declined twice ("no sensor for sitting at the desk")
     because every binary_sensor was T3 and sorted behind 80 devices; the radar zones were never shown."""
-    decline = {"tool_calls": [{"name": "decline", "arguments": {"reason": "no desk sensor"}}]}
-    search = {"tool_calls": [{"name": "find_entities", "arguments": {"query": "motion", "area": ""}}]}
-    llm_sim.script[:] = [decline, search, decline]
+    decline = {"tool_use": [{"name": "decline", "input": {"reason": "no desk sensor"}}]}
+    search = {"tool_use": [{"name": "find_entities", "input": {"query": "motion", "area": ""}}]}
+    claude_sim.script[:] = [decline, search, decline]
     response = httpx.post(
         f"{base}/api/proposals", json={"request": "Лампа над столом, когда я за столом"}, timeout=30
     )
     assert response.status_code == 422
-    tools = [m["content"] for m in llm_sim.requests[2]["messages"] if m.get("role") == "tool"]
+    tools = [b["content"] for m in claude_sim.requests[2]["body"]["messages"] if isinstance(m["content"], list)
+             for b in m["content"] if b.get("type") == "tool_result"]  # fmt: skip
     assert "Search with find_entities first" in tools[0], "the first decline is sent back"
     assert "binary_sensor.living_room_motion" in tools[1], "the search finds sensors"
     run = httpx.get(f"{base}/api/runs", params={"agent": "orchestrator"}).json()[0]
@@ -340,64 +344,63 @@ def test_the_orchestrator_searches_before_it_may_decline(base, llm_sim):
     assert [s["data"]["name"] for s in trace if s["type"] == "tool"] == ["find_entities"]
 
 
-def test_the_owner_picks_the_model_revises_and_asks_what_it_does(settings, cloud, llm_sim):
-    """The setting says `auto` (local first); the owner picks Claude for one request, then asks the
-    local model to change the draft in words (edited in place), then asks what it does."""
-    app = serve(settings, orchestrator_provider="auto", anthropic_api_key=cloud.sim.api_key,
-                anthropic_base_url=cloud.url)  # fmt: skip
+def test_the_owner_picks_the_model_revises_and_asks_what_it_does(settings, openai_cloud, claude_sim):
+    """The setting says `auto` (Claude first); the owner picks OpenAI for one request, then asks
+    Claude to change the draft in words (edited in place), then asks what it does."""
+    app = serve(settings, orchestrator_provider="auto", openai_api_key=openai_cloud.sim.api_key,
+                openai_base_url=openai_cloud.url + "/v1")  # fmt: skip
     try:
         orch = status(app.base)["orchestrator"]
-        assert orch["choices"] == {"local": True, "anthropic": True, "openai": False}
-        submit = {"name": "submit_automation", "input": {"title": "Lamp on motion", "rationale": "r",
-                                                          "expected_triggers": "motion", "yaml": GOOD}}  # fmt: skip
-        cloud.sim.script[:] = [{"tool_use": [submit]}, {"text": "Done."}]
-        llm_sim.requests.clear()
-        created = httpx.post(f"{app.base}/api/proposals", json={"request": "lamp at motion", "provider": "anthropic"},
+        assert orch["choices"] == {"anthropic": True, "openai": True}
+        submit = {"name": "submit_automation", "arguments": {"title": "Lamp on motion", "rationale": "r",
+                                                             "expected_triggers": "motion", "yaml": GOOD}}  # fmt: skip
+        openai_cloud.sim.script[:] = [{"function_calls": [submit]}, {"text": "Done."}]
+        created = httpx.post(f"{app.base}/api/proposals", json={"request": "lamp at motion", "provider": "openai"},
                              timeout=30)  # fmt: skip
         assert created.status_code == 201, created.text
         proposal = created.json()
-        assert httpx.get(f"{app.base}/api/runs/{proposal['run_id']}").json()["provider"] == "anthropic"
-        assert llm_sim.requests == [], "the owner's pick, not the setting's local-first"
+        assert httpx.get(f"{app.base}/api/runs/{proposal['run_id']}").json()["provider"] == "openai"
+        assert claude_sim.requests == [], "the owner's pick, not the setting's Claude-first"
 
         night = GOOD.replace("actions:", "conditions:\n  - condition: sun\n    after: sunset\nactions:")
-        llm_sim.script[:] = [
-            {"tool_calls": [{"name": "submit_automation", "arguments": {**submit["input"], "yaml": night}}]},
+        claude_sim.script[:] = [
+            {"tool_use": [{"name": "submit_automation", "input": {**submit["arguments"], "yaml": night}}]},
             {"text": "Changed."},
         ]
         revised = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/revise",
-                             json={"instruction": "only after sunset", "provider": "local"}, timeout=30)  # fmt: skip
+                             json={"instruction": "only after sunset", "provider": "anthropic"}, timeout=30)  # fmt: skip
         assert revised.status_code == 200, revised.text
         validate(revised.json(), "/api/proposals/{proposal_id}/revise", "post")
         assert revised.json()["id"] == proposal["id"] and "sunset" in revised.json()["yaml"]
-        asked = str(llm_sim.requests[0])
+        asked = str(claude_sim.requests[0]["body"])
         assert "only after sunset" in asked and "light.living_room_lamp" in asked, "the current YAML is sent"
 
-        before = len(llm_sim.requests)
+        before = len(claude_sim.requests)
         nothing = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
                              json={"language": "ru", "cached_only": True}, timeout=30).json()  # fmt: skip
-        assert nothing["text"] == "" and len(llm_sim.requests) == before, "no model call"
-        llm_sim.requests.clear()
-        llm_sim.script[:] = [{"text": "When motion is seen after sunset, the lamp goes on."}]
+        assert nothing["text"] == "" and len(claude_sim.requests) == before, "no model call"
+        claude_sim.requests.clear()
+        claude_sim.script[:] = [{"text": "When motion is seen after sunset, the lamp goes on."}]
         explained = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
-                               json={"provider": "local", "language": "ru"}, timeout=30)  # fmt: skip
+                               json={"provider": "anthropic", "language": "ru"}, timeout=30)  # fmt: skip
         assert explained.status_code == 200, explained.text
         validate(explained.json(), "/api/proposals/{proposal_id}/explain", "post")
         assert explained.json()["text"].startswith("When motion") and not explained.json()["cached"]
         again = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/explain",
-                           json={"provider": "local", "language": "ru"}, timeout=30).json()  # fmt: skip
+                           json={"provider": "anthropic", "language": "ru"}, timeout=30).json()  # fmt: skip
         assert again["cached"] and again["text"] == explained.json()["text"], "not paid twice"
-        assert len(llm_sim.requests) == 1
-        assert "Russian" in str(llm_sim.requests[-1])
+        assert len(claude_sim.requests) == 1
+        assert "Russian" in str(claude_sim.requests[-1]["body"])
 
         rejected = httpx.post(f"{app.base}/api/proposals/{proposal['id']}/reject", json={}).json()
-        llm_sim.script[:] = [
-            {"tool_calls": [{"name": "submit_automation", "arguments": {**submit["input"], "yaml": GOOD}}]},
+        claude_sim.script[:] = [
+            {"tool_use": [{"name": "submit_automation", "input": {**submit["arguments"], "yaml": GOOD}}]},
             {"text": "ok"},
         ]
         fresh = httpx.post(f"{app.base}/api/proposals/{rejected['id']}/revise",
                            json={"instruction": "any time again", "provider": "local"}, timeout=30).json()  # fmt: skip
         assert fresh["id"] != rejected["id"] and fresh["status"] == "draft", (
-            "a rejected one starts a new draft"
+            "a rejected one starts a new draft; `local` (before 0.5.0) means the setting"
         )
     finally:
         app.close()

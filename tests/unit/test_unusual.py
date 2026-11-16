@@ -14,7 +14,7 @@ class Inbox:
     def __init__(self) -> None:
         self.notes: list[tuple] = []
 
-    def inbox_add(self, agent_id, run_id, severity, summary, dry=False, entity_id=None) -> None:
+    def add(self, agent_id, run_id, severity, summary, entity_id=None) -> None:
         self.notes.append((agent_id, severity, summary, entity_id))
 
 

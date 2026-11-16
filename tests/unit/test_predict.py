@@ -201,3 +201,27 @@ def test_the_owners_own_house_mode_switches_are_a_habit_too():
         {"action": "input_select.select_option", "target": {"entity_id": mode}, "data": {"option": "away"}}
     ]
     assert predict.acted_states(to_yaml(away["yaml_config"])) == {(mode, "away")}
+
+
+def test_event_relevance_counts_what_the_owner_did_after_an_event():
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from app.core import predict
+    from app.core.insights import Change
+    from app.ha.registry import Registry
+
+    motion = "binary_sensor.room_motion"
+    reg = Registry.build([{"area_id": "room"}], [], [{"entity_id": e, "area_id": "room"}
+                         for e in (motion, "light.room_lamp", "binary_sensor.room_door")])  # fmt: skip
+    ha = SimpleNamespace(registry=reg, states={})
+    t0 = datetime(2026, 11, 2).timestamp()
+    ch = []
+    for i in range(30):
+        t = t0 + i * 3600
+        ch.append(Change(t, motion, "on", "physical"))
+        ch.append(Change(t + 5, "binary_sensor.room_door", "on", "physical"))
+        if i % 3 == 0:
+            ch.append(Change(t + 60, "light.room_lamp", "on" if i % 2 else "off", "user"))
+    rel = predict.event_relevance(sorted(ch, key=lambda c: c.ts), ha)
+    assert rel[f"{motion}|on"] == [10, 30] and "light.room_lamp|on" not in rel

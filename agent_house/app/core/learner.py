@@ -7,13 +7,14 @@
   minute (the last value). A bounded buffer while the Jetson is away; what fell out of it, and the
   history before the first contact, is filled from HA's logbook (day by day, `BACKFILL_DAYS` at most).
 - The registry (areas, entities, our automations, the tier policy) on start and when it changes.
-- Back: the house model every `MODEL_S` (kv `learner_model`); its longer-history tables replace the
-  add-on's own for the event gate and the unusual-state notes while it is fresh; a light controller's
-  timeout that the owner's corrections ask to change becomes a finding.
-- Live suggestions: an `act` the learner has earned goes through the actuator as agent `learner`, like
-  any agent action: policy, tiers, ownership (the learner may act only where the orchestrator owns the
-  entity, i.e. no room agent does), the kill switch, and shadow unless `learner_mode: live` (and the
-  global mode is live). Once per device and state per stretch, at most once an hour.
+- Back: the house model every `MODEL_S` (kv `learner_model`); its habits replace the add-on's own
+  14-day scan and its longer-history tables the unusual-state notes while it is fresh; a light
+  controller's timeout that the owner's corrections ask to change becomes a finding.
+- Live suggestions: an `act` the learner has earned goes through the actuator as agent `learner`,
+  like every action: policy, tiers, ownership (the learner acts as the orchestrator's delegate), the
+  kill switch, and shadow unless `learner_mode: live` (and the global mode is live). Only devices of a
+  fresh model's live targets, never a helper (D39). Once per device and state per stretch, at most
+  once an hour.
 The learner holds no HA token; nothing here writes to HA except through the actuator.
 """
 
@@ -106,6 +107,7 @@ class LearnerLink:
         )
         self._task: asyncio.Task | None = None
         self._backfill_task: asyncio.Task | None = None
+        self._pushing = asyncio.Lock()
 
     @property
     def configured(self) -> bool:
@@ -275,6 +277,10 @@ class LearnerLink:
         return response.json()
 
     async def push(self) -> None:
+        async with self._pushing:  # one batch in flight: two pushes would pop the same events twice
+            await self._push()
+
+    async def _push(self) -> None:
         if not self.buffer:
             return
         batch = list(islice(self.buffer, BATCH))
@@ -436,7 +442,6 @@ class LearnerLink:
         self.store.set("learner_model", model)
         if clock.time() - float(model.get("trained_at") or 0) <= FRESH_S:
             self.store.set("learner_usual_states", model.get("usual_states") or {})
-            self.store.set("learner_event_relevance", model.get("event_relevance") or {})
         self._timeout_findings(model)
 
     def model(self) -> dict | None:
@@ -449,9 +454,8 @@ class LearnerLink:
     def _expire_tables(self, now: float) -> None:
         model = self.store.get("learner_model")
         if model and now - float(model.get("trained_at") or 0) > FRESH_S:
-            for key in ("learner_usual_states", "learner_event_relevance"):
-                if self.store.get(key):
-                    self.store.set(key, {})
+            if self.store.get("learner_usual_states"):
+                self.store.set("learner_usual_states", {})
 
     def habits(self) -> tuple[list[dict], dict] | None:
         """The D35 predictions over the learner's longer history, for the history scan."""

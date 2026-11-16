@@ -1,4 +1,5 @@
-"""The single actuation path: policy → action log → HA, approvals with expiry, kill switch."""
+"""The single actuation path: policy → action log → HA, approvals with expiry, kill switch. The actor
+here is the orchestrator as house manager (D40); tests/unit/test_learner_link.py covers the learner."""
 
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ def stack(tmp_path):
 
 
 async def request(stack, entity="light.room_ceiling", service="turn_on", data=None, **kw):
-    return await stack.actuator.request("room", entity.split(".")[0], service, entity, data, **kw)
+    return await stack.actuator.request("orchestrator", entity.split(".")[0], service, entity, data, **kw)
 
 
 async def test_shadow_is_the_default_and_nothing_reaches_ha(stack):
@@ -28,9 +29,9 @@ async def test_shadow_is_the_default_and_nothing_reaches_ha(stack):
     assert stack.actuator.list()[0]["id"] == action["id"]
 
 
-async def test_live_needs_the_global_and_the_agent_switch(stack):
+async def test_live_needs_the_global_and_the_actor_switch(stack):
     stack.safety.set_mode("live")
-    assert (await request(stack))["verdict"] == "shadow", "the agent itself is still in shadow mode"
+    assert (await request(stack))["verdict"] == "shadow", "orchestrator_mode is still shadow"
     go_live(stack)
     action = await request(stack, data={"brightness_pct": 30})
     assert action["verdict"] == "executed" and action["tier"] == "T0"
@@ -46,10 +47,11 @@ async def test_live_needs_the_global_and_the_agent_switch(stack):
 
 async def test_t3_outside_scope_and_unknown_service_never_reach_ha(stack):
     go_live(stack)
-    stack.ha.add("light.other_room", "off", area="elsewhere")
+    stack.ha.add("light.ghost_room", "off", area="elsewhere")
+    stack.ha.registry.entity_meta["light.ghost_room"] = {"hidden_by": "user"}
     for entity, service in (
         ("lock.room_door", "unlock"),
-        ("light.other_room", "turn_on"),
+        ("light.ghost_room", "turn_on"),  # hidden: not in the manager's scope
         ("light.room_ceiling", "flash_everything"),
         ("binary_sensor.room_motion", "turn_on"),
     ):
@@ -62,10 +64,7 @@ async def test_t3_outside_scope_and_unknown_service_never_reach_ha(stack):
 
 async def test_t1_acts_and_notifies(stack):
     go_live(stack)
-    # a scene can touch any entity, so it needs approval unless the owner lowers it explicitly
-    assert (await request(stack, "scene.room_movie"))["verdict"] == "pending"
-    stack.safety.save_policy({"domain_tiers": {"scene": "T1"}})
-    action = await request(stack, "scene.room_movie")
+    action = await request(stack, "humidifier.room")
     assert action["verdict"] == "executed" and action["tier"] == "T1"
     item = stack.feed.recent(kind="action")[0]
     assert item["level"] == "warning", "T1 = act + notify"
@@ -117,7 +116,7 @@ async def test_approval_reruns_the_policy(stack):
     stack.safety.set_mode("shadow")
     assert (await stack.actuator.decide_approval(second["id"], True))["verdict"] == "shadow"
     stack.safety.set_mode("live")
-    stack.agents.delete("room")
+    stack.settings.manager_enabled = False  # the device leaves the manager's scope meanwhile
     assert (await stack.actuator.decide_approval(third["id"], True))["verdict"] == "denied"
     assert stack.ha.calls == []
 
@@ -161,7 +160,7 @@ async def test_rate_limit_per_entity(stack):
 
 async def test_protected_kill_switch_helper(tmp_path):
     stack = make_stack(tmp_path)
-    stack.ha.add("input_boolean.agent_house_kill", "off", area="room")
+    stack.ha.add("input_boolean.agent_house_kill", "off", area="room")  # a helper the manager could own
     stack.actuator.protected = lambda: {"input_boolean.agent_house_kill"}
     go_live(stack)
     action = await request(stack, "input_boolean.agent_house_kill", "turn_off")

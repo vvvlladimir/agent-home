@@ -1,4 +1,5 @@
-"""Global safety state: the kill switch and the global mode, persisted in the key/value store.
+"""Global safety state: the kill switch and the global mode, persisted in the key/value store, and
+the owner's policy file (`PUT api/policy`, validated against contracts/schemas/policy.schema.json).
 
 Read fail-closed: anything that is not exactly "released" means engaged, anything that is not
 exactly "live" means shadow.
@@ -8,8 +9,10 @@ from __future__ import annotations
 
 from datetime import UTC
 from pathlib import Path
+from typing import Annotated, Literal
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, field_validator
 
 from . import clock
 from .policy import effective_policy
@@ -95,3 +98,59 @@ class Safety:
         self._policy = None
         self.feed.add("system", "Policy changed", level="warning")
         return self.policy
+
+
+# --- the policy file as the API takes it -------------------------------------------------------
+EntityId = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]+\.[a-z0-9_]+$")]
+Tier = Literal["T0", "T1", "T2", "T3"]
+
+
+class ConfigError(ValueError):
+    pass
+
+
+class PolicyModel(BaseModel):
+    """Mirror of contracts/schemas/policy.schema.json for `PUT api/policy`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    domain_tiers: dict[Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]+$")], Tier] | None = None
+    entity_tiers: dict[str, Tier] | None = None
+    t3_whitelist: list[EntityId] | None = None
+    allowed_services: dict[str, list[Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]+$")]]] | None = (
+        None
+    )
+    rate_limits: dict[Literal["per_entity_per_minute", "global_per_minute"], int] | None = None
+    approval_ttl_s: int | None = Field(default=None, ge=30)
+
+    @field_validator("rate_limits")
+    @classmethod
+    def _positive(cls, value: dict | None) -> dict | None:
+        if value and any(v < 1 for v in value.values()):
+            raise ValueError("rate limits must be at least 1")
+        return value
+
+
+T3_WHITELIST_HINT = (
+    "t3_whitelist is an add-on option, read-only here: set it in Home Assistant under Settings → Apps "
+    "(Add-ons before HA 2026.2) → Agent House → Configuration"
+)
+
+
+def check_whitelist(payload: object, current: list[str]) -> None:
+    """A policy body may carry `t3_whitelist` only unchanged (as GET returned it): lifting a T3 is
+    an add-on option, never something the API or a model can do (QA-004)."""
+    if isinstance(payload, dict) and "t3_whitelist" in payload:
+        given = payload["t3_whitelist"]
+        if not isinstance(given, list) or sorted({str(e) for e in given}) != sorted(current):
+            raise ConfigError(T3_WHITELIST_HINT)
+
+
+def parse_policy(payload: object) -> dict:
+    if not isinstance(payload, dict):
+        raise ConfigError("the policy must be an object")
+    try:
+        return PolicyModel(**payload).model_dump(mode="json", exclude_none=True)
+    except ValidationError as err:
+        first = err.errors()[0]
+        raise ConfigError(f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}") from None

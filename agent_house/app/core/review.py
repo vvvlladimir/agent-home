@@ -1,10 +1,10 @@
 """Daily house review (M5): once a day the orchestrator reads what happened and proposes.
 
 1. History scan (core/insights.py, deterministic): habits, undone automations, conflicts.
-2. A digest of the last 24 h from local data: runs and escalations per agent, the owner's inbox,
-   the board's escalations and reports, open proposals, the scan's findings.
-3. The digest is summarised for the owner by the local model (`routine`); without a model the
-   digest itself is the review. It goes to the inbox as a report of agent `orchestrator`.
+2. A digest of the last 24 h from local data: the orchestrator's runs, the owner's inbox, the
+   actions (house manager, learner, house mode), open proposals, the scan's findings.
+3. The digest is summarised for the owner by a cloud model (`routine`); without one the digest
+   itself is the review. It goes to the inbox as a report of agent `orchestrator`.
 4. New findings become proposals, at most `MAX_DRAFTS` per review, conflicts first, then undone
    automations, then habits: one proposal per finding, so never two drafts for one conflict.
    One proposal per entity: a finding is skipped (it stays `new` for a later review) when an
@@ -33,7 +33,6 @@ from datetime import datetime, timedelta
 from . import clock
 from .insights import _targets
 from .lifecycle import action_entities
-from .llm import Priority
 from .metrics import is_weak
 from .orchestrator import OrchestratorError
 
@@ -49,9 +48,9 @@ LATE_LIMIT = timedelta(hours=2)  # a review missed by more (add-on was down) wai
 
 
 class Review:
-    def __init__(self, store, feed, orchestrator, insights, council, agents_rt, settings, lifecycle) -> None:
+    def __init__(self, store, feed, orchestrator, insights, council, inbox, settings, lifecycle) -> None:
         self.store, self.feed, self.orch, self.insights = store, feed, orchestrator, insights
-        self.council, self.rt, self.settings, self.lifecycle = council, agents_rt, settings, lifecycle
+        self.council, self.inbox, self.settings, self.lifecycle = council, inbox, settings, lifecycle
         self.running = False
         self._first_tried = 0.0
         self.metrics = None  # core/metrics.py, wired by the app factory
@@ -99,7 +98,7 @@ class Review:
             text += " Proposed: " + "; ".join(d["title"] for d in drafted) + ". See Proposals."
         else:
             text += " Nothing regular enough to propose yet; the daily review looks again every day."
-        self.rt.inbox_add("orchestrator", None, "info", text[:2000])
+        self.inbox.add("orchestrator", None, "info", text[:2000])
         return {"drafted": drafted, "habits": funnel}
 
     async def maybe_run(self, now: datetime) -> dict | None:
@@ -136,7 +135,7 @@ class Review:
             for item in scan.get("feedback") or []:
                 if item.get("flagged") and any(f.get("suggest_rollback") for f in self._undo_findings(item)):
                     text += f"\nConsider rolling back {item['ha_id']}: undone {int(item['rate'] * 100)}%."
-            self.rt.inbox_add("orchestrator", run_id, "info", f"Daily review: {text}"[:2000])
+            self.inbox.add("orchestrator", run_id, "info", f"Daily review: {text}"[:2000])
             result = {
                 "summary": text,
                 "run_id": run_id,
@@ -189,22 +188,20 @@ class Review:
         if per_agent:
             lines.append("Runs: " + "; ".join(f"{a}: {', '.join(v)}" for a, v in per_agent.items()))
         inbox = self.store.query(
-            "SELECT agent_id, severity, summary FROM inbox WHERE ts>=? AND agent_id<>'orchestrator' "
+            "SELECT agent_id, severity, summary FROM inbox WHERE ts>=? AND summary NOT LIKE 'Daily review:%' "
             "ORDER BY id DESC LIMIT 12",
             (since,),
         )
         if inbox:
-            lines.append("Agent reports:")
+            lines.append("Inbox:")
             lines += [f"- {r['agent_id']} [{r['severity']}]: {r['summary'][:160]}" for r in inbox]
-        board = [r for r in self.council.board.since(since) if r["kind"] in ("escalation", "report")]
-        if board:
-            lines.append("Board (escalations and task reports):")
-            lines += [f"- {r['agent_id']} [{r['kind']}]: {r['text']}" for r in board[-12:]]
         actions = self.store.query(
-            "SELECT verdict, COUNT(*) AS n FROM actions WHERE ts>=? GROUP BY verdict", (since,)
+            "SELECT agent_id, verdict, COUNT(*) AS n FROM actions WHERE ts>=? GROUP BY agent_id, verdict "
+            "ORDER BY agent_id",
+            (since,),
         )
         if actions:
-            lines.append("Actions: " + ", ".join(f"{r['n']} {r['verdict']}" for r in actions))
+            lines.append("Actions: " + ", ".join(f"{r['agent_id']} {r['n']} {r['verdict']}" for r in actions))
         lines.append(f"Proposals waiting for the owner: {self.lifecycle.count_open()}")
         for item in scan.get("feedback") or []:
             lines.append(
@@ -283,7 +280,7 @@ class Review:
             else:
                 proposal = await self.orch.draft(
                     finding["request"], room=finding["room"] if finding["kind"] == "habit" else None,
-                    origin_agent="orchestrator", ha_id=ha_id, priority=Priority.BACKGROUND,
+                    origin_agent="orchestrator", ha_id=ha_id, source="poke",
                     task=finding["kind"], supersedes=supersedes or None,
                 )  # fmt: skip
         except Exception as err:  # noqa: BLE001 - OrchestratorError, LifecycleError, …

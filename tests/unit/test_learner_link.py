@@ -1,7 +1,8 @@
 """The add-on's link to the Jetson learner (D38, core/learner.py): causes from the HA context, numeric
 sensors once a minute, the registry document, and — the safety part — what a live suggestion may do:
-only through the actuator, only where the orchestrator owns the entity, shadow unless learner_mode is
-live, never with the kill switch, once per stretch."""
+only through the actuator, as the orchestrator's delegate, only on devices of a fresh model (never a
+helper, never T3, never a pairing switch), shadow unless learner_mode is live, never with the kill
+switch, once per stretch."""
 
 from __future__ import annotations
 
@@ -15,8 +16,9 @@ from tests.helpers import StubHA, make_stack
 from tests.unit.test_learner import schema
 
 ENTITIES = [
-    {"entity_id": "light.room_lamp", "state": "off"},  # area "room": the room agent owns it
-    {"entity_id": "light.study_lamp", "state": "off"},  # area "study": no agent, the orchestrator owns it
+    {"entity_id": "light.room_lamp", "state": "off"},  # area "room": the orchestrator owns it (D40)
+    {"entity_id": "light.study_lamp", "state": "off"},  # area "study": the orchestrator owns it
+    {"entity_id": "switch.zigbee_permit_join", "state": "off"},  # nobody owns it
     {"entity_id": "binary_sensor.study_motion", "state": "off"},
     {"entity_id": "sensor.study_lux", "state": "10"},
     {"entity_id": "lock.front_door", "state": "locked"},
@@ -50,6 +52,7 @@ def make(tmp_path, **kw):
         {"entity_id": "light.study_lamp", "state": "on", "fires": 9, "right": 8, "right_days": 5},
         {"entity_id": "light.room_lamp", "state": "on", "fires": 9, "right": 8, "right_days": 5},
         {"entity_id": "lock.front_door", "state": "unlocked", "fires": 9, "right": 8, "right_days": 5},
+        {"entity_id": "switch.zigbee_permit_join", "state": "on", "fires": 9, "right": 8, "right_days": 5},
     ]})  # fmt: skip
     return stack, link
 
@@ -130,16 +133,19 @@ async def test_a_suggestion_goes_through_the_actuator_in_shadow_by_default(tmp_p
     assert stack.ha.calls == []
 
 
-async def test_live_only_where_the_orchestrator_owns_the_entity(tmp_path):
+async def test_live_acts_on_devices_the_orchestrator_owns_never_on_t3_or_pairing_switches(tmp_path):
     stack, link = make(tmp_path, learner_mode="live")
     stack.safety.set_mode("live")
     lamp = await link.consider(suggestion("light.study_lamp"))
     assert lamp["verdict"] == "executed" and stack.ha.calls[-1]["entity_id"] == "light.study_lamp"
-    room = await link.consider(suggestion("light.room_lamp"))  # the room agent owns it
-    assert room["verdict"] == "denied"
+    room = await link.consider(suggestion("light.room_lamp"))  # every room is the orchestrator's now
+    assert room["verdict"] == "executed"
     door = await link.consider(suggestion("lock.front_door", "unlocked"))  # never: T3 / not switchable
     assert door is None or door["verdict"] == "denied"
-    assert [c["entity_id"] for c in stack.ha.calls] == ["light.study_lamp"]
+    pairing = await link.consider(suggestion("switch.zigbee_permit_join"))
+    assert pairing["verdict"] == "denied" and "owned by nobody" in pairing["reason"]
+    assert [c["entity_id"] for c in stack.ha.calls] == ["light.study_lamp", "light.room_lamp"]
+    assert stack.council.ownership.owner_of("light.room_lamp") == "orchestrator"
 
 
 async def test_kill_switch_global_shadow_and_repeats(tmp_path):
@@ -163,12 +169,14 @@ async def test_only_earned_acts_for_a_device_not_already_there(tmp_path, bad):
     assert stack.ha.calls == []
 
 
-def test_a_room_agent_cannot_be_called_learner(tmp_path):
-    from app.core.agents import ConfigError, parse_agent
-
-    with pytest.raises(ConfigError, match="reserved"):
-        parse_agent({"id": "learner", "name": "x", "room": "room"})
-
+async def test_nobody_but_the_learner_and_the_orchestrator_can_act(tmp_path):
+    """The reserved ids are the only actors; an old room agent's id is denied like any stranger."""
+    stack, link = make(tmp_path, learner_mode="live")
+    stack.safety.set_mode("live")
+    for stranger in ("room", "study", "Learner", "learner "):
+        action = await stack.actuator.request(stranger, "light", "turn_on", "light.study_lamp")
+        assert action["verdict"] == "denied"
+    assert stack.ha.calls == []
 
 
 async def test_never_a_helper_and_nothing_from_a_stale_model(tmp_path, monkeypatch):

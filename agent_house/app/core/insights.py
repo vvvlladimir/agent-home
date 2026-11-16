@@ -7,7 +7,7 @@ what caused a change (field names [UNVERIFIED-ON-HW], docs/OWNER_CHECKLIST.md M5
 - `context_event_type: automation_triggered` / `context_domain: automation` → an automation
   (`context_entity_id` names it); `script` likewise;
 - `context_user_id` of our own token (learned from a call_service answer) or a change that matches
-  one of our executed actions → a room agent;
+  one of our executed actions → one of our actors (the house manager, the learner);
 - a `context_user_id` of a program (Node-RED, AppDaemon, pyscript by name, or listed in the
   `automation_users` setting) → an automation (`user:<name>`), not the owner's hand;
 - another `context_user_id` → the owner in the UI or an app;
@@ -232,7 +232,7 @@ def conflict_request(item: dict, ours: dict[str, dict]) -> tuple[str, str, str |
     """(title, request, ha_id of ours to change, other automations of ours it supersedes).
 
     Two of ours fight: the draft replaces the first and supersedes the other (disabled on
-    approval). The other side is the owner's automation, a script or an agent: nothing of theirs
+    approval). The other side is the owner's automation, a script or an actor of ours: nothing of theirs
     is touched; the request says so and the owner can switch theirs off from Migration."""
     refs = [side.split(":", 1)[1] for side in item["sides"]]
     mine = next((ours[r]["ha_id"] for r in refs if r in ours), None)
@@ -256,7 +256,7 @@ def conflict_request(item: dict, ours: dict[str, dict]) -> tuple[str, str, str |
             f"{', '.join(others)} off from the Migration page if ours should decide."
         )
     if agents:
-        request += f" The room agent {', '.join(agents)} also acts on it: do not fight its choices."
+        request += f" {', '.join(agents)} (ours, acting live) also acts on it: do not fight its choices."
     return f"Conflict on {item['entity_id']}: {' vs '.join(refs)}", request, mine, supersedes
 
 
@@ -345,7 +345,6 @@ class Insights:
         else:
             preds, funnel = predict.scan(changes, self.ha, days=days, min_days=min_days, policy=policy,
                                          ours=mine, end=end, fires=getattr(self, "fires", {}))  # fmt: skip
-        self.store.set("event_relevance", predict.event_relevance(changes, self.ha))  # for the event gate
         self.store.set("usual_states", predict.usual_states(changes, self.ha, days=days, min_days=min_days,
                                                             policy=policy, end=end))  # fmt: skip
         found = []

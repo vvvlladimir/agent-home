@@ -30,7 +30,8 @@
         "rejected_peers": {"type": "integer"}
       }
     },
-    "jetson": {"type": ["object", "null"]},
+    "jetson": {"type": ["object", "null"], "description": "bundles before 0.5.0: the Jetson metrics endpoint"},
+    "learner": {"type": ["object", "null"], "description": "the learner in one line (openapi LearnerBrief)"},
     "files": {
       "type": "array",
       "description": "bundle contents, e.g. status.json, settings.redacted.json, log.txt, runs.jsonl, registry_summary.json",

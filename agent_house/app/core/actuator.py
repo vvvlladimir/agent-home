@@ -1,4 +1,5 @@
-"""The single actuation path. Every service call an agent wants goes through `Actuator.request`:
+"""The single actuation path. Every service call an actor (the orchestrator / house manager, the
+learner) wants goes through `Actuator.request`:
 policy decision → action log → (maybe) Home Assistant. Nothing else calls `ha.call_service`.
 
 Verdicts in the action log (contracts/openapi.yaml `Verdict`): executed · shadow · denied ·
@@ -64,22 +65,19 @@ class Actuator:
         feed,
         ha,
         safety,
-        agents,
-        scope_of: Callable[[object], set[str]],
+        actor: Callable[[str], dict | None] = lambda agent_id: None,
         protected: Callable[[], set[str]] = lambda: set(),
         clock: Callable[[], float] = clock.time,  # house time: action timestamps, approval expiry
         owner_of: Callable[[str], str | None] = lambda entity_id: None,
-        pseudo: Callable[[str], object] = lambda agent_id: None,
         delegates: dict[str, str] | None = None,
     ) -> None:
-        """`owner_of(entity_id)`: the agent that owns the entity (council); the default owns
-        nothing, so an unwired actuator denies everything. `pseudo(agent_id)`: configs of agents
-        that are not room agents (the orchestrator, which may switch the house mode).
-        `delegates`: pseudo agent → the owner it may act for (D38: the learner acts where the
-        orchestrator owns an entity, i.e. where no room agent does; never for a room agent)."""
-        self.store, self.feed, self.ha, self.safety, self.agents = store, feed, ha, safety, agents
-        self.scope_of, self.protected, self.clock = scope_of, protected, clock
-        self.owner_of, self.pseudo = owner_of, pseudo
+        """`actor(agent_id)`: the actor's policy config (`Council.actor`: id, enabled, mode,
+        tier_overrides, limits, `entities` = its allowlist) or None; the default knows nobody, so an
+        unwired actuator denies everything. `owner_of(entity_id)`: the owner of the entity (council).
+        `delegates`: actor → the owner it may act for (D38: the learner acts for the orchestrator)."""
+        self.store, self.feed, self.ha, self.safety = store, feed, ha, safety
+        self.actor, self.protected, self.clock = actor, protected, clock
+        self.owner_of = owner_of
         self.delegates = dict(delegates or {})
         # actions per minute of the house's life, like the gate's cooldowns and hourly caps; in
         # production the same as time.monotonic. On the polygon days pass in seconds, and wall time
@@ -93,12 +91,11 @@ class Actuator:
 
     # --- the decision ---------------------------------------------------------------------
     def _decide(self, agent_id, domain, service, entity_id, data, *, approved=False, force_shadow=False):
-        room_agent = self.agents.get(agent_id) if isinstance(agent_id, str) else None
-        agent = room_agent or (self.pseudo(agent_id) if isinstance(agent_id, str) else None)
         try:
-            scope = set(self.scope_of(agent)) if agent is not None else set()
+            agent = self.actor(agent_id) if isinstance(agent_id, str) else None
+            scope = set(agent.get("entities") or []) if isinstance(agent, dict) else set()
             owner = self.owner_of(entity_id) if isinstance(entity_id, str) else None
-            if room_agent is None and owner is not None and self.delegates.get(agent_id) == owner:
+            if owner is not None and self.delegates.get(agent_id) == owner:
                 owner = agent_id  # acting for the owner it is a delegate of
             recent = self.rates.counts(agent_id, entity_id)
             protected = set(self.protected())
@@ -112,7 +109,7 @@ class Actuator:
             service=service,
             entity_id=entity_id,
             data=data,
-            agent=agent.dump() if agent is not None else None,
+            agent=agent if isinstance(agent, dict) else None,
             scope=scope,
             kill_engaged=kill,
             global_mode=mode,

@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# Prepare a Jetson Orin Nano 8 GB to serve the local model for Agent House.
+# Prepare a Jetson Orin Nano 8 GB to run the Agent House learner (D38): power mode, packages, the
+# shared token. The learner itself is installed by learner/setup_learner.sh afterwards.
 #
 #   ./setup.sh --check [--json]   read-only report of what is there and what setup would change
 #   ./setup.sh --dry-run          print every command that would run, change nothing
 #   ./setup.sh [--yes]            apply (asks once before changing anything unless --yes)
-#
-# Options: --headless    also boot to multi-user.target (frees the RAM the desktop uses; reboot)
-#          --skip-build  do not build llama.cpp (run build_llamacpp.sh yourself)
-#          --no-swap     do not create a swap file
 #
 # Run it as your normal user from a checkout of the repository; it calls sudo where needed.
 # Idempotent: a second run only reports "ok". Written without access to the hardware
@@ -20,17 +17,11 @@ set -euo pipefail
 MODE=apply
 JSON=0
 YES=0
-HEADLESS=0
-SKIP_BUILD=0
-NO_SWAP=0
-SWAPFILE="/swapfile-agent-house"
-SWAP_GB=8
-MIN_DISK_GB=15
-# libssl-dev: llama.cpp downloads models (-hf) over its own HTTPS client; without it the build
-# silently has no HTTPS and every model download fails.
-APT_PACKAGES="git cmake build-essential libssl-dev libcurl4-openssl-dev curl python3 python3-yaml"
+MIN_DISK_GB=10
+# curl: uv's installer (setup_learner.sh); python3: the token and the --json report
+APT_PACKAGES="curl python3"
 
-usage() { sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while (($#)); do
   case "$1" in
@@ -38,9 +29,6 @@ while (($#)); do
     --dry-run) MODE=dry-run ;;
     --json) JSON=1 ;;
     --yes | -y) YES=1 ;;
-    --headless) HEADLESS=1 ;;
-    --skip-build) SKIP_BUILD=1 ;;
-    --no-swap) NO_SWAP=1 ;;
     -h | --help)
       usage
       exit 0
@@ -92,25 +80,10 @@ if [[ -n "$MODULE" ]]; then
   fi
 fi
 
-CUDA_VERSION=""
-CUDA_HOME="$AH_SYSROOT/usr/local/cuda"
-if [[ -r "$CUDA_HOME/version.json" ]]; then
-  CUDA_VERSION="$(sed -n 's/.*"version" *: *"\([0-9.]*\)".*/\1/p' "$CUDA_HOME/version.json" | head -n 1)"
-elif [[ -x "$CUDA_HOME/bin/nvcc" ]]; then
-  CUDA_VERSION="$("$CUDA_HOME/bin/nvcc" --version 2>/dev/null | sed -n 's/.*release \([0-9.]*\).*/\1/p' | head -n 1)"
-fi
-
 ZRAM_ENABLED=""
-DISK_SWAP_MB=0
 if [[ -r "$AH_SYSROOT/proc/swaps" ]]; then
   ZRAM_ENABLED=false
-  while read -r swap_name _ swap_kb _; do
-    case "$swap_name" in
-      Filename) ;;
-      */zram*) ZRAM_ENABLED=true ;;
-      *) DISK_SWAP_MB=$((DISK_SWAP_MB + swap_kb / 1024)) ;;
-    esac
-  done <"$AH_SYSROOT/proc/swaps"
+  if grep -q zram "$AH_SYSROOT/proc/swaps"; then ZRAM_ENABLED=true; fi
 fi
 
 POWER_MODE=""
@@ -143,13 +116,6 @@ if df -Pk "$HOME" >/dev/null 2>&1; then
   DISK_FREE_GB="$(df -Pk "$HOME" | awk 'NR == 2 { printf "%.1f", $4 / 1048576 }')"
 fi
 
-LLAMA_PATH=""
-LLAMA_VERSION=""
-if [[ -x "$LLAMA_SERVER_BIN" ]]; then
-  LLAMA_PATH="$LLAMA_SERVER_BIN"
-  LLAMA_VERSION="$("$LLAMA_SERVER_BIN" --version 2>&1 | head -n 1 || true)"
-fi
-
 MISSING_PACKAGES=""
 if have dpkg-query; then
   for package in $APT_PACKAGES; do
@@ -176,20 +142,14 @@ if [[ "$IS_ORIN_NANO_8GB" == true ]]; then
 elif [[ -z "$MODULE" ]]; then
   add_check platform fail "not a Jetson: /proc/device-tree/model is missing"
 else
-  add_check platform warn "$MODULE with ${RAM_TOTAL_MB:-?} MB RAM; the profiles are sized for an Orin Nano 8 GB"
+  add_check platform warn "$MODULE with ${RAM_TOTAL_MB:-?} MB RAM; written for an Orin Nano 8 GB"
 fi
 
 case "$JETPACK_MAJOR" in
   6 | 7) add_check jetpack ok "L4T $L4T_VERSION (JetPack $JETPACK_MAJOR)" ;;
-  5) add_check jetpack warn "L4T $L4T_VERSION (JetPack 5): untested, CUDA 11 may be too old for current llama.cpp" ;;
+  5) add_check jetpack warn "L4T $L4T_VERSION (JetPack 5): untested" ;;
   *) add_check jetpack fail "could not read the L4T release from /etc/nv_tegra_release" ;;
 esac
-
-if [[ -n "$CUDA_VERSION" ]]; then
-  add_check cuda ok "CUDA $CUDA_VERSION in /usr/local/cuda"
-else
-  add_check cuda fail "no CUDA toolkit in /usr/local/cuda" "install it yourself: sudo apt install nvidia-jetpack (large download); setup does not"
-fi
 
 if ! have nvpmodel; then
   add_check power_mode skip "nvpmodel not found"
@@ -201,41 +161,12 @@ else
   add_check power_mode warn "current: ${POWER_MODE:-unknown}" "sudo nvpmodel -m $TARGET_MODE_ID ($TARGET_MODE_NAME)"
 fi
 
-if [[ -x "$AH_SYSROOT/usr/bin/jetson_clocks" ]]; then
-  add_check jetson_clocks ok "run by llama-server.service at every start"
-else
-  add_check jetson_clocks skip "/usr/bin/jetson_clocks not found; the service continues without it"
-fi
-
-NEED_SWAP=0
-if [[ -z "$ZRAM_ENABLED" ]]; then
-  add_check swap skip "/proc/swaps not readable"
-elif ((DISK_SWAP_MB >= 4000)); then
-  add_check swap ok "${DISK_SWAP_MB} MB on disk (zram: $ZRAM_ENABLED)"
-elif ((NO_SWAP)); then
-  add_check swap warn "${DISK_SWAP_MB} MB on disk (zram: $ZRAM_ENABLED); --no-swap given"
-else
-  NEED_SWAP=1
-  add_check swap warn "${DISK_SWAP_MB} MB on disk (zram: $ZRAM_ENABLED); zram alone competes with the model for RAM" \
-    "create ${SWAP_GB} GB $SWAPFILE and add it to /etc/fstab (zram is left as it is)"
-fi
-
-if [[ -z "$DEFAULT_TARGET" ]]; then
-  add_check headless skip "systemctl not available"
-elif [[ "$DEFAULT_TARGET" == multi-user.target ]]; then
-  add_check headless ok "boots to multi-user.target (no desktop)"
-elif ((HEADLESS)); then
-  add_check headless warn "boots to $DEFAULT_TARGET" "sudo systemctl set-default multi-user.target (effective after a reboot)"
-else
-  add_check headless warn "boots to $DEFAULT_TARGET: the desktop keeps several hundred MB of RAM" "nothing unless you pass --headless"
-fi
-
 if [[ -z "$DISK_FREE_GB" ]]; then
   add_check disk skip "could not read free space"
 elif awk -v free="$DISK_FREE_GB" -v min="$MIN_DISK_GB" 'BEGIN { exit !(free >= min) }'; then
   add_check disk ok "${DISK_FREE_GB} GB free in $HOME"
 else
-  add_check disk warn "${DISK_FREE_GB} GB free in $HOME; models, build and swap want about ${MIN_DISK_GB} GB"
+  add_check disk warn "${DISK_FREE_GB} GB free in $HOME; the venv wants about 2 GB, the journal belongs on the NVMe"
 fi
 
 if ! have dpkg-query; then
@@ -246,44 +177,27 @@ else
   add_check packages warn "missing: $MISSING_PACKAGES" "sudo apt-get install -y $MISSING_PACKAGES"
 fi
 
-NEED_BUILD=0
-if [[ -n "$LLAMA_PATH" ]]; then
-  add_check llama_server ok "$LLAMA_PATH ($LLAMA_VERSION)"
-elif ((SKIP_BUILD)); then
-  add_check llama_server warn "not found at $LLAMA_SERVER_BIN; --skip-build given"
-else
-  NEED_BUILD=1
-  add_check llama_server warn "not found at $LLAMA_SERVER_BIN" "jetson/build_llamacpp.sh (CUDA build, 20–40 minutes)"
-fi
-
 NEED_TOKEN=0
 if [[ -e "$AH_ETC/token" ]]; then
   add_check token ok "$AH_ETC/token exists"
 else
   NEED_TOKEN=1
-  add_check token warn "no token yet: the profile switch and llama-server would be open or refused" \
+  add_check token warn "no token yet: the learner would refuse every call" \
     "generate $AH_ETC/token (mode 600) and print it once for the add-on's jetson_token option"
 fi
 
-NEED_UNITS=0
-for unit in "$AH_LLM_UNIT" "$AH_METRICS_UNIT"; do
-  installed="$AH_SYSROOT/etc/systemd/system/$unit"
-  if [[ -f "$installed" ]] && sed -e "s|@USER@|$RUN_USER|g" -e "s|@REPO@|$AH_REPO_DIR|g" "$AH_JETSON_DIR/$unit" | cmp -s - "$installed"; then
-    add_check "unit:$unit" ok "installed and up to date"
-  else
-    NEED_UNITS=1
-    add_check "unit:$unit" warn "not installed or out of date" "install to /etc/systemd/system, enable and start as user $RUN_USER"
+installed="$AH_SYSROOT/etc/systemd/system/$AH_LEARNER_UNIT"
+if [[ -f "$installed" ]]; then
+  add_check "unit:$AH_LEARNER_UNIT" ok "installed (learner/setup_learner.sh)"
+else
+  add_check "unit:$AH_LEARNER_UNIT" warn "not installed" "nothing here: run learner/setup_learner.sh next"
+fi
+
+for unit in $AH_OLD_UNITS; do
+  if [[ -f "$AH_SYSROOT/etc/systemd/system/$unit" ]]; then
+    add_check "old:$unit" warn "still installed from before 0.5.0 (D40)" "nothing here: learner/setup_learner.sh --stop-llm disables it"
   fi
 done
-
-SUDOERS_LINE="$RUN_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart $AH_LLM_UNIT"
-NEED_SUDOERS=0
-if [[ -f "$AH_SYSROOT/etc/sudoers.d/agent-house" ]]; then
-  add_check sudoers ok "/etc/sudoers.d/agent-house exists"
-else
-  NEED_SUDOERS=1
-  add_check sudoers warn "the metrics service cannot restart llama-server yet" "add /etc/sudoers.d/agent-house: $SUDOERS_LINE"
-fi
 
 # ── report ───────────────────────────────────────────────────────────────────────────────────
 
@@ -291,10 +205,9 @@ print_json() {
   local line
   {
     printf '%s\n' "MODULE=$MODULE" "IS_ORIN=$IS_ORIN_NANO_8GB" "L4T=$L4T_VERSION" "JETPACK=$JETPACK_MAJOR" \
-      "UBUNTU=$UBUNTU" "CUDA=$CUDA_VERSION" "RAM_TOTAL=$RAM_TOTAL_MB" "RAM_AVAILABLE=$RAM_AVAILABLE_MB" \
+      "UBUNTU=$UBUNTU" "RAM_TOTAL=$RAM_TOTAL_MB" "RAM_AVAILABLE=$RAM_AVAILABLE_MB" \
       "SWAP_TOTAL=$SWAP_TOTAL_MB" "ZRAM=$ZRAM_ENABLED" "POWER_MODE=$POWER_MODE" "POWER_MODES=$POWER_MODES" \
-      "DEFAULT_TARGET=$DEFAULT_TARGET" "DISK_FREE=$DISK_FREE_GB" "LLAMA_PATH=$LLAMA_PATH" \
-      "LLAMA_VERSION=$LLAMA_VERSION" "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      "DEFAULT_TARGET=$DEFAULT_TARGET" "DISK_FREE=$DISK_FREE_GB" "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "--"
     for line in "${CHECKS[@]}"; do printf '%s\n' "$line"; done
   } | python3 -c '
@@ -332,7 +245,6 @@ print(json.dumps({
     "l4t_version": facts["L4T"],
     "jetpack_major": number("JETPACK", int),
     "ubuntu": facts["UBUNTU"],
-    "cuda_version": facts["CUDA"],
     "ram_total_mb": number("RAM_TOTAL"),
     "ram_available_mb": number("RAM_AVAILABLE"),
     "swap_total_mb": number("SWAP_TOTAL"),
@@ -341,8 +253,6 @@ print(json.dumps({
     "power_modes_available": (facts["POWER_MODES"] or "").split(),
     "default_target": facts["DEFAULT_TARGET"],
     "disk_free_gb": number("DISK_FREE"),
-    "llama_server_path": facts["LLAMA_PATH"],
-    "llama_server_version": facts["LLAMA_VERSION"],
     "checks": checks,
 }, indent=2))'
 }
@@ -350,7 +260,7 @@ print(json.dumps({
 print_table() {
   local line name status detail change
   log ""
-  log "Jetson: ${MODULE:-unknown} · L4T ${L4T_VERSION:-?} · JetPack ${JETPACK_MAJOR:-?} · CUDA ${CUDA_VERSION:-?}"
+  log "Jetson: ${MODULE:-unknown} · L4T ${L4T_VERSION:-?} · JetPack ${JETPACK_MAJOR:-?}"
   log ""
   for line in "${CHECKS[@]}"; do
     IFS=$'\t' read -r name status detail change <<<"$line"
@@ -373,7 +283,7 @@ if ((FAILED)); then
   exit 1
 fi
 if [[ "$(id -u)" -eq 0 && "$MODE" == apply ]]; then
-  log "Run setup.sh as your normal user (it calls sudo itself): the services run as that user."
+  log "Run setup.sh as your normal user (it calls sudo itself): the learner runs as that user."
   exit 1
 fi
 
@@ -405,30 +315,12 @@ if have nvpmodel && [[ -n "$TARGET_MODE_ID" && "$POWER_MODE" != "$TARGET_MODE_NA
   run sudo nvpmodel -m "$TARGET_MODE_ID"
 fi
 
-if ((NEED_SWAP)); then
-  if [[ ! -e "$SWAPFILE" ]]; then
-    run sudo fallocate -l "${SWAP_GB}G" "$SWAPFILE"
-    run sudo chmod 600 "$SWAPFILE"
-    run sudo mkswap "$SWAPFILE"
-  fi
-  run sudo swapon "$SWAPFILE"
-  if ! grep -q "^$SWAPFILE " /etc/fstab 2>/dev/null; then
-    run sudo sh -c "echo '$SWAPFILE none swap sw,pri=-2 0 0' >> /etc/fstab"
-  fi
-fi
-
-if ((HEADLESS)) && [[ -n "$DEFAULT_TARGET" && "$DEFAULT_TARGET" != multi-user.target ]]; then
-  run sudo systemctl set-default multi-user.target
-fi
-
-run sudo mkdir -p "$AH_ETC" "$AH_STATE/models"
+run sudo mkdir -p "$AH_ETC" "$AH_STATE"
 run sudo chown -R "$RUN_USER" "$AH_STATE"
 if [[ "$MODE" == dry-run ]]; then
-  echo "would write: $AH_ETC/config.env (AH_USER, LLAMA_SERVER_BIN, ports)"
+  echo "would write: $AH_ETC/config.env (AH_USER)"
 else
-  printf '%s\n' "# Written by jetson/setup.sh" "AH_USER=$RUN_USER" "LLAMA_SERVER_BIN=$LLAMA_SERVER_BIN" \
-    "AH_LLM_HOST=$AH_LLM_HOST" "AH_LLM_PORT=$AH_LLM_PORT" "AH_METRICS_PORT=$AH_METRICS_PORT" |
-    sudo tee "$AH_ETC/config.env" >/dev/null
+  printf '%s\n' "# Written by jetson/setup.sh" "AH_USER=$RUN_USER" | sudo tee "$AH_ETC/config.env" >/dev/null
 fi
 
 if ((NEED_TOKEN)); then
@@ -443,68 +335,17 @@ if ((NEED_TOKEN)); then
   fi
 fi
 
-if [[ ! -e "$AH_STATE/active.env" ]]; then
-  run "$AH_JETSON_DIR/switch_profile.sh" "$AH_DEFAULT_PROFILE" --no-restart
-fi
-
-if ((NEED_BUILD)); then
-  if [[ "$MODE" == dry-run ]]; then
-    run "$AH_JETSON_DIR/build_llamacpp.sh" --dry-run
-  else
-    run "$AH_JETSON_DIR/build_llamacpp.sh"
-  fi
-fi
-
-if ((NEED_SUDOERS)); then
-  if [[ "$MODE" == dry-run ]]; then
-    echo "would write: /etc/sudoers.d/agent-house: $SUDOERS_LINE"
-  else
-    sudoers_tmp="$(mktemp)"
-    printf '%s\n' "$SUDOERS_LINE" >"$sudoers_tmp"
-    # a broken sudoers file locks sudo: validate before installing
-    sudo visudo -cf "$sudoers_tmp"
-    sudo install -m 440 -o root -g root "$sudoers_tmp" /etc/sudoers.d/agent-house
-    rm -f "$sudoers_tmp"
-  fi
-fi
-
-if ((NEED_UNITS)); then
-  for unit in "$AH_LLM_UNIT" "$AH_METRICS_UNIT"; do
-    if [[ "$MODE" == dry-run ]]; then
-      echo "would write: /etc/systemd/system/$unit (User=$RUN_USER, repository $AH_REPO_DIR)"
-    else
-      sed -e "s|@USER@|$RUN_USER|g" -e "s|@REPO@|$AH_REPO_DIR|g" "$AH_JETSON_DIR/$unit" |
-        sudo tee "/etc/systemd/system/$unit" >/dev/null
-    fi
-  done
-  run sudo systemctl daemon-reload
-fi
-run sudo systemctl enable "$AH_LLM_UNIT" "$AH_METRICS_UNIT"
-run sudo systemctl restart "$AH_METRICS_UNIT"
-if [[ "$MODE" == dry-run || -x "$LLAMA_SERVER_BIN" ]]; then
-  run sudo systemctl restart "$AH_LLM_UNIT"
-else
-  log "llama-server is not built yet: run jetson/build_llamacpp.sh, then sudo systemctl restart $AH_LLM_UNIT"
-fi
-
 if [[ "$MODE" == dry-run ]]; then
   echo "dry run: nothing was changed"
   exit 0
 fi
 
-address="$(hostname -I 2>/dev/null | awk '{ print $1 }')"
 log ""
-log "Done. llama-server downloads the model on its first start (a few GB): watch it with"
-log "    journalctl -u $AH_LLM_UNIT -f"
-log ""
-log "Add-on configuration (Home Assistant → Settings → Add-ons → Agent House → Configuration):"
-log "    jetson_llm_url:     http://${address:-<this-jetson>}:$AH_LLM_PORT"
-log "    jetson_metrics_url: http://${address:-<this-jetson>}:$AH_METRICS_PORT"
 if [[ -n "${NEW_TOKEN:-}" ]]; then
-  log "    jetson_token:       $NEW_TOKEN"
-  log "(the token is shown once; it is stored in $AH_ETC/token)"
+  log "Token for the add-on's jetson_token option: $NEW_TOKEN"
+  log "(shown once; it is stored in $AH_ETC/token)"
 else
-  log "    jetson_token:       the content of $AH_ETC/token"
+  log "The add-on's jetson_token option: the content of $AH_ETC/token"
 fi
 log ""
-log "Next: ./jetson/bench/run_all.sh"
+log "Next: ./jetson/learner/setup_learner.sh --data <a directory on the NVMe>"

@@ -15,8 +15,9 @@ id. The four checks run on every create, edit, approve and rollback:
                  area/device/label targets, no webhook triggers;
 4. ha_validate — Home Assistant's own `validate_config`.
 
-Ownership (M5 council): a draft a room agent asked for may act only on entities that agent owns
-(`owner_of`); drafts of the owner and the orchestrator may act on any entity. Other automations of
+Ownership (M5 council, D40): drafts of the owner and the orchestrator may act on any entity; a draft
+any other origin asked for may act only on entities that origin owns (`owner_of`), which since the
+room agents are gone (D40) is none. Other automations of
 ours that act on the same entities are named in the policy notes, so the owner sees a possible fight.
 The owner's own automations, scripts and Node-RED flows (imported on the Migration page) that name
 the same entities are named there too: a note, not a block.
@@ -25,7 +26,7 @@ Supersedes (M5 council): a proposal of the owner or the orchestrator may name ot
 of ours (`agent_house_` ids, deployed, never its own id) that it replaces. Approving it disables
 each of them through `set_enabled(False)` before the new config is written, so two of ours never
 fight over one entity; if the write then fails, the ones disabled here are enabled again. The
-owner turns any of them back on from the Deployed page. Room agents cannot supersede, and nothing
+owner turns any of them back on from the Deployed page. Only they can supersede, and nothing
 of the owner's (automations, scripts) can ever be named: `guard_ours` refuses it.
 
 Approving a proposal counts as the owner's approval for its T2 entities (a human reviewed the
@@ -148,9 +149,10 @@ class Lifecycle:
     def parse(
         self, text: str, origin: str | None = None, ha_id: str | None = None, supersedes=()
     ) -> tuple[dict | None, list[dict]]:
-        """(normalized config or None, [yaml, schema, policy] checks). `origin`: the room agent that
-        asked for it (ownership); `ha_id`: the automation it would become (excluded from the
-        "also acted on by" note); `supersedes`: ours it disables on approval (named in the notes)."""
+        """(normalized config or None, [yaml, schema, policy] checks). `origin`: who asked for it
+        (ownership: anyone but the owner and the orchestrator only on what it owns); `ha_id`: the
+        automation it would become (excluded from the "also acted on by" note); `supersedes`: ours
+        it disables on approval (named in the notes)."""
         try:
             loaded = yaml.safe_load(text)
         except yaml.YAMLError as err:
@@ -497,7 +499,7 @@ class Lifecycle:
 
     def _superseded(self, ids, origin: str | None, ha_id: str | None) -> list[str]:
         """Validate `supersedes`: deployed automations of ours only, never the proposal's own id,
-        and only on drafts of the owner or the orchestrator (a room agent cannot switch off another
+        and only on drafts of the owner or the orchestrator (no other origin can switch off another
         automation). Raises NotOurs for anything that is not an `agent_house_` id."""
         out: list[str] = []
         for sid in ids or []:

@@ -6,7 +6,8 @@
 #
 # --data DIR    where the journal lives (default /var/lib/agent-house/learner); put it on the NVMe,
 #               e.g. --data /mnt/nvme/agent-house-learner
-# --stop-llm    stop and disable llama-server (D38: the Jetson no longer serves a model; frees ~4 GB)
+# --stop-llm    stop and disable llama-server and the metrics service of an install from before
+#               0.5.0 (D40: the Jetson no longer serves a model; frees ~4 GB)
 #
 # Run jetson/setup.sh first (it writes the token the add-on and the learner share). Python 3.12 comes
 # from uv (JetPack 6 ships 3.10; the learner imports the add-on's code, which needs 3.12). Idempotent.
@@ -20,7 +21,7 @@ MODE=apply
 YES=0
 STOP_LLM=0
 DATA="${AH_LEARNER_DATA:-$AH_STATE/learner}"
-UNIT="agent-house-learner.service"
+UNIT="$AH_LEARNER_UNIT"
 PORT="${AH_LEARNER_PORT:-9200}"
 RUN_USER="${AH_USER:-$(id -un)}"
 
@@ -100,7 +101,9 @@ run sudo systemctl enable "$UNIT"
 run sudo systemctl restart "$UNIT"
 
 if ((STOP_LLM)); then
-  run sudo systemctl disable --now "$AH_LLM_UNIT"
+  for unit in $AH_OLD_UNITS; do
+    run sudo systemctl disable --now "$unit" || true
+  done
 fi
 
 if [[ "$MODE" == dry-run ]]; then
@@ -113,4 +116,4 @@ log ""
 log "Done. Watch it with:  journalctl -u $UNIT -f"
 log "Add-on configuration (Home Assistant → Settings → Add-ons → Agent House → Configuration):"
 log "    jetson_learner_url: http://${address:-<jetson-ip>}:$PORT"
-log "    jetson_token:       the same token as for the metrics endpoint ($AH_ETC/token)"
+log "    jetson_token:       the content of $AH_ETC/token (written by jetson/setup.sh)"

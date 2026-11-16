@@ -23,7 +23,7 @@ from learner.server import serve as serve_learner  # noqa: E402
 
 @pytest.fixture
 def learner(tmp_path):
-    learner = Learner(tmp_path / "learner")
+    learner = Learner(tmp_path / "learner", follow_time_zone=False)  # one process: keep its TZ
     server = serve_learner(learner, "127.0.0.1", 0, "jetson-sim")  # the token the add-on is given
     threading.Thread(target=server.serve_forever, daemon=True).start()
     learner.url = f"http://127.0.0.1:{server.server_address[1]}"

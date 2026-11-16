@@ -3,19 +3,15 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from app.core.lifecycle import Lifecycle
-from app.core.orchestrator import CHAT_SYSTEM, SYSTEM, Orchestrator
+from app.core.orchestrator import CHAT_SYSTEM, SYSTEM
 from tests.helpers import AutomationHA, make_stack
 
 
 def test_the_house_mode_rule_follows_the_helper(tmp_path):
-    s = make_stack(tmp_path, ha=AutomationHA(), llm=None)
-    lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety)
-    settings = SimpleNamespace(orchestrator_provider="local", anthropic_api_key="", anthropic_model="x",
-                               anthropic_base_url="", daily_budget_eur=1.0, redact_cloud=True)  # fmt: skip
-    orch = Orchestrator(settings, s.llm, s.store, s.feed, s.ha, s.safety, lifecycle)
+    s = make_stack(tmp_path, ha=AutomationHA())
+    s.orch.lifecycle = Lifecycle(s.store, s.feed, s.ha, s.safety)
+    orch = s.orch
     for template in (SYSTEM, CHAT_SYSTEM):
         text = orch._system(template)
         assert "agent_house_mode" not in text and "{" + "house_mode}" not in text

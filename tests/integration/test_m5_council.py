@@ -1,6 +1,6 @@
-"""M5 agent council and history analysis, through the ingress prefix against fake Home Assistant:
-the mode helper, ownership, the orchestrator switching the mode in shadow, the logbook scan
-(habit and undone automation), a finding drafted into a proposal, and the daily review."""
+"""M5 council and history analysis, through the ingress prefix against fake Home Assistant: the mode
+helper, ownership (D40: the orchestrator's), the orchestrator switching the mode in shadow, the
+logbook scan (habit and undone automation), a finding drafted into a proposal, and the daily review."""
 
 from __future__ import annotations
 
@@ -46,11 +46,8 @@ def test_mode_helper_ownership_and_auto_mode_in_shadow(app, ha_state):
     assert owner["owner"] == "orchestrator"
     assert httpx.get(f"{base}/api/council/owner/light.nope").status_code == 404
 
-    agent = {"id": "hallway", "name": "Hallway", "room": "hallway"}
-    assert httpx.post(f"{base}/api/agents", json=agent).status_code == 201
-    assert httpx.get(f"{base}/api/council/owner/light.hallway").json()["owner"] == "hallway"
-    reserved = httpx.post(f"{base}/api/agents", json={**agent, "id": "orchestrator"})
-    assert reserved.status_code in (400, 422) and "reserved" in reserved.text
+    assert httpx.get(f"{base}/api/council/owner/light.hallway").json()["owner"] == "orchestrator"
+    assert "board" not in council and council["ownership"]["counts"]["orchestrator"] >= 1
 
     assert httpx.put(f"{base}/api/settings", json={"auto_house_mode": True}).status_code == 200
     ha_state.set_state("person.owner", "not_home")
@@ -59,14 +56,8 @@ def test_mode_helper_ownership_and_auto_mode_in_shadow(app, ha_state):
     assert action["verdict"] == "shadow" and action["data"] == {"option": "away"} and action["tier"] == "T1"
     assert ha_state.states[MODE]["state"] == "home", "shadow: the helper is not touched"
 
-    # the owner switches the mode in HA: the room agent gets a task, its answer lands on the board
-    ha_state.set_state(MODE, "away", ha_state.states[MODE]["attributes"])
-    wait_for(lambda: any(r["kind"] == "report" for r in httpx.get(f"{base}/api/council").json()["board"]), 20)
-    runs = httpx.get(f"{base}/api/runs", params={"agent": "hallway"}).json()
-    assert runs[0]["wake_source"] == "task" and "away" in runs[0]["wake_reason"]
 
-
-def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app, ha_state, llm_sim):
+def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app, ha_state, claude_sim):
     base = app.base
     now = datetime.now(UTC).replace(microsecond=0)
     for back in range(6, 0, -1):  # six evenings, oldest first: motion, then the hallway light by hand
@@ -99,9 +90,9 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     assert [f["ha_id"] for f in scan["feedback"]] == ["agent_house_bedroom_lamp_at_dusk"]
     assert not any("agent" == f["data"].get("cause") for f in scan["findings"])
 
-    submit = {"name": "submit_automation", "arguments": {"title": "Hallway light on motion",
+    submit = {"name": "submit_automation", "input": {"title": "Hallway light on motion",
               "rationale": "habit", "expected_triggers": "motion", "yaml": HABIT_YAML}}  # fmt: skip
-    llm_sim.script[:] = [{"tool_calls": [submit]}, {"text": "Submitted."}]
+    claude_sim.script[:] = [{"tool_use": [submit]}, {"text": "Submitted."}]
     quoted = f"{base}/api/findings/{quote(habit['id'], safe='')}"
     response = httpx.post(f"{quoted}/draft")
     assert response.status_code == 202, response.text
@@ -116,9 +107,9 @@ def test_logbook_scan_finds_a_habit_and_an_undone_automation_and_drafts_one(app,
     assert dismissed["status"] == "dismissed"
 
 
-def test_daily_review_reports_to_the_inbox(app, llm_sim):
+def test_daily_review_reports_to_the_inbox(app, claude_sim):
     base = app.base
-    llm_sim.script[:] = [{"text": "Calm day, nothing to fix."}]
+    claude_sim.script[:] = [{"text": "Calm day, nothing to fix."}]
     assert httpx.post(f"{base}/api/council/review").status_code == 202
     wait_for(lambda: (httpx.get(f"{base}/api/council").json()["review"]["last"] or {}).get("summary"), 20)
     review = httpx.get(f"{base}/api/council").json()["review"]["last"]

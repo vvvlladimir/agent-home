@@ -1,26 +1,26 @@
 openapi: 3.1.0
 info:
   title: Agent House internal API
-  version: 0.1.0
+  version: 0.5.0
   description: |
     JSON API between the add-on backend and its GUI. All paths are RELATIVE to the ingress
     root (the GUI calls `api/status`, never `/api/status`). `x-milestone` says in which
     milestone an operation was implemented. A path that is not here answers 404 `not_found` naming
     the routes under or near it; a known path with the wrong method answers 405 with `Allow`.
-    File formats (agent config, policy, bench reports, …) live in `schemas/*.schema.json`.
+    File formats (policy, the learner's house model, …) live in `schemas/*.schema.json`.
+    0.5.0 (D40): room agents and the local model are gone; the actors are the orchestrator /
+    house manager and the Jetson learner.
 servers:
   - url: .
 tags:
   - {name: system}
   - {name: house}
-  - {name: agents}
   - {name: traces}
   - {name: safety}
   - {name: automations}
   - {name: migration}
   - {name: chat}
   - {name: council}
-  - {name: models}
   - {name: settings}
 
 paths:
@@ -37,7 +37,7 @@ paths:
       tags: [safety]
       operationId: setMode
       x-milestone: M1
-      summary: Switch the global mode. `live` only affects agents whose own mode is live.
+      summary: Switch the global mode. `live` only affects actors whose own mode is live (orchestrator_mode, learner_mode).
       requestBody: {required: true, content: {application/json: {schema: {type: object, required: [mode], properties: {mode: {$ref: "#/components/schemas/Mode"}}}}}}
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Status"}}}}
@@ -89,114 +89,6 @@ paths:
       responses:
         "200": {description: event stream, content: {text/event-stream: {schema: {type: string}}}}
 
-  /api/agents:
-    get:
-      tags: [agents]
-      operationId: listAgents
-      x-milestone: M3
-      responses:
-        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AgentSummary"}}}}}
-    post:
-      tags: [agents]
-      operationId: createAgent
-      x-milestone: M3
-      description: >-
-        `id` and `name` may be left out: they follow from `room` (its slug, the area's name). 422 lists
-        every invalid field at once; also when HA is connected and the room is not one of its areas
-        (with the closest area id) or an entity is unknown to it. 409 when the id exists.
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-      responses:
-        "201": {description: created, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-        "409": {$ref: "#/components/responses/Error"}
-        "422": {$ref: "#/components/responses/Error"}
-  /api/agents/suggest-rules:
-    get:
-      tags: [agents]
-      operationId: suggestWakeRules
-      x-milestone: M3
-      summary: Wake rules suggested from the devices of a room; nothing is saved
-      description: >-
-        Deterministic, no model. One event rule per kind found in the room (smoke / gas / leak as
-        alarm, doors and windows, locks and garage doors (T3: report, never act), motion, cold,
-        low batteries, fridges losing power, problem sensors), each with exact entity ids and a
-        reason. The editor fills a new agent's wake rules with them; the owner keeps or edits them.
-        422 when HA is connected and the room is not one of its areas.
-      parameters:
-        - {name: room, in: query, required: true, schema: {type: string}, description: area_id}
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [room, rules]
-                properties:
-                  room: {type: string}
-                  rules:
-                    type: array
-                    description: "items as wake_rules.events in schemas/agent_config.schema.json"
-                    items: {type: object, required: [entities, reason]}
-        "422": {$ref: "#/components/responses/Error"}
-  /api/agents/{agent_id}:
-    parameters: [{$ref: "#/components/parameters/agent_id"}]
-    get:
-      tags: [agents]
-      operationId: getAgent
-      x-milestone: M3
-      responses:
-        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-        "404": {$ref: "#/components/responses/Error"}
-    put:
-      tags: [agents]
-      operationId: updateAgent
-      x-milestone: M3
-      description: 422 when HA is connected and a changed room or a newly added entity is unknown to it.
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-      responses:
-        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-        "404": {$ref: "#/components/responses/Error"}
-        "422": {$ref: "#/components/responses/Error"}
-    delete:
-      tags: [agents]
-      operationId: deleteAgent
-      x-milestone: M3
-      responses:
-        "204": {description: deleted}
-  /api/agents/{agent_id}/wake:
-    parameters: [{$ref: "#/components/parameters/agent_id"}]
-    post:
-      tags: [agents]
-      operationId: wakeAgent
-      x-milestone: M3
-      summary: Manual wake (queued like any other wake); returns the run id
-      requestBody: {content: {application/json: {schema: {type: object, properties: {reason: {type: string}}}}}}
-      responses:
-        "202": {description: queued, content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}}
-  /api/agents/{agent_id}/prompt-preview:
-    parameters: [{$ref: "#/components/parameters/agent_id"}]
-    post:
-      tags: [agents]
-      operationId: previewPrompt
-      x-milestone: M3
-      summary: Render the prompt for a (possibly unsaved) config against the current state; no LLM call
-      requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/AgentConfig"}}}}
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [system, user, tokens_estimate]
-                properties:
-                  system: {type: string}
-                  user: {type: string}
-                  tokens_estimate: {type: integer, description: "≈ chars/3.5; not the model tokenizer"}
-                  budget: {type: integer}
-                  entities_included: {type: integer}
-                  entities_dropped: {type: array, items: {type: string}}
-
   /api/runs:
     get:
       tags: [traces]
@@ -218,25 +110,6 @@ paths:
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Run"}}}}
         "404": {$ref: "#/components/responses/Error"}
-  /api/runs/{run_id}/replay:
-    parameters: [{$ref: "#/components/parameters/run_id"}]
-    post:
-      tags: [traces]
-      operationId: replayRun
-      x-milestone: M3
-      summary: Re-run the recorded context against the current model. Replays are always shadow, whatever the mode.
-      responses:
-        "202": {description: queued, content: {application/json: {schema: {type: object, required: [run_id], properties: {run_id: {type: string}}}}}}
-  /api/runs/{run_id}/testcase:
-    parameters: [{$ref: "#/components/parameters/run_id"}]
-    get:
-      tags: [traces]
-      operationId: runAsTestcase
-      x-milestone: M3
-      summary: The run as a YAML eval scenario (copy-as-test-case)
-      responses:
-        "200": {description: ok, content: {text/yaml: {schema: {type: string}}}}
-
   /api/policy:
     get:
       tags: [safety]
@@ -277,10 +150,10 @@ paths:
         "409": {$ref: "#/components/responses/Error"}
   /api/inbox:
     get:
-      tags: [agents]
+      tags: [safety]
       operationId: listInbox
       x-milestone: M3
-      summary: Agent reports waiting for (or handled by) the orchestrator
+      summary: The owner's inbox - the orchestrator's reports (review, first look, house manager, budget) and unusual-state notes
       responses:
         "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/InboxItem"}}}}}
 
@@ -548,7 +421,7 @@ paths:
       tags: [council]
       operationId: getCouncil
       x-milestone: M5
-      summary: House mode, ownership summary, the shared board, the daily review's state
+      summary: House mode, ownership summary, the orchestrator's wakes, the daily review's state
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Council"}}}}
   /api/council/owner/{entity_id}:
@@ -557,7 +430,7 @@ paths:
       tags: [council]
       operationId: getOwner
       x-milestone: M5
-      summary: The one agent that owns an entity (`orchestrator` for entities without a room agent)
+      summary: The one actor that owns an entity (D40 - `orchestrator`, or null for network pairing switches)
       responses:
         "200":
           description: ok
@@ -568,7 +441,7 @@ paths:
                 required: [entity_id, owner]
                 properties:
                   entity_id: {type: string}
-                  owner: {type: string}
+                  owner: {type: [string, "null"]}
                   area: {type: [string, "null"]}
         "404": {$ref: "#/components/responses/Error"}
   /api/council/mode-helper:
@@ -661,7 +534,7 @@ paths:
       tags: [council]
       operationId: getMetrics
       x-milestone: M5
-      summary: Accuracy of each automation of ours and each room agent, and the house score (D28; no model)
+      summary: Accuracy of each automation of ours and each actor (orchestrator, learner), and the house score (D28; no model)
       parameters: [{name: days, in: query, schema: {type: integer, minimum: 1, maximum: 30, default: 7}}]
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Metrics"}}}}
@@ -691,16 +564,16 @@ paths:
       tags: [chat]
       operationId: chat
       x-milestone: M5
-      summary: One chat turn with the orchestrator or a room agent; answers when the run finishes
+      summary: One chat turn with the orchestrator; answers when the run finishes (404 for any other target)
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [target, message]
+              required: [message]
               properties:
-                target: {type: string, description: "`orchestrator` or an agent id"}
+                target: {type: string, enum: [orchestrator], default: orchestrator}
                 message: {type: string, maxLength: 4000}
                 session_id: {type: string}
       responses:
@@ -715,62 +588,6 @@ paths:
                   session_id: {type: string}
                   reply: {type: string}
                   run: {$ref: "#/components/schemas/Run"}
-
-  /api/models/profiles:
-    get:
-      tags: [models]
-      operationId: listProfiles
-      x-milestone: M2
-      responses:
-        "200": {description: ok, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ModelProfile"}}}}}
-  /api/models/active:
-    put:
-      tags: [models]
-      operationId: setActiveProfile
-      x-milestone: M2
-      summary: Ask the Jetson to make this profile the resident model; state goes `warming` until healthy
-      requestBody: {required: true, content: {application/json: {schema: {type: object, required: [profile], properties: {profile: {type: string}}}}}}
-      responses:
-        "202": {description: swapping, content: {application/json: {schema: {$ref: "#/components/schemas/LlmStatus"}}}}
-        "409": {$ref: "#/components/responses/Error"}
-  /api/benchmarks:
-    get:
-      tags: [models]
-      operationId: listBenchmarks
-      x-milestone: M2
-      responses:
-        "200":
-          description: "newest first; `report` follows schemas/bench_report.schema.json and is null until the run is done"
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  type: object
-                  required: [id, created, profile, source, status, report]
-                  properties:
-                    id: {type: string}
-                    created: {type: string, format: date-time}
-                    profile: {type: string}
-                    source: {type: string}
-                    status: {type: string, enum: [running, done, error]}
-                    report: {type: [object, "null"]}
-                    progress:
-                      type: object
-                      description: only while running
-                      properties:
-                        done: {type: integer}
-                        total: {type: integer}
-                        label: {type: string}
-    post:
-      tags: [models]
-      operationId: runBenchmark
-      x-milestone: M2
-      summary: Run speed + tool-call eval against the current server (low priority, one at a time)
-      requestBody: {content: {application/json: {schema: {type: object, properties: {profile: {type: string}, quick: {type: boolean, default: false}}}}}}
-      responses:
-        "202": {description: started, content: {application/json: {schema: {type: object, required: [id], properties: {id: {type: string}}}}}}
-        "409": {$ref: "#/components/responses/Error"}
 
   /api/settings:
     get:
@@ -788,6 +605,18 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {type: object}}}}
       responses:
         "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/Settings"}}}}
+  /api/dev:
+    get:
+      tags: [system]
+      operationId: getDev
+      x-milestone: M6
+      summary: >-
+        Developer tools (D40) - one read-only snapshot of the add-on's internals: the learner and the house
+        model as received from the Jetson, the house manager, the orchestrator's providers and last calls,
+        the policy, the council, the store, Home Assistant and the effective configuration. Secrets are
+        masked; no prompt or model answer is in it.
+      responses:
+        "200": {description: ok, content: {application/json: {schema: {$ref: "#/components/schemas/DevSnapshot"}}}}
   /api/logs:
     get:
       tags: [settings]
@@ -825,20 +654,30 @@ paths:
       operationId: exportConfig
       x-milestone: M5
       responses:
-        "200": {description: "YAML with agents, policy, profiles, settings (no secrets)", content: {text/yaml: {schema: {type: string}}}}
+        "200": {description: "YAML with the policy and the GUI settings (no secrets)", content: {text/yaml: {schema: {type: string}}}}
   /api/config/import:
     post:
       tags: [settings]
       operationId: importConfig
       x-milestone: M5
+      summary: All or nothing. `agents` and `active_profile` of an export from before 0.5.0 are ignored and named in `ignored`.
       requestBody: {required: true, content: {text/yaml: {schema: {type: string}}}}
       responses:
-        "200": {description: ok, content: {application/json: {schema: {type: object}}}}
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [policy, settings, ignored]
+                properties:
+                  policy: {type: boolean}
+                  settings: {type: boolean}
+                  ignored: {type: array, items: {type: string, enum: [agents, active_profile]}}
         "422": {$ref: "#/components/responses/Error"}
 
 components:
   parameters:
-    agent_id: {name: agent_id, in: path, required: true, schema: {type: string}}
     run_id: {name: run_id, in: path, required: true, schema: {type: string}}
     proposal_id: {name: proposal_id, in: path, required: true, schema: {type: string}}
     ha_id: {name: ha_id, in: path, required: true, schema: {type: string, pattern: "^agent_house_[a-z0-9_]+$"}}
@@ -869,7 +708,7 @@ components:
     ProposalStatus: {type: string, enum: [draft, blocked, approved, deployed, rejected, superseded, rolled_back]}
     Status:
       type: object
-      required: [version, mode, kill_switch, ha, llm, jetson, orchestrator, counts]
+      required: [version, mode, kill_switch, ha, learner, orchestrator, counts]
       properties:
         version: {type: string}
         time: {type: string, format: date-time}
@@ -882,13 +721,11 @@ components:
             since: {type: [string, "null"], format: date-time}
             reason: {type: [string, "null"]}
         ha: {$ref: "#/components/schemas/HaStatus"}
-        llm: {$ref: "#/components/schemas/LlmStatus"}
-        jetson: {$ref: "#/components/schemas/JetsonStatus"}
+        learner: {$ref: "#/components/schemas/LearnerBrief"}
         orchestrator: {$ref: "#/components/schemas/OrchestratorStatus"}
         counts:
           type: object
           properties:
-            agents: {type: integer}
             pending_approvals: {type: integer}
             draft_proposals: {type: integer}
             deployed_automations: {type: integer}
@@ -907,44 +744,26 @@ components:
         reconnects: {type: integer}
         areas: {type: integer}
         entities: {type: integer}
-    LlmStatus:
+    LearnerBrief:
       type: object
-      required: [state]
+      required: [configured, connected, mode, fresh]
+      description: the Jetson learner in one line (D38); details in LearnerInfo
       properties:
-        state: {type: string, enum: [unconfigured, ok, warming, busy, unreachable, degraded]}
-        url: {type: [string, "null"]}
-        active_profile: {type: [string, "null"]}
-        model: {type: [string, "null"]}
-        queue_depth: {type: integer}
-        in_flight: {type: [string, "null"], description: priority class of the request being served}
-        in_flight_s: {type: [number, "null"], description: how long the request being served has been running}
-        last_error: {type: [string, "null"]}
-        decode_tps: {type: [number, "null"], description: rolling median}
-        prefill_tps: {type: [number, "null"]}
-        ttft_ms: {type: [number, "null"]}
-        requests_total: {type: integer}
-        dropped_total: {type: integer}
-        errors_total: {type: integer}
-        retries_total: {type: integer}
-    JetsonStatus:
-      type: object
-      required: [reachable]
-      properties:
-        reachable: {type: boolean}
-        configured: {type: boolean}
-        last_seen: {type: [number, "null"]}
-        metrics: {type: [object, "null"], description: "schemas/jetson_metrics.schema.json"}
+        configured: {type: boolean, description: "jetson_learner_url is set"}
+        connected: {type: boolean}
+        mode: {$ref: "#/components/schemas/Mode"}
+        fresh: {type: boolean, description: "a house model trained in the last 48 h is stored"}
+        error: {type: [string, "null"]}
     OrchestratorStatus:
       type: object
       required: [provider]
       properties:
-        provider: {type: string, enum: [anthropic, openai, local, auto]}
-        effective: {type: string, enum: [anthropic, openai, local, none], description: what a request would use right now}
+        provider: {type: string, enum: [anthropic, openai, auto], description: "the setting (`local` from before 0.5.0 reads as auto)"}
+        effective: {type: string, enum: [anthropic, openai, none], description: what a request would use right now}
         choices:
           type: object
-          description: which models the owner can pick per request (local reachable, cloud key set)
+          description: which cloud models the owner can pick per request (key set)
           properties:
-            local: {type: boolean}
             anthropic: {type: boolean}
             openai: {type: boolean}
         model: {type: [string, "null"]}
@@ -963,7 +782,6 @@ components:
         area_id: {type: string}
         name: {type: string}
         entity_count: {type: integer}
-        agent_id: {type: [string, "null"]}
     Entity:
       type: object
       required: [entity_id, domain, state, tier]
@@ -987,39 +805,21 @@ components:
         ts: {type: number}
         kind:
           type: string
-          description: "state | wake | gate_drop | run | action | approval | report | proposal | deploy | system | board | council"
+          description: "state | gate_drop | action | approval | report | proposal | deploy | system | council"
         summary: {type: string}
         agent_id: {type: [string, "null"]}
         entity_id: {type: [string, "null"]}
         run_id: {type: [string, "null"]}
         level: {type: string, enum: [debug, info, warning, error], default: info}
         data: {type: [object, "null"]}
-    AgentConfig:
-      type: object
-      description: "see schemas/agent_config.schema.json (the single source of truth)"
-      required: [id, name, room]
-    AgentSummary:
-      type: object
-      required: [id, name, room, enabled, mode]
-      properties:
-        id: {type: string}
-        name: {type: string}
-        room: {type: string}
-        enabled: {type: boolean}
-        mode: {$ref: "#/components/schemas/Mode"}
-        effective_mode: {$ref: "#/components/schemas/Mode"}
-        entity_count: {type: integer, description: entities the agent may read or use (prompt + findable)}
-        scope: {type: string, description: "plain words: which entities it sees and why (entities, entities_mode, max_entities)"}
-        last_run: {oneOf: [{$ref: "#/components/schemas/RunSummary"}, {type: "null"}]}
-        wakes_last_hour: {type: integer}
     RunSummary:
       type: object
       required: [id, agent_id, status, started]
       properties:
         id: {type: string}
-        agent_id: {type: string, description: "agent id or `orchestrator`"}
+        agent_id: {type: string, description: "`orchestrator` (runs before 0.5.0 may name a room agent)"}
         status: {$ref: "#/components/schemas/RunStatus"}
-        wake_source: {type: string, enum: [event, cron, poke, chat, manual, replay, schedule, task, review]}
+        wake_source: {type: string, description: "manual (the owner), poke (review, house manager drafts), chat, review, manage (the house manager); older runs: event, cron, schedule, task, replay"}
         wake_reason: {type: [string, "null"]}
         started: {type: number}
         ended: {type: [number, "null"]}
@@ -1048,16 +848,15 @@ components:
       properties:
         idx: {type: integer}
         ts: {type: number}
-        type: {type: string, enum: [context, llm, tool, policy, repair, error, final]}
+        type: {type: string, enum: [context, origin, llm, tool, policy, repair, error, final]}
         latency_ms: {type: [integer, "null"]}
         tokens_in: {type: [integer, "null"]}
         tokens_out: {type: [integer, "null"]}
         data:
           type: object
           description: |
-            context: {system, user, tools}; llm: {request_messages_added, content, tool_calls, timings, finish_reason};
-            tool: {name, arguments, result, ok}; policy: an Action; repair: {raw, repaired, method};
-            error: {message}; final: {text}
+            context: {system, user}; llm: {provider, model, content, tool_calls, finish_reason, eur};
+            tool: {name, arguments, result}; final: {text}
     Action:
       type: object
       required: [id, ts, agent_id, domain, service, entity_ids, tier, verdict, reason]
@@ -1065,7 +864,7 @@ components:
         id: {type: string}
         ts: {type: number}
         run_id: {type: [string, "null"]}
-        agent_id: {type: string}
+        agent_id: {type: string, description: "orchestrator | learner (older rows may name a room agent)"}
         domain: {type: string}
         service: {type: string}
         entity_ids: {type: array, items: {type: string}}
@@ -1088,8 +887,8 @@ components:
         status: {type: string, enum: [new, seen, handled]}
     ProviderChoice:
       type: string
-      enum: [local, anthropic, openai, auto]
-      description: the model for this one request; absent = the add-on setting orchestrator_provider
+      enum: [anthropic, openai, auto]
+      description: the model for this one request; absent (or anything else, `local` included) = the add-on setting orchestrator_provider
     Proposal:
       type: object
       required: [id, created, status, title, yaml]
@@ -1160,21 +959,9 @@ components:
               yaml: {type: string}
               proposal_id: {type: [string, "null"]}
               note: {type: [string, "null"]}
-    BoardEntry:
-      type: object
-      required: [id, ts, agent_id, kind, text, expires]
-      properties:
-        id: {type: integer}
-        ts: {type: number}
-        agent_id: {type: string}
-        kind: {type: string, enum: [fact, task, report, escalation]}
-        text: {type: string, maxLength: 160}
-        expires: {type: number}
-        target: {type: [string, "null"]}
-        run_id: {type: [string, "null"]}
     Council:
       type: object
-      required: [mode, mode_entity, mode_entity_present, modes, auto_house_mode, orchestrator_mode, ownership, board, review, orchestrator_wakes]
+      required: [mode, mode_entity, mode_entity_present, modes, auto_house_mode, orchestrator_mode, learner_mode, ownership, review, orchestrator_wakes]
       properties:
         mode: {type: [string, "null"], enum: [home, away, night, guests, work, null]}
         mode_entity: {type: string, const: input_select.agent_house_mode}
@@ -1182,13 +969,12 @@ components:
         modes: {type: array, items: {type: string}}
         auto_house_mode: {type: boolean}
         orchestrator_mode: {$ref: "#/components/schemas/Mode"}
+        learner_mode: {$ref: "#/components/schemas/Mode"}
         night_window: {type: string}
         ownership:
           type: object
           properties:
-            counts: {type: object, additionalProperties: {type: integer}, description: "owner → number of entities"}
-            shared_rooms: {type: object, additionalProperties: {type: array, items: {type: string}}}
-        board: {type: array, items: {$ref: "#/components/schemas/BoardEntry"}}
+            counts: {type: object, additionalProperties: {type: integer}, description: "owner → number of entities (`orchestrator`, `nobody` for pairing switches)"}
         orchestrator_wakes:
           type: array
           description: The fixed rules that wake the orchestrator, with the last time each fired.
@@ -1196,7 +982,7 @@ components:
             type: object
             required: [id, rule, active, last]
             properties:
-              id: {type: string, enum: [house_mode, person, daily_review, escalation, manager_sweep]}
+              id: {type: string, enum: [person, daily_review, manager_sweep]}
               rule: {type: string}
               active: {type: boolean, description: "false: the rule is switched off (auto_house_mode off, no daily_review_at)"}
               last: {type: [number, "null"], description: epoch seconds of the last time it fired}
@@ -1251,7 +1037,7 @@ components:
         last_run: {type: [number, "null"]}
         last_run_id: {type: [string, "null"], description: the run (trace) of the last manager run}
         anomalies: {type: array, items: {type: string}, description: "what the deterministic prefilter would wake the model for"}
-        owned: {type: array, items: {type: string}, description: "entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches)"}
+        owned: {type: array, items: {type: string}, description: "entities the manager may actuate (switchable, visible; no config/diagnostic entities, no pairing switches, no device noise)"}
         owned_note: {type: string, description: plain-language explanation of `owned` for the owner}
         hint: {type: [string, "null"], description: "while off: what that means and how to turn it on"}
         weak: {type: array, items: {type: object, properties: {ha_id: {type: string}, title: {type: [string, "null"]}}}}
@@ -1297,6 +1083,7 @@ components:
                 items: {type: object}
         agents:
           type: array
+          description: "per actor of ours that acted live (`orchestrator`, `learner`)"
           items:
             type: object
             required: [agent_id, kept, undone, precision]
@@ -1419,23 +1206,141 @@ components:
               ts: {type: number}
               side: {type: string, enum: [original_only, replacement_only]}
               detail: {type: string}
-    ModelProfile:
+    DevSnapshot:
       type: object
-      required: [name, model]
+      required: [version, time, learner, manager, orchestrator, policy, council, store, ha, config]
       properties:
-        name: {type: string}
-        model: {type: string}
-        ctx_size: {type: integer}
-        max_output_tokens: {type: integer}
-        temperature: {type: number}
-        top_p: {type: number}
-        top_k: {type: integer}
-        presence_penalty: {type: number}
-        thinking: {type: boolean}
-        provisional: {type: boolean, description: true until an owner benchmark confirmed it}
-        experimental: {type: boolean}
-        active: {type: boolean}
-        notes: {type: string}
+        version: {type: string}
+        time: {type: string, format: date-time}
+        learner:
+          description: LearnerInfo plus what the Jetson came up with
+          allOf:
+            - {$ref: "#/components/schemas/LearnerInfo"}
+            - type: object
+              required: [targets, facts, house_model, live_suggestions]
+              properties:
+                targets: {type: array, items: {type: string}, description: "devices the learner may act on now (fresh model's live targets, no helpers)"}
+                facts: {type: array, items: {type: string}, description: "what the learner knows as short lines (the orchestrator's prompts get these)"}
+                house_model:
+                  type: [object, "null"]
+                  description: >-
+                    The stored house model as received (schemas/house_model.schema.json): habits, routines,
+                    dependencies, corrections, timeouts, usual_states, event_relevance, health, modes, asks,
+                    live; null before the first training
+                live_suggestions:
+                  type: array
+                  description: the last 50 live suggestions and the actuator's verdict for each
+                  items:
+                    type: object
+                    properties:
+                      ts: {type: number}
+                      entity_id: {type: string}
+                      state: {type: string}
+                      p: {type: [number, "null"]}
+                      verdict: {$ref: "#/components/schemas/Verdict"}
+                      action_id: {type: string}
+                tables:
+                  type: object
+                  properties:
+                    usual_states: {type: integer, description: devices in the learner's usual-state table (unusual notes)}
+                    habits_source: {type: [string, "null"], description: "`learner` when the last scan used the learner's habits, null for the add-on's own scan"}
+        manager:
+          allOf:
+            - {$ref: "#/components/schemas/ManagerStatus"}
+            - type: object
+              properties:
+                last_sweep: {type: [number, "null"], description: epoch seconds of the last sweep}
+                runs:
+                  type: array
+                  description: the last manager runs (traces at api/runs/{id})
+                  items:
+                    type: object
+                    properties:
+                      id: {type: string}
+                      started: {type: number}
+                      status: {$ref: "#/components/schemas/RunStatus"}
+                      provider: {type: [string, "null"]}
+                      tokens_in: {type: integer}
+                      tokens_out: {type: integer}
+                      shadow: {type: boolean}
+        orchestrator:
+          allOf:
+            - {$ref: "#/components/schemas/OrchestratorStatus"}
+            - type: object
+              required: [providers, last_calls]
+              properties:
+                providers: {type: array, items: {type: string, enum: [anthropic, openai]}, description: the order a request tries now}
+                redact_cloud: {type: boolean}
+                last_calls:
+                  type: array
+                  description: the last 20 model calls since the add-on started, newest first; never a prompt
+                  items:
+                    type: object
+                    required: [ts, task, provider, ok]
+                    properties:
+                      ts: {type: number}
+                      task: {type: string, description: "draft | habit | undo | conflict | explain | chat | routine | manage"}
+                      provider: {type: string}
+                      model: {type: [string, "null"]}
+                      tokens_in: {type: integer}
+                      tokens_out: {type: integer}
+                      eur: {type: number}
+                      ok: {type: boolean}
+                      error: {type: [string, "null"]}
+        policy:
+          type: object
+          required: [mode, kill_switch, tiers, recent]
+          properties:
+            mode: {$ref: "#/components/schemas/Mode"}
+            kill_switch: {type: object}
+            tiers: {type: object, additionalProperties: {type: integer}, description: "T0..T3 → entities in HA with that tier"}
+            t3_whitelist: {type: array, items: {type: string}}
+            pending_approvals: {type: integer}
+            recent:
+              type: array
+              description: the last 20 policy decisions (the action log)
+              items:
+                type: object
+                properties:
+                  id: {type: string}
+                  ts: {type: number}
+                  agent_id: {type: string}
+                  domain: {type: string}
+                  service: {type: string}
+                  entity_ids: {type: array, items: {type: string}}
+                  tier: {$ref: "#/components/schemas/Tier"}
+                  verdict: {$ref: "#/components/schemas/Verdict"}
+                  reason: {type: string}
+        council:
+          type: object
+          description: "Council without review / last_scan / first_look (api/council has those)"
+        store:
+          type: object
+          properties:
+            path: {type: string}
+            rows: {type: object, additionalProperties: {type: integer}, description: rows per table}
+        ha:
+          allOf:
+            - {$ref: "#/components/schemas/HaStatus"}
+            - type: object
+              properties:
+                forwarder:
+                  type: object
+                  description: "LearnerBrief plus the forwarder's buffer: events waiting, lost, sent"
+                  properties:
+                    configured: {type: boolean}
+                    connected: {type: boolean}
+                    mode: {$ref: "#/components/schemas/Mode"}
+                    fresh: {type: boolean}
+                    error: {type: [string, "null"]}
+                    buffered: {type: integer}
+                    dropped: {type: integer}
+                    pushed: {type: integer}
+        config:
+          type: object
+          properties:
+            options: {type: object, description: "add-on options, secrets \"***\", URLs without credentials"}
+            runtime: {type: object, description: GUI-editable settings}
     Settings:
       type: object
       properties:

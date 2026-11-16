@@ -44,7 +44,7 @@ def app(settings, tmp_path, ha_state):
     served.close()
 
 
-def test_import_propose_parity_and_reversible_disable(app, ha_state, llm_sim):
+def test_import_propose_parity_and_reversible_disable(app, ha_state, claude_sim):
     base = app.base
     owners = copy.deepcopy(ha_state.automations)
     report = httpx.post(f"{base}/api/migration/import").json()
@@ -65,8 +65,8 @@ def test_import_propose_parity_and_reversible_disable(app, ha_state, llm_sim):
 
     # the orchestrator drafts the replacement: a normal proposal that names the original
     assert httpx.get(f"{base}/api/migration/originals/{OWN}/parity").status_code == 409
-    llm_sim.script[:] = [
-        {"tool_calls": [{"name": "submit_automation", "arguments": {
+    claude_sim.script[:] = [
+        {"tool_use": [{"name": "submit_automation", "input": {
             "title": "Hallway light on motion", "rationale": "same as the original",
             "expected_triggers": "hallway motion", "yaml": REPLACEMENT}}]},
         {"text": "Submitted."},
@@ -85,7 +85,7 @@ def test_import_propose_parity_and_reversible_disable(app, ha_state, llm_sim):
     proposal = httpx.get(f"{base}/api/proposals/{original['replacement_proposal_id']}").json()
     assert proposal["status"] == "draft" and proposal["replaces_original"] == OWN
     assert proposal["run_id"] == run_id
-    assert "Hallway motion light" in str(llm_sim.requests[0]["messages"][1]), "the request names the original"
+    assert "Hallway motion light" in str(claude_sim.requests[0]["body"]["messages"][0]), "names the original"
     assert original["replacement_ha_id"] is None, "not deployed yet"
 
     # parity: both replayed against the same history
@@ -141,14 +141,14 @@ def test_what_cannot_be_switched_and_the_kill_switch(app, ha_state):
     assert undo.status_code == 200, "enabling the owner's automation again is always possible"
 
 
-def test_a_replacement_with_the_originals_alias_does_not_take_its_entity(app, ha_state, llm_sim):
+def test_a_replacement_with_the_originals_alias_does_not_take_its_entity(app, ha_state, claude_sim):
     """QA-003: HA gives a second automation with the same alias `<slug>_2`; the original keeps its
     entity, stays the owner's, and can still be switched off from the migration page."""
     base = app.base
     httpx.post(f"{base}/api/migration/import")
     same = REPLACEMENT.replace("alias: Hallway light on motion", "alias: Hallway motion light")
-    llm_sim.script[:] = [
-        {"tool_calls": [{"name": "submit_automation", "arguments": {
+    claude_sim.script[:] = [
+        {"tool_use": [{"name": "submit_automation", "input": {
             "title": "Hallway motion light", "rationale": "same", "expected_triggers": "motion",
             "yaml": same}}]},
         {"text": "Submitted."},
@@ -172,12 +172,12 @@ def test_a_replacement_with_the_originals_alias_does_not_take_its_entity(app, ha
     assert ha_state.states[ours]["state"] == "on", "ours is untouched"
 
 
-def test_parity_after_a_rejected_replacement_says_so(app, ha_state, llm_sim):
+def test_parity_after_a_rejected_replacement_says_so(app, ha_state, claude_sim):
     """QA-004: the 409 after a rejection names the rejected draft instead of "ask for one first"."""
     base = app.base
     httpx.post(f"{base}/api/migration/import")
-    llm_sim.script[:] = [
-        {"tool_calls": [{"name": "submit_automation", "arguments": {
+    claude_sim.script[:] = [
+        {"tool_use": [{"name": "submit_automation", "input": {
             "title": "Hallway light on motion", "rationale": "same", "expected_triggers": "motion",
             "yaml": REPLACEMENT}}]},
         {"text": "Submitted."},
