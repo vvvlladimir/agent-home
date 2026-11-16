@@ -6,6 +6,7 @@ type S = components['schemas'];
 export type Status = S['Status'];
 export type Area = S['Area'];
 export type ManagerStatus = S['ManagerStatus'];
+export type LearnerInfo = S['LearnerInfo'];
 export type Metrics = S['Metrics'];
 export type Entity = S['Entity'];
 export type FeedItem = S['FeedItem'];

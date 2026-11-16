@@ -854,6 +854,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/learner": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Jetson learner (D38) - the link that forwards the house to it, its journal and training, the house model it learnt, and what its live suggestions did */
+        get: operations["getLearner"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/learner/train": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the learner to train now instead of at night */
+        post: operations["trainLearner"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chat": {
         parameters: {
             query?: never;
@@ -1352,6 +1386,39 @@ export interface components {
             /** @description the first scan after install (D31): when, how many drafted, the habit funnel; null until it ran */
             first_look?: Record<string, never> | null;
         };
+        LearnerInfo: {
+            /** @description jetson_learner_url is set */
+            configured: boolean;
+            /**
+             * @description learner_mode: live suggestions only act when live (and policy allows)
+             * @enum {string}
+             */
+            mode: "shadow" | "live";
+            /** @description the add-on's side - forwarding, buffer, backfill */
+            link: {
+                connected?: boolean;
+                last_push?: number | null;
+                pushed?: number;
+                buffered?: number;
+                /** @description events lost because the buffer was full */
+                dropped?: number;
+                error?: string | null;
+                /** @description {state: idle|running|done|failed, from, to, days, error} */
+                backfill?: Record<string, never>;
+                registry_sent?: number | null;
+            };
+            /** @description schemas/learner_status.schema.json, null while unreachable */
+            jetson?: Record<string, never> | null;
+            /** @description summary of schemas/house_model.schema.json (counts and the strongest items); null before the first training */
+            model: Record<string, never> | null;
+            /** @description what the live suggestions did today */
+            live?: {
+                acted?: number;
+                shadow?: number;
+                denied?: number;
+                recent?: Record<string, never>[];
+            };
+        };
         ManagerStatus: {
             enabled: boolean;
             /** @enum {string} */
@@ -1429,8 +1496,11 @@ export interface components {
         Finding: {
             /** @description stable key, e.g. habit:<entity> (one per device), undo:<ha_id>:v<n>, conflict:<entity>:<sides> */
             id: string;
-            /** @enum {string} */
-            kind: "habit" | "undo" | "conflict";
+            /**
+             * @description timeout: a light controller the owner keeps correcting (D38 learner)
+             * @enum {string}
+             */
+            kind: "habit" | "undo" | "conflict" | "timeout";
             /** @enum {string} */
             status: "new" | "drafting" | "drafted" | "failed" | "dismissed";
             title: string;
@@ -2951,6 +3021,50 @@ export interface operations {
                     "application/json": components["schemas"]["Metrics"];
                 };
             };
+            502: components["responses"]["Error"];
+        };
+    };
+    getLearner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LearnerInfo"];
+                };
+            };
+        };
+    };
+    trainLearner: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description started */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
+                };
+            };
+            409: components["responses"]["Error"];
             502: components["responses"]["Error"];
         };
     };

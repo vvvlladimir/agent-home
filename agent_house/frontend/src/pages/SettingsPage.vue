@@ -23,7 +23,7 @@ async function load() {
 }
 async function save() {
   // '' = "use the default" (null); text fields stay text; everything else is a number
-  const TEXT = ['kill_switch_entity', 'orchestrator_mode', 'night_window', 'automation_users'];
+  const TEXT = ['kill_switch_entity', 'orchestrator_mode', 'learner_mode', 'night_window', 'automation_users'];
   const body: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(form.value)) {
     if (k === 'daily_review_at') body[k] = v.trim(); // '' = no daily review
@@ -113,6 +113,10 @@ onActivated(load);
               <Seg v-model="form.orchestrator_mode" :options="MODES" :label="t('Orchestrator mode')" />
               <label class="field check"><input type="checkbox" :checked="form.auto_house_mode === 'true'"
                 @change="form.auto_house_mode = ($event.target as HTMLInputElement).checked ? 'true' : 'false'" /> <span>{{ t('Switches the house mode itself') }}</span></label>
+            </div>
+            <div class="row">
+              <Seg v-model="form.learner_mode" :options="MODES" :label="t('Learner mode')" />
+              <Info :tip="t('What the learner on the Jetson suggests live goes through the same checks as every agent, on devices no room agent owns. In shadow it only logs what it would have switched.')" />
             </div>
             <div class="fields">
               <label class="field"><span>{{ t('Night window') }}</span><input v-model="form.night_window" type="text" class="mono" placeholder="23:00-06:00" /></label>

@@ -1,8 +1,9 @@
 <!-- Council: how the agents share the house. House mode, what wakes the orchestrator, the daily review,
-     the shared board (facts, tasks, reports, escalations) and who owns which entity. -->
+     the shared board (facts, tasks, reports, escalations), who owns which entity, and the learner on the
+     Jetson (D38): its journal, training and what it found. -->
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, ref } from 'vue';
-import { api, enc, type BoardEntry, type Council } from '../api';
+import { api, enc, type BoardEntry, type Council, type LearnerInfo } from '../api';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
 import { ago, dateTime, hm, pct, until } from '../format';
@@ -11,12 +12,24 @@ import { go } from '../router';
 import { fail, nav, state, t, toast, withBusy } from '../store';
 
 const council = ref<Council | null>(null);
+const learner = ref<LearnerInfo | null>(null);
+interface LearnerModel {
+  trained_at?: number; fresh?: boolean; facts?: string[];
+  history?: { days?: number; events?: number; by_hand?: number };
+  counts?: Record<string, number>;
+}
+interface LearnerJetson { journal?: { events?: number; size_mb?: number | null }; training?: { state?: string; finished?: number | null; next_at?: number | null; error?: string | null } }
+const model = computed(() => learner.value?.model as LearnerModel | null | undefined);
+const jetson = computed(() => learner.value?.jetson as LearnerJetson | null | undefined);
+const backfill = computed(() => learner.value?.link?.backfill as { state?: string; days?: number; events?: number; error?: string | null } | undefined);
+const COUNT_LABEL: Record<string, string> = { habits: 'habits', live: 'live targets', routines: 'routines', dependencies: 'links', corrections: 'corrected', timeouts: 'timeouts' };
 const error = ref('');
 const ownerQuery = ref('');
 const ownerResult = ref('');
 
 async function load() {
   try { council.value = await api.get<Council>('api/council'); error.value = ''; } catch (e) { error.value = (e as Error).message; }
+  try { learner.value = await api.get<LearnerInfo>('api/learner'); } catch { learner.value = null; }
 }
 async function post(id: string, path: string, done: string) {
   if ((await withBusy(id, () => api.post(path))) !== undefined) toast(t(done));
@@ -106,6 +119,40 @@ onDeactivated(() => clearInterval(timer));
       </div>
 
       <div class="stack">
+        <article v-if="learner" class="card stack">
+          <div class="sec-h">
+            <h2>{{ t('Learner') }}
+              <Info :tip="t('The Jetson keeps the house history on its own disk and learns from it every night: habits over months, routines, what follows what, which automations you keep correcting. It never switches anything itself; its live suggestions go through the same checks as every agent.')" /></h2>
+            <span v-if="learner.configured" class="status" :class="learner.link.connected ? 'ok' : 'warn'">{{ learner.link.connected ? t('connected') : t('unreachable') }}</span>
+          </div>
+          <p v-if="!learner.configured" class="muted small">{{ t('Not set up. Install jetson/learner on the Jetson and set the add-on option Jetson learner URL.') }}</p>
+          <template v-else>
+            <p v-if="learner.link.error" class="error small">{{ learner.link.error }}</p>
+            <dl class="kv">
+              <dt>{{ t('Journal') }}</dt>
+              <dd>{{ jetson?.journal?.events ?? '–' }} {{ t('events') }}<span v-if="model?.history?.days"> · {{ Math.round(model.history.days) }} {{ t('days') }}</span><span v-if="jetson?.journal?.size_mb != null" class="faint"> · {{ jetson.journal.size_mb }} MB</span></dd>
+              <dt>{{ t('Forwarded') }}</dt>
+              <dd>{{ learner.link.pushed }}<span v-if="learner.link.buffered" class="faint"> · {{ learner.link.buffered }} {{ t('waiting') }}</span><span v-if="learner.link.dropped" class="warn-text"> · {{ learner.link.dropped }} {{ t('lost') }}</span></dd>
+              <dt>{{ t('From the logbook') }}</dt>
+              <dd>{{ backfill?.state ? t(backfill.state) : '–' }}<span v-if="backfill?.days" class="faint"> · {{ backfill.days }} {{ t('days') }}, {{ backfill.events }} {{ t('events') }}</span></dd>
+              <dt>{{ t('Training') }}</dt>
+              <dd>{{ jetson?.training?.state ? t(jetson.training.state) : '–' }}<span v-if="model?.trained_at" class="faint"> · {{ ago(model.trained_at) }}</span><span v-if="jetson?.training?.next_at" class="faint"> · {{ t('next') }} {{ hm(jetson.training.next_at) }}</span></dd>
+              <dt>{{ t('Live suggestions') }}</dt>
+              <dd><span v-if="learner.mode === 'live'" class="live-dot">{{ t('Live') }}</span><span v-else class="status shadow">{{ t('Shadow') }}</span>
+                <span class="faint"> · {{ t('today') }}: {{ learner.live?.acted ?? 0 }} {{ t('done') }}, {{ learner.live?.shadow ?? 0 }} {{ t('would have') }}</span></dd>
+            </dl>
+            <p v-if="jetson?.training?.error" class="error small">{{ jetson.training.error }}</p>
+            <div v-if="model?.counts" class="chips">
+              <span v-for="(n, k) in model.counts" :key="k" class="tag">{{ n }} {{ t(COUNT_LABEL[k] || k) }}</span>
+            </div>
+            <details v-if="model?.facts?.length"><summary>{{ t('What it found') }}</summary>
+              <ul class="small"><li v-for="f in model.facts" :key="f">{{ f }}</li></ul>
+            </details>
+            <div><button class="btn" :aria-busy="state.busy.train || undefined"
+                         @click="post('train', 'api/learner/train', 'Training started on the Jetson.')">{{ t('Train now') }}</button></div>
+          </template>
+        </article>
+
         <div class="sec">
           <div class="sec-h"><h2>{{ t('Shared board') }}
             <Info :tip="t('Short facts the agents leave for each other, with an expiry. Nothing here wakes an agent; each wake reads the fresh ones. Escalations go to the owner of the entity they name.')" /></h2>
