@@ -68,6 +68,7 @@ def leave_home(ha: HAState) -> list[dict]:
         *_set(lights[:3], "off", "user"),
         {"entity": "binary_sensor.hallway_motion", "state": "on"},
         {"wait": 10},
+        {"entity": "lock.front_door", "state": "unlocked", "cause": "physical"},
         {"entity": "binary_sensor.front_door_contact", "state": "on"},
         {"wait": 4},
         {"entity": "binary_sensor.front_door_contact", "state": "off"},
