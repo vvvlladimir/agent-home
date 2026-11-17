@@ -10,6 +10,7 @@ from datetime import UTC
 from fastapi import APIRouter, Request
 
 from .. import __version__
+from ..config import SECRET_FIELDS
 from ..core import clock
 from ..core.policy import TIERS, resolve_tier
 from .routes import _learner_brief
@@ -87,9 +88,27 @@ def _store(ctx) -> dict:
     return {"path": ctx.store.path, "rows": counts}
 
 
+def _scrub(value, secrets: list[str]):
+    """Error texts from providers and HA are shown as they came; a key echoed in one is masked here."""
+    if isinstance(value, str):
+        for secret in secrets:
+            value = value.replace(secret, "***")
+        return value
+    if isinstance(value, list):
+        return [_scrub(v, secrets) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub(v, secrets) for k, v in value.items()}
+    return value
+
+
 @router.get("/dev")
 async def get_dev(request: Request) -> dict:
     ctx = request.app.state.ctx
+    secrets = [v for k in SECRET_FIELDS if len(v := str(getattr(ctx.settings, k, "") or "")) >= 4]
+    return _scrub(_snapshot(ctx), secrets)
+
+
+def _snapshot(ctx) -> dict:
     learner = ctx.learner
     return {
         "version": __version__,
