@@ -16,15 +16,14 @@ const PAGES: Record<Page, Component> = {
   overview: OverviewPage,
   feed: lazy(() => import('./pages/FeedPage.vue')),
   runs: lazy(() => import('./pages/RunsPage.vue')),
-  agents: lazy(() => import('./pages/RoomsPage.vue')),
   council: lazy(() => import('./pages/CouncilPage.vue')),
   proposals: lazy(() => import('./pages/DraftsPage.vue')),
   automations: lazy(() => import('./pages/DeployedPage.vue')),
   migration: lazy(() => import('./pages/MigrationPage.vue')),
   chat: lazy(() => import('./pages/ChatPage.vue')),
   settings: lazy(() => import('./pages/SettingsPage.vue')),
-  models: lazy(() => import('./pages/ModelsPage.vue')),
   logs: lazy(() => import('./pages/LogsPage.vue')),
+  dev: lazy(() => import('./pages/DevPage.vue')),
 };
 
 const askCount = computed(() =>
@@ -43,19 +42,20 @@ onMounted(() => installTooltips(tip.value!));
         {{ state.status ? (state.status.mode === 'live' ? t('Live') : t('Shadow')) : '…' }}</a>
       <span class="status" tabindex="0" :class="conn.cls" :data-tip="conn.tip">{{ conn.text }}</span>
       <span class="spacer" />
+      <IconButton icon="code" :tip="t('Developer tools')" href="#dev" :class="{ on: page === 'dev' }" />
       <IconButton icon="theme" :tip="t('Dark / light')" @click="toggleTheme" />
       <button class="btn kill" :disabled="!state.status || state.status.kill_switch.engaged" @click="stopAll"
-              :data-tip="t('Stops every agent at once. No service call and no deploy leaves the add-on until you resume.')">
+              :data-tip="t('Stops the learner, the orchestrator and the house manager at once. No service call and no deploy leaves the add-on until you resume.')">
         <Icon name="power" /><span>{{ t('Stop all') }}</span></button>
     </div>
     <div v-if="state.status?.kill_switch?.engaged" class="stopped">
       <Icon name="power" />
-      <span>{{ t('All agents stopped') }}</span>
+      <span>{{ t('Everything stopped') }}</span>
       <span class="small" style="font-weight: 400">{{ state.status.kill_switch.reason || '' }}</span>
       <button class="btn" @click="resumeAll">{{ t('Resume…') }}</button>
     </div>
     <nav class="tabs" aria-label="Main">
-      <a v-for="tb in TABS" :key="tb.id" :href="'#' + tb.pages[0]" :class="{ on: tab.id === tb.id }" :aria-current="tab.id === tb.id ? 'page' : undefined">
+      <a v-for="tb in TABS" :key="tb.id" :href="'#' + tb.pages[0]" :class="{ on: tab?.id === tb.id }" :aria-current="tab?.id === tb.id ? 'page' : undefined">
         <span>{{ t(tb.label) }}</span>
         <span v-if="tb.id === 'overview' && askCount" class="num">{{ askCount }}</span>
       </a>
@@ -64,7 +64,7 @@ onMounted(() => installTooltips(tip.value!));
 
   <main>
     <div v-if="state.apiError" class="card error"><strong>{{ t('Backend not reachable') }}</strong> · {{ state.apiError }}</div>
-    <nav v-if="tab.pages.length > 1" class="sub" :aria-label="t(tab.label)">
+    <nav v-if="tab && tab.pages.length > 1" class="sub" :aria-label="t(tab.label)">
       <a v-for="p in tab.pages" :key="p" :href="'#' + p" :class="{ on: page === p }">{{ t(PAGE_LABELS[p] || p) }}</a>
     </nav>
     <KeepAlive :max="4"><component :is="PAGES[page]" :key="page" /></KeepAlive>

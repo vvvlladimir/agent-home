@@ -1,4 +1,4 @@
-<!-- Live feed: every event (state changes, agents, system), searchable. -->
+<!-- Live feed: every event (state changes, the helpers, system), searchable. -->
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import SearchField from '../components/SearchField.vue';
@@ -20,7 +20,7 @@ const shown = computed(() => {
 <template>
   <section class="page">
     <div class="toolbar">
-      <SearchField v-model="query" :placeholder="t('Search entity, agent, text')" />
+      <SearchField v-model="query" :placeholder="t('Search entity, text')" />
       <label class="field"><span>{{ t('Kind') }}</span>
         <select v-model="kind"><option value="">{{ t('All') }}</option><option v-for="k in kinds" :key="k" :value="k">{{ k }}</option></select></label>
       <label class="field check"><input v-model="state.feedPaused" type="checkbox" /> <span>{{ t('Pause') }}</span></label>
@@ -33,7 +33,7 @@ const shown = computed(() => {
           <time>{{ clock(e.ts) }}</time><span /><span class="msg">{{ e.summary }}</span><span class="tag">{{ e.kind }}</span>
         </li>
       </ul>
-      <p v-if="!shown.length" class="empty">{{ t('State changes and agent activity show up here as they happen.') }}</p>
+      <p v-if="!shown.length" class="empty">{{ t('State changes and activity show up here as they happen.') }}</p>
     </div>
   </section>
 </template>

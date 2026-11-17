@@ -1,18 +1,18 @@
-<!-- Council: how the agents share the house. House mode, what wakes the orchestrator, the daily review,
-     the shared board (facts, tasks, reports, escalations), who owns which entity, and the learner on the
-     Jetson (D38): its journal, training and what it found. -->
+<!-- House: house mode, what wakes the orchestrator, the daily review, the house manager, who owns which
+     entity, and the learner on the Jetson (D38): its journal, training and what it found. -->
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, ref } from 'vue';
-import { api, enc, type BoardEntry, type Council, type LearnerInfo } from '../api';
+import { api, enc, type Council, type LearnerInfo, type ManagerStatus } from '../api';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
-import { ago, dateTime, hm, pct, until } from '../format';
+import { ago, dateTime, hm, pct } from '../format';
 import { agentName } from '../labels';
 import { go } from '../router';
-import { fail, nav, state, t, toast, withBusy } from '../store';
+import { fail, killed, nav, state, t, toast, withBusy } from '../store';
 
 const council = ref<Council | null>(null);
 const learner = ref<LearnerInfo | null>(null);
+const manager = ref<ManagerStatus | null>(null);
 interface LearnerModel {
   trained_at?: number; fresh?: boolean; facts?: string[];
   history?: { days?: number; events?: number; by_hand?: number };
@@ -30,6 +30,7 @@ const ownerResult = ref('');
 async function load() {
   try { council.value = await api.get<Council>('api/council'); error.value = ''; } catch (e) { error.value = (e as Error).message; }
   try { learner.value = await api.get<LearnerInfo>('api/learner'); } catch { learner.value = null; }
+  try { manager.value = await api.get<ManagerStatus>('api/manager'); } catch { manager.value = null; }
 }
 async function post(id: string, path: string, done: string) {
   if ((await withBusy(id, () => api.post(path))) !== undefined) toast(t(done));
@@ -40,7 +41,7 @@ async function lookup() {
   if (!id) return;
   try {
     const r = await api.get<{ owner: string; area?: string | null }>(`api/council/owner/${enc(id)}`);
-    ownerResult.value = agentName(r.owner) + (r.area ? ` · ${r.area}` : '');
+    ownerResult.value = (r.owner === 'nobody' ? t('Nobody') : agentName(r.owner)) + (r.area ? ` · ${r.area}` : '');
   } catch (e) { ownerResult.value = ''; fail(e); }
 }
 function openRun(id?: string | null) { if (id) { nav.runId = id; go('runs'); } }
@@ -50,8 +51,6 @@ const review = computed(() => council.value?.review as { at?: string | null; run
 const scan = computed(() => council.value?.last_scan as { scanned: number; changes: number; manual: number } | null | undefined);
 const owners = computed(() => Object.entries(council.value?.ownership?.counts || {}).sort((a, b) => b[1] - a[1]));
 const maxOwned = computed(() => Math.max(1, ...owners.value.map(([, n]) => n)));
-const shared = computed(() => Object.entries(council.value?.ownership?.shared_rooms || {}));
-const KIND_MARK: Record<BoardEntry['kind'], string> = { fact: 'note', task: 'ask', report: 'done', escalation: 'warn' };
 
 let timer: number | undefined;
 onActivated(() => { load(); timer = setInterval(load, 10000); });
@@ -68,7 +67,7 @@ onDeactivated(() => clearInterval(timer));
         <article class="card stack">
           <div class="sec-h">
             <h2>{{ t('House mode') }}
-              <Info :tip="t('The orchestrator switches only this helper, in shadow unless its own mode is live. Guests and work are set by you only. Room agents and automations read it, so rooms react to each other inside Home Assistant.')" /></h2>
+              <Info :tip="t('The orchestrator switches only this helper, in shadow unless its own mode is live. Guests and work are set by you only. Your automations read it, so the house reacts to the mode inside Home Assistant.')" /></h2>
             <a class="btn quiet sm" href="#settings">{{ t('Settings') }}</a>
           </div>
           <template v-if="council.mode_entity_present">
@@ -89,8 +88,8 @@ onDeactivated(() => clearInterval(timer));
 
         <article class="card stack">
           <h2>{{ t('What wakes the orchestrator') }}</h2>
-          <ul class="feed">
-            <li v-for="w in council.orchestrator_wakes" :key="w.id" style="grid-template-columns: 14px minmax(0, 1fr) auto">
+          <ul class="feed marks">
+            <li v-for="w in council.orchestrator_wakes" :key="w.id">
               <i class="mk" :class="w.active ? 'done' : ''" :data-tip="w.active ? t('On') : t('Off')" />
               <span class="msg" :class="{ faint: !w.active }">{{ w.rule }}</span>
               <span class="faint small nowrap" :data-tip="w.last ? dateTime(w.last) : ''">{{ w.last ? ago(w.last) : t('never') }}</span>
@@ -122,7 +121,7 @@ onDeactivated(() => clearInterval(timer));
         <article v-if="learner" class="card stack">
           <div class="sec-h">
             <h2>{{ t('Learner') }}
-              <Info :tip="t('The Jetson keeps the house history on its own disk and learns from it every night: habits over months, routines, what follows what, which automations you keep correcting. It never switches anything itself; its live suggestions go through the same checks as every agent.')" /></h2>
+              <Info :tip="t('The Jetson keeps the house history on its own disk and learns from it every night: habits over months, routines, what follows what, which automations you keep correcting. It never switches anything itself; its live suggestions go through the same safety checks as everything else.')" /></h2>
             <span v-if="learner.configured" class="status" :class="learner.link.connected ? 'ok' : 'warn'">{{ learner.link.connected ? t('connected') : t('unreachable') }}</span>
           </div>
           <p v-if="!learner.configured" class="muted small">{{ t('Not set up. Install jetson/learner on the Jetson and set the add-on option Jetson learner URL.') }}</p>
@@ -153,33 +152,39 @@ onDeactivated(() => clearInterval(timer));
           </template>
         </article>
 
-        <div class="sec">
-          <div class="sec-h"><h2>{{ t('Shared board') }}
-            <Info :tip="t('Short facts the agents leave for each other, with an expiry. Nothing here wakes an agent; each wake reads the fresh ones. Escalations go to the owner of the entity they name.')" /></h2>
-            <span class="muted small">{{ council.board.length }}</span></div>
-          <div class="card list">
-            <ul class="feed">
-              <li v-for="b in council.board" :key="b.id">
-                <time>{{ hm(b.ts) }}</time>
-                <i class="mk" :class="KIND_MARK[b.kind]" :data-tip="t(b.kind)" />
-                <span class="msg" :class="{ 'warn-text': b.kind === 'escalation' }">{{ b.text }}
-                  <span class="where">· {{ agentName(b.agent_id) }}{{ b.target ? ' → ' + agentName(b.target) : '' }}</span></span>
-                <span class="faint small nowrap" :data-tip="t('Expires in')">{{ until(b.expires) }}</span>
-              </li>
-            </ul>
-            <p v-if="!council.board.length" class="empty">{{ t('The board is empty.') }}</p>
+        <article v-if="manager" class="card stack">
+          <div class="sec-h">
+            <h2>{{ t('House manager') }}
+              <Info :tip="t('Between reviews a cheap check looks at the house (lights on with nobody home, weak automations). The model is called only when it finds something. Its actions follow the orchestrator mode.')" /></h2>
+            <span class="status" :class="manager.enabled ? 'ok' : 'off'">{{ manager.enabled ? t('on') : t('off') }}</span>
           </div>
-        </div>
+          <p v-if="manager.hint" class="muted small">{{ manager.hint }}</p>
+          <dl class="kv">
+            <dt>{{ t('Mode') }}</dt>
+            <dd><span v-if="manager.mode === 'live'" class="live-dot">{{ t('Live') }}</span><span v-else class="status shadow">{{ t('Shadow') }}</span></dd>
+            <dt>{{ t('Check every') }}</dt><dd>{{ manager.sweep_min ? `${manager.sweep_min} min` : t('off') }}</dd>
+            <dt>{{ t('Wakes the model') }}</dt><dd>{{ manager.wakes_last_hour ?? 0 }} / {{ manager.max_wakes_per_hour ?? '–' }} {{ t('in the last hour') }}</dd>
+            <dt>{{ t('Last run') }}</dt>
+            <dd>{{ manager.running ? t('running') : manager.last_run ? ago(manager.last_run) : t('never') }}
+              <IconButton v-if="manager.last_run_id" icon="trace" :tip="t('Open trace')" @click="openRun(manager.last_run_id)" /></dd>
+            <dt>{{ t('May switch') }}</dt><dd>{{ manager.owned.length }} {{ t('devices') }} <Info v-if="manager.owned_note" :tip="manager.owned_note" /></dd>
+          </dl>
+          <ul v-if="manager.anomalies.length" class="feed marks">
+            <li v-for="a in manager.anomalies" :key="a"><i class="mk warn" /><span class="msg">{{ a }}</span></li>
+          </ul>
+          <p v-else-if="manager.enabled" class="muted small">{{ t('Nothing to look at right now.') }}</p>
+          <div><button class="btn" :aria-busy="state.busy.manager || undefined" :disabled="killed()"
+                       @click="post('manager', 'api/manager/wake', 'The house manager is looking.')">{{ t('Ask the house manager') }}</button></div>
+        </article>
 
         <article class="card stack">
           <h2>{{ t('Ownership') }}
-            <Info :tip="t('Every entity has exactly one owner: the room agent of its area, otherwise the orchestrator. No agent acts on or automates an entity it does not own.')" /></h2>
+            <Info :tip="t('The orchestrator owns every entity it may act on or automate. Pairing switches and the like belong to nobody.')" /></h2>
           <div v-for="[owner, n] in owners" :key="owner" class="row">
-            <span style="min-width: 8rem">{{ agentName(owner) }}</span>
+            <span style="min-width: 8rem">{{ owner === 'nobody' ? t('Nobody') : agentName(owner) }}</span>
             <span class="meter grow"><span :style="{ width: pct(n, maxOwned) + '%' }" /></span>
             <span class="muted small" style="min-width: 2rem; text-align: right">{{ n }}</span>
           </div>
-          <p v-for="[room, agents] in shared" :key="room" class="error small">{{ t('Claimed by more than one agent') }}: {{ room }} · {{ agents.map(agentName).join(', ') }}</p>
           <form class="row" @submit.prevent="lookup">
             <input v-model="ownerQuery" class="mono grow" placeholder="light.kitchen" :aria-label="t('Who owns this entity?')" />
             <button class="btn" type="submit">{{ t('Who owns it?') }}</button>

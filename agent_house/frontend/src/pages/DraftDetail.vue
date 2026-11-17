@@ -119,7 +119,7 @@ async function explain(fresh = false, cachedOnly = false) {
   } catch (e) { if (!cachedOnly) wordsError.value = (e as Error).message; }
   wordsBusy.value = false;
 }
-const PROVIDER: Record<string, string> = { local: 'the local model', anthropic: 'Claude', openai: 'OpenAI' };
+const PROVIDER: Record<string, string> = { anthropic: 'Claude', openai: 'OpenAI' };
 
 // --- change it in words, on the model the owner picks ----------------------------------------
 const ask = ref('');

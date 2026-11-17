@@ -7,27 +7,10 @@ export type Status = S['Status'];
 export type Area = S['Area'];
 export type ManagerStatus = S['ManagerStatus'];
 export type LearnerInfo = S['LearnerInfo'];
+export type DevSnapshot = S['DevSnapshot'];
 export type Metrics = S['Metrics'];
 export type Entity = S['Entity'];
 export type FeedItem = S['FeedItem'];
-// OpenAPI only points at contracts/schemas/agent_config.schema.json for this one, so it is written out here.
-export interface AgentConfig {
-  id: string;
-  name: string;
-  room: string;
-  enabled?: boolean;
-  mode?: 'shadow' | 'live';
-  entities?: string[];
-  entities_mode?: 'only' | 'pinned';
-  max_entities?: number;
-  tier_overrides?: Record<string, string>;
-  system_prompt?: string;
-  model_profile?: string;
-  wake_rules?: { events?: Record<string, unknown>[]; cron?: { expr: string; reason?: string }[]; max_wakes_per_hour?: number };
-  limits?: Record<string, number>;
-  memory_cap_chars?: number;
-}
-export type AgentSummary = S['AgentSummary'];
 export type RunSummary = S['RunSummary'];
 export type Run = S['Run'];
 export type Step = S['Step'];
@@ -37,10 +20,8 @@ export type Finding = S['Finding'];
 export type DeployedAutomation = S['DeployedAutomation'];
 export type Original = S['Original'];
 export type Parity = S['Parity'];
-export type ModelProfile = S['ModelProfile'];
 export type Settings = S['Settings'];
 export type Council = S['Council'];
-export type BoardEntry = S['BoardEntry'];
 export type Tier = S['Tier'];
 export type Mode = S['Mode'];
 

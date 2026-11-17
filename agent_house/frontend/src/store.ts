@@ -1,13 +1,12 @@
-// Shared state for every page: status, rooms, agents, decisions waiting, the live feed, toasts.
+// Shared state for every page: status, rooms, decisions waiting, the live feed, toasts.
 // Pages load their own lists; what the header and the overview need lives here.
 import { reactive } from 'vue';
-import { api, type Action, type AgentSummary, type Area, type Entity, type FeedItem, type Finding, type Proposal, type Status } from './api';
+import { api, type Action, type Area, type Entity, type FeedItem, type Finding, type Proposal, type Status } from './api';
 
 export const state = reactive({
   status: null as Status | null,
   apiError: '',
   areas: [] as Area[],
-  agents: [] as AgentSummary[],
   names: {} as Record<string, string>, // entity_id → friendly name
   pending: [] as Action[],
   drafts: [] as Proposal[],
@@ -24,12 +23,10 @@ export const state = reactive({
   lang: 'en',
 });
 
-// Cross-page intents: "open this run / proposal / agent" from another page.
+// Cross-page intents: "open this run / proposal" from another page.
 export const nav = reactive({
   runId: '' as string,
   proposalId: '' as string,
-  agentId: '' as string,
-  areaSel: '' as string,
 });
 
 // ── i18n, toasts, theme ──────────────────────────────────────────────────────
@@ -101,9 +98,6 @@ export async function refresh() {
 export async function loadAreas() {
   try { state.areas = await api.get<Area[]>('api/areas'); } catch { /* the banner shows it */ }
 }
-export async function loadAgents() {
-  try { state.agents = await api.get<AgentSummary[]>('api/agents'); } catch { /* banner */ }
-}
 export async function loadNames() {
   try {
     const names: Record<string, string> = {};
@@ -160,11 +154,11 @@ export async function start() {
   applyTheme(stored('theme'));
   await setLang(stored('lang') || 'en');
   await refresh();
-  loadAreas(); loadAgents(); loadNames(); loadPending(); loadAsks();
+  loadAreas(); loadNames(); loadPending(); loadAsks();
   api.get<FeedItem[]>('api/events?limit=200').then((items) => { state.feed = items; }).catch(() => {});
   connectStream();
   setInterval(refresh, 5000);
-  setInterval(() => { loadPending(); loadAgents(); }, 5000);
+  setInterval(loadPending, 5000);
   setInterval(loadAsks, 20000);
   setInterval(() => { loadAreas(); loadNames(); }, 60000);
 }
@@ -172,7 +166,7 @@ export async function start() {
 // ── global actions ───────────────────────────────────────────────────────────
 export async function setMode(mode: 'shadow' | 'live') {
   if (!state.status || state.status.mode === mode) return;
-  if (mode === 'live' && !confirm(t('Switch the global mode to Live? Agents whose own mode is live will be allowed to actuate.'))) return;
+  if (mode === 'live' && !confirm(t('Switch the global mode to Live? The learner and the orchestrator, if their own mode is live, will be allowed to actuate.'))) return;
   try {
     state.status = await api.put<Status>('api/mode', { mode });
     toast(mode === 'live' ? t('Live mode on') : t('Shadow mode on'));
@@ -182,14 +176,14 @@ export async function setMode(mode: 'shadow' | 'live') {
 export async function stopAll() {
   try {
     state.status = await api.put<Status>('api/kill-switch', { engaged: true, reason: 'stopped from the panel' });
-    toast(t('All agents stopped'));
+    toast(t('Everything stopped'));
   } catch (e) { fail(e); }
 }
 export async function resumeAll() {
-  if (!confirm(t('Resume the agents? They act again within their tiers and modes.'))) return;
+  if (!confirm(t('Resume? The learner, the orchestrator and the house manager act again within their tiers and modes.'))) return;
   try {
     state.status = await api.put<Status>('api/kill-switch', { engaged: false });
-    toast(t('Agents resumed'));
+    toast(t('Resumed'));
   } catch (e) { fail(e); }
 }
 export async function decide(id: string, approve: boolean) {

@@ -1,4 +1,4 @@
-<!-- Header of a detail view (agent editor, draft): back, title, actions on the right. -->
+<!-- Header of a detail view (draft, automation): back, title, actions on the right. -->
 <script setup lang="ts">
 import IconButton from './IconButton.vue';
 import { t } from '../store';

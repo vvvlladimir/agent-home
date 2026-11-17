@@ -133,6 +133,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px; display: grid; gap: 20p
 .btn[aria-busy="true"]::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite; }
 .icon-btn { display: inline-grid; place-items: center; width: var(--ctl-h); height: var(--ctl-h); border-radius: var(--r-in); border: 0; background: none; color: var(--muted); text-decoration: none; flex: none; }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+.icon-btn.on { color: var(--accent); }
 .info { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; border: 0; background: none; color: var(--faint); vertical-align: middle; padding: 0; flex: none; }
 .info:hover, .info:focus-visible { color: var(--accent); }
 .info svg.i { width: 16px; height: 16px; }
@@ -196,12 +197,6 @@ input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-
 .ask.first h3 { font-size: 20px; }
 .ask .act { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .ask .act .end { margin-left: auto; display: flex; gap: 2px; }
-.rooms { display: grid; }
-.rm { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 11px 0; border-top: 1px solid var(--line); color: inherit; text-decoration: none; }
-.rm:first-of-type { border-top: 0; }
-.rm:hover b { color: var(--accent); }
-.rm b { font-weight: 600; }
-.rm .last { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── activity feed: marker = what happened ───────────────────────────────── */
 .mk { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; background: var(--line-strong); }
@@ -279,7 +274,8 @@ details > :not(summary) { margin-top: 8px; }
 
 /* ── narrow screens (HA companion app) ────────────────────────────────────── */
 @media (max-width: 760px) {
-  .bar { padding: 8px 12px; }
+  .bar { padding: 8px 12px; gap: 4px 6px; }
+  .bar .status { padding: 4px 3px; }
   .bar .brand span { display: none; }
   .tabs { padding: 0 4px; }
   main { padding: 14px 12px 80px; gap: 16px; }
@@ -360,3 +356,28 @@ details > :not(summary) { margin-top: 8px; }
 .fadd-case { margin-top: 6px; }
 .explain { white-space: pre-wrap; }
 @media (max-width: 900px) { .fbody { grid-template-columns: 1fr; } .finspect { border-left: 0; border-top: 1px solid var(--line); max-height: none; } }
+
+/* ── developer tools ──────────────────────────────────────────────────────── */
+.dev-sec { display: grid; gap: 12px; }
+.dev-head { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.dev-toggle { display: inline-flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; min-height: var(--ctl-h-sm); }
+.dev-toggle h2 { margin: 0; }
+.dev-head .chips { flex: 1 1 8rem; min-width: 0; }
+.dev .chev { width: 8px; height: 8px; border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint); transform: rotate(-45deg); transition: transform .15s; margin: 0 4px 0 2px; }
+.dev-toggle[aria-expanded="true"] .chev { transform: rotate(45deg); }
+.dev-body { display: grid; gap: 12px; min-width: 0; }
+.dev-sub { display: grid; gap: 8px; min-width: 0; padding-left: 12px; border-left: 2px solid var(--line); }
+.dev-h { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; flex-wrap: wrap; }
+.dev-h.big-h { font-size: 16px; margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dev-part { border-top: 0; padding: 0; display: grid; gap: 8px; }
+.dev-part > summary { padding: 4px 0; }
+.dev-table { display: grid; gap: 6px; justify-items: start; min-width: 0; max-width: 100%; }
+.dev-table .table-wrap { max-height: 22rem; overflow: auto; max-width: 100%; width: 100%; }
+.dev-table table { font-size: 13px; }
+.dev-table th, .dev-table td { padding: 6px 10px; white-space: nowrap; }
+.dev-table th { position: sticky; top: 0; background: var(--surface); z-index: 1; font-family: var(--mono); font-weight: 500; }
+.dev-table td.num { font-variant-numeric: tabular-nums; }
+.dev .kv dd { min-width: 0; }
+.dev .kv.card { padding: 12px var(--pad); }
+.dev .stack > *, .dev-sub > *, .dev-body > *, .dev-part > * { min-width: 0; }
+.dev .chips .tag { white-space: normal; overflow-wrap: anywhere; line-height: 1.4; padding: 1px 8px; max-width: 100%; }

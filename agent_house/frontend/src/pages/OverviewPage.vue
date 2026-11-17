@@ -1,19 +1,19 @@
-<!-- Overview: decisions waiting (T2 approvals, drafts, findings), rooms, and what the agents did today. -->
+<!-- Overview: decisions waiting (T2 approvals, drafts, findings), the state of the house's helpers, and what they did today. -->
 <script setup lang="ts">
 import { computed, onActivated, ref } from 'vue';
-import { api, type Area, type FeedItem, type Finding, type ManagerStatus, type Metrics, type Proposal } from '../api';
+import { api, type FeedItem, type Finding, type ManagerStatus, type Metrics, type Proposal } from '../api';
 import AskCard from '../components/AskCard.vue';
 import Chips from '../components/Chips.vue';
 import Icon from '../components/Icon.vue';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
 import TierBadge from '../components/TierBadge.vue';
-import { ago, hm, until } from '../format';
+import { hm, until } from '../format';
 import { actionTip, actionTitle, agentName, areaName, callTitle, findingKind, VERDICT_MARK, VERDICT_TEXT } from '../labels';
 import { go } from '../router';
-import { decide, killed, loadAgents, loadAsks, nav, state, t, toast, withBusy } from '../store';
+import { decide, killed, loadAsks, nav, state, t, toast, withBusy } from '../store';
 
-onActivated(() => { loadAsks(); loadAgents(); loadHealth(); });
+onActivated(() => { loadAsks(); loadHealth(); });
 
 // ── accuracy (D28) and the house manager (D27) ──
 const metrics = ref<Metrics | null>(null);
@@ -37,10 +37,6 @@ const askCount = computed(() => state.pending.length + state.drafts.length + new
 
 function openRun(id?: string | null) { if (id) { nav.runId = id; go('runs'); } }
 function reviewDraft(p: Proposal) { nav.proposalId = p.id; go('proposals'); }
-function openRoom(area: Area) {
-  if (area.agent_id) nav.agentId = area.agent_id; else nav.areaSel = area.area_id;
-  go('agents');
-}
 async function dismissDraft(p: Proposal) {
   const done = await withBusy(p.id, () => api.post(`api/proposals/${p.id}/reject`, { note: 'dismissed on the overview' }), true);
   if (done !== undefined) toast(t('Dismissed'));
@@ -53,17 +49,23 @@ async function finding(f: Finding, action: 'draft' | 'dismiss') {
   loadAsks();
 }
 
-function roomLine(area: Area) {
-  const agent = state.agents.find((a) => a.id === area.agent_id);
-  if (!agent) return { text: t('no agent yet'), live: false, none: true };
-  const run = agent.last_run;
-  const text = !agent.enabled ? t('disabled') : run ? `${run.summary || run.error || run.status} · ${ago(run.started)}` : t('no run yet');
-  return { text, live: agent.effective_mode === 'live', none: false };
-}
+const learner = computed(() => state.status?.learner);
+const orch = computed(() => state.status?.orchestrator);
+const learnerLine = computed(() => {
+  const l = learner.value;
+  if (!l) return '…';
+  if (!l.configured) return t('not set up');
+  if (!l.connected) return t('unreachable');
+  return l.fresh ? t('connected, model fresh') : t('connected, still learning');
+});
+const budgetLine = computed(() => {
+  const b = orch.value?.budget;
+  return b ? `${(b.spent_today_eur ?? 0).toFixed(2)} / ${(b.daily_limit_eur ?? 0).toFixed(2)} €` : '—';
+});
 
-// ── today: what the agents did, one marker per outcome ──
-// Feed kinds that tell the owner what the agents did; state changes and system lines stay in the Live feed.
-const AGENT_KINDS = ['action', 'approval', 'report', 'proposal', 'deploy', 'council', 'run'];
+// ── today: what the learner, the manager and the orchestrator did, one marker per outcome ──
+// Feed kinds that tell the owner what happened; state changes and system lines stay in the Live feed.
+const DONE_KINDS = ['action', 'approval', 'report', 'proposal', 'deploy', 'council', 'run'];
 interface TodayItem { e: FeedItem; mark: string; tip: string; text: string }
 function view(e: FeedItem): TodayItem {
   const d = (e.data || {}) as Record<string, string>;
@@ -79,7 +81,7 @@ function view(e: FeedItem): TodayItem {
 const today = computed(() => {
   const since = new Date().setHours(0, 0, 0, 0) / 1000;
   // successful runs are bookkeeping: a run shows up only when it failed
-  return state.feed.filter((e) => e.ts >= since && AGENT_KINDS.includes(e.kind) && !(e.kind === 'run' && e.level !== 'warning')).map(view);
+  return state.feed.filter((e) => e.ts >= since && DONE_KINDS.includes(e.kind) && !(e.kind === 'run' && e.level !== 'warning')).map(view);
 });
 type Filter = '' | 'would' | 'done' | 'blocked' | 'note';
 const filter = ref<Filter>('');
@@ -133,16 +135,19 @@ const shown = computed(() => today.value.filter((x) => !filter.value || group(x.
       </div>
 
       <div class="sec">
-        <div class="sec-h"><h2>{{ t('Rooms') }}</h2><a class="btn quiet sm" href="#agents">{{ t('Manage') }}</a></div>
-        <div class="card list">
-          <div class="rooms">
-            <a v-for="area in state.areas" :key="area.area_id" class="rm" href="#agents" @click.prevent="openRoom(area)">
-              <b>{{ area.name }}</b>
-              <span class="last" :class="{ faint: roomLine(area).none }">{{ roomLine(area).text }}</span>
-              <span v-if="roomLine(area).live" class="live-dot" :data-tip="t('Acts by itself on T0–T1, asks you for T2.')">{{ t('Live') }}</span>
-            </a>
+        <div class="sec-h"><h2>{{ t('The house') }}</h2><a class="btn quiet sm" href="#council">{{ t('Details') }}</a></div>
+        <div class="card stack">
+          <dl class="kv">
+            <dt>{{ t('Learner') }}</dt>
+            <dd>{{ learnerLine }}<span v-if="learner?.configured" class="faint"> · <template v-if="learner.mode === 'live'">{{ t('Live') }}</template><template v-else>{{ t('Shadow') }}</template></span><Info v-if="learner?.error" :tip="learner.error" /></dd>
+            <dt>{{ t('Orchestrator') }}</dt>
+            <dd>{{ orch?.effective && orch.effective !== 'none' ? `${orch.effective}${orch.model ? ' · ' + orch.model : ''}` : t('no cloud model') }}<span class="faint"> · {{ budgetLine }}</span></dd>
+            <dt>{{ t('Home Assistant') }}</dt>
+            <dd>{{ state.status?.ha?.connected ? `${state.status.ha.entities ?? '—'} ${t('entities')} · ${state.areas.length} ${t('rooms')}` : t('Waiting for Home Assistant…') }}</dd>
+          </dl>
+          <div v-if="state.areas.length" class="chips">
+            <span v-for="area in state.areas" :key="area.area_id" class="tag" :data-tip="`${area.entity_count} ${t('entities')}`">{{ area.name }}</span>
           </div>
-          <p v-if="!state.areas.length" class="empty">{{ state.status?.ha?.connected ? t('Home Assistant has no areas yet.') : t('Waiting for Home Assistant…') }}</p>
         </div>
       </div>
     </div>
@@ -156,7 +161,7 @@ const shown = computed(() => today.value.filter((x) => !filter.value || group(x.
           <dt>{{ t('Precision') }}</dt><dd>{{ pct(metrics?.program.precision.value) }} <span class="faint">n={{ metrics?.program.precision.n ?? 0 }}</span></dd>
           <dt>{{ t('Coverage') }}</dt><dd>{{ pct(metrics?.program.coverage.value) }} <span class="faint">n={{ metrics?.program.coverage.n ?? 0 }}</span></dd>
           <dt>{{ t('Automated share') }}</dt><dd>{{ pct(metrics?.program.house_share.value) }}</dd>
-          <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<Info v-if="manager?.hint" :tip="manager.hint" /><span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span><span v-if="manager" class="faint"> · {{ manager.owned.length }} {{ t('without a room agent') }} <Info :tip="manager.owned_note || ''" /></span></dd>
+          <dt>{{ t('House manager') }}</dt><dd>{{ manager ? (manager.enabled ? `${t('on')} · ${manager.mode}` : t('off')) : '—' }}<Info v-if="manager?.hint" :tip="manager.hint" /><span v-if="manager?.anomalies.length" class="faint"> · {{ manager.anomalies.length }} {{ t('things to look at') }}</span><span v-if="manager" class="faint"> · {{ manager.owned.length }} {{ t('devices it may switch') }} <Info :tip="manager.owned_note || ''" /></span></dd>
         </dl>
         <ul v-if="weakAutos.length" class="feed marks">
           <li v-for="a in weakAutos" :key="a.ha_id"><i class="mk warn" /><span class="msg">{{ a.title || a.ha_id }} · F1 {{ pct(a.f1) }} <span class="where">{{ a.examples?.[0] }}</span></span></li>

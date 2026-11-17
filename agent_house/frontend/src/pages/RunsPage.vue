@@ -1,25 +1,22 @@
-<!-- Runs: every agent run with its trace (replay, copy as a test case) and the action log. -->
+<!-- Runs: every orchestrator run (chat, drafts, reviews, the house manager) with its trace, and the action log. -->
 <script setup lang="ts">
 import { onActivated, onDeactivated, ref } from 'vue';
 import { api, enc, type Action, type Run, type RunSummary, type Step } from '../api';
-import Icon from '../components/Icon.vue';
 import IconButton from '../components/IconButton.vue';
 import TierBadge from '../components/TierBadge.vue';
 import { clock, json, num } from '../format';
 import { actionTip, actionTitle, agentName, VERDICT_MARK } from '../labels';
-import { decide, fail, killed, nav, state, t, toast } from '../store';
+import { decide, fail, killed, nav, state, t } from '../store';
 
 const runs = ref<RunSummary[]>([]);
 const loaded = ref(false);
 const actions = ref<Action[]>([]);
 const sel = ref<Run | null>(null);
-const agent = ref('');
 const status = ref('');
 const STATUSES = ['queued', 'running', 'ok', 'error', 'timeout', 'dropped', 'escalated'];
 
 async function loadRuns() {
   const q = new URLSearchParams({ limit: '100' });
-  if (agent.value) q.set('agent', agent.value);
   if (status.value) q.set('status', status.value);
   try { runs.value = await api.get<RunSummary[]>(`api/runs?${q}`); loaded.value = true; } catch (e) { fail(e); }
   if (sel.value && ['queued', 'running'].includes(sel.value.status)) open(sel.value.id);
@@ -29,30 +26,6 @@ async function loadActions() {
 }
 async function open(id: string) {
   try { sel.value = await api.get<Run>(`api/runs/${enc(id)}`); scrollTo(0, 0); } catch (e) { fail(e); }
-}
-async function replay(id: string) {
-  try {
-    const { run_id } = await api.post<{ run_id: string }>(`api/runs/${enc(id)}/replay`);
-    toast(`${t('Replaying in shadow mode as')} ${run_id}`);
-    await open(run_id);
-    loadRuns();
-  } catch (e) { fail(e); }
-}
-async function copyTestcase(id: string) {
-  try {
-    const text = await api.get<string>(`api/runs/${enc(id)}/testcase`);
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(t('Test case copied. Save it under tests/eval/cases/.'));
-    } catch {
-      // the clipboard needs a secure context; fall back to a download
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([text], { type: 'text/yaml' }));
-      a.download = `run-${id}.yaml`;
-      a.click();
-      toast(t('Test case downloaded.'));
-    }
-  } catch (e) { fail(e); }
 }
 async function decideAndReload(id: string, approve: boolean) {
   await decide(id, approve);
@@ -87,11 +60,8 @@ onDeactivated(() => clearInterval(timer));
   <section class="page">
     <article v-if="sel" class="card stack">
       <div class="sec-h">
-        <h2>{{ t('Trace') }} <span class="mono faint">{{ sel.id }}</span>
-          <span v-if="sel.replay_of" class="tag">{{ t('replay of') }} {{ sel.replay_of }}</span></h2>
+        <h2>{{ t('Trace') }} <span class="mono faint">{{ sel.id }}</span></h2>
         <div class="row">
-          <button class="btn" :data-tip="t('Runs the same wake again in shadow mode.')" @click="replay(sel.id)"><Icon name="refresh" /><span>{{ t('Replay') }}</span></button>
-          <button class="btn quiet" @click="copyTestcase(sel.id)">{{ t('Copy as test case') }}</button>
           <IconButton icon="x" :tip="t('Close')" @click="sel = null" />
         </div>
       </div>
@@ -110,9 +80,6 @@ onDeactivated(() => clearInterval(timer));
 
     <div class="sec">
       <div class="toolbar">
-        <label class="field"><span>{{ t('Agent') }}</span>
-          <select v-model="agent" @change="loadRuns"><option value="">{{ t('All') }}</option>
-            <option v-for="a in state.agents" :key="a.id" :value="a.id">{{ agentName(a.id) }}</option></select></label>
         <label class="field"><span>{{ t('Status') }}</span>
           <select v-model="status" @change="loadRuns"><option value="">{{ t('All') }}</option>
             <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option></select></label>
@@ -120,7 +87,7 @@ onDeactivated(() => clearInterval(timer));
       <div v-if="!loaded" class="sk block" />
       <div v-else-if="runs.length" class="table-wrap">
         <table>
-          <thead><tr><th>{{ t('Time') }}</th><th>{{ t('Agent') }}</th><th>{{ t('Status') }}</th><th>{{ t('Wake') }}</th><th>{{ t('Summary') }}</th><th>{{ t('Latency') }}</th></tr></thead>
+          <thead><tr><th>{{ t('Time') }}</th><th>{{ t('By') }}</th><th>{{ t('Status') }}</th><th>{{ t('Wake') }}</th><th>{{ t('Summary') }}</th><th>{{ t('Latency') }}</th></tr></thead>
           <tbody>
             <tr v-for="r in runs" :key="r.id" class="clickable" :class="{ sel: sel?.id === r.id }" @click="open(r.id)">
               <td class="nowrap">{{ clock(r.started) }}</td>
@@ -135,14 +102,14 @@ onDeactivated(() => clearInterval(timer));
           </tbody>
         </table>
       </div>
-      <p v-else class="card empty">{{ t('No runs yet. Agents run when a wake rule fires, on a schedule or when you wake them.') }}</p>
+      <p v-else class="card empty">{{ t('No runs yet. The orchestrator runs when you chat, ask for a draft, at the daily review and when the house manager wakes it.') }}</p>
     </div>
 
     <div v-if="actions.length" class="sec">
       <div class="sec-h"><h2>{{ t('Actions') }}</h2></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>{{ t('Time') }}</th><th>{{ t('Agent') }}</th><th>{{ t('Action') }}</th><th>{{ t('Tier') }}</th><th>{{ t('Result') }}</th><th /></tr></thead>
+          <thead><tr><th>{{ t('Time') }}</th><th>{{ t('By') }}</th><th>{{ t('Action') }}</th><th>{{ t('Tier') }}</th><th>{{ t('Result') }}</th><th /></tr></thead>
           <tbody>
             <tr v-for="a in actions" :key="a.id">
               <td class="nowrap">{{ clock(a.ts) }}</td>

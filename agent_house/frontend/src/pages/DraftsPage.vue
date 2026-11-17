@@ -122,7 +122,7 @@ onActivated(() => {
           <div class="row">
             <button class="btn primary" :aria-busy="drafting || undefined"
                     :disabled="drafting || !(draft.mode === 'yaml' ? draft.yaml.trim() : draft.request.trim())" @click="create">{{ t('Draft') }}</button>
-            <Info v-if="draft.mode === 'request'" :tip="draft.provider === 'local' ? t('Runs on the Jetson; nothing leaves the house.') : draft.provider ? t('Cloud models get a redacted request and are paid from the daily budget.') : draftedBy()" />
+            <Info v-if="draft.mode === 'request'" :tip="draft.provider ? t('Cloud models get a redacted request and are paid from the daily budget.') : draftedBy()" />
           </div>
           <p v-if="error" class="error">{{ error }}</p>
         </article>

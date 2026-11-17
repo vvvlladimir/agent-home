@@ -1,15 +1,13 @@
-<!-- Chat with the orchestrator (reads, drafts) or a room agent (a normal run: same tiers, same shadow mode). -->
+<!-- Chat with the orchestrator (reads the house, drafts automations; it never switches anything itself). -->
 <script setup lang="ts">
 import { ref } from 'vue';
 import { api, type Run } from '../api';
 import IconButton from '../components/IconButton.vue';
 import Info from '../components/Info.vue';
-import { agentName, areaName } from '../labels';
 import { go } from '../router';
-import { killed, nav, state, t } from '../store';
+import { killed, nav, t } from '../store';
 
 interface Message { role: 'user' | 'assistant'; text: string; tools?: string[]; run?: string; shadow?: boolean }
-const target = ref('orchestrator');
 const session = ref('');
 const log = ref<Message[]>([]);
 const input = ref('');
@@ -30,7 +28,7 @@ async function send() {
   log.value.push({ role: 'user', text: message });
   try {
     const out = await api.post<{ session_id: string; reply: string; run: Run }>('api/chat',
-      { target: target.value, message, ...(session.value ? { session_id: session.value } : {}) });
+      { target: 'orchestrator', message, ...(session.value ? { session_id: session.value } : {}) });
     session.value = out.session_id;
     const tools = (out.run.trace || []).filter((s) => s.type === 'tool' || s.type === 'policy').map(toolLine);
     log.value.push({ role: 'assistant', text: out.reply, tools, run: out.run.id, shadow: out.run.shadow });
@@ -48,18 +46,13 @@ function openRun(id: string) { nav.runId = id; go('runs'); }
 <template>
   <section class="page">
     <div class="toolbar">
-      <label class="field"><span>{{ t('Talk to') }}</span>
-        <select v-model="target" @change="reset">
-          <option value="orchestrator">{{ t('Orchestrator') }}</option>
-          <option v-for="a in state.agents.filter((a) => a.enabled)" :key="a.id" :value="a.id">{{ areaName(a.room) }} · {{ a.name }}</option>
-        </select></label>
-      <Info style="align-self: center" :tip="t('The orchestrator reads and drafts automations; it never switches anything. A room agent answers through a normal run: same tiers, same shadow mode. Every turn is a trace under Activity → Runs.')" />
+      <Info :tip="t('The orchestrator reads and drafts automations; it never switches anything. Every turn is a trace under Activity → Runs.')" />
       <button v-if="log.length" class="btn quiet" style="margin-left: auto" @click="reset">{{ t('New conversation') }}</button>
     </div>
     <div class="card chat">
       <div v-for="(m, i) in log" :key="i" class="msg-row" :class="{ you: m.role === 'user' }">
         <div v-if="m.role !== 'user'" class="who">
-          <span>{{ target === 'orchestrator' ? t('Orchestrator') : agentName(target) }}</span>
+          <span>{{ t('Orchestrator') }}</span>
           <i v-if="m.shadow && m.tools?.length" class="mk would" :data-tip="t('Shadow: nothing was switched')" />
           <IconButton v-if="m.run" icon="trace" :tip="t('Open trace')" @click="openRun(m.run)" />
         </div>

@@ -29,7 +29,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Switch the global mode. `live` only affects agents whose own mode is live. */
+        /** Switch the global mode. `live` only affects actors whose own mode is live (orchestrator_mode, learner_mode). */
         put: operations["setMode"];
         post?: never;
         delete?: never;
@@ -121,100 +121,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listAgents"];
-        put?: never;
-        /** @description `id` and `name` may be left out: they follow from `room` (its slug, the area's name). 422 lists every invalid field at once; also when HA is connected and the room is not one of its areas (with the closest area id) or an entity is unknown to it. 409 when the id exists. */
-        post: operations["createAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/suggest-rules": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Wake rules suggested from the devices of a room; nothing is saved
-         * @description Deterministic, no model. One event rule per kind found in the room (smoke / gas / leak as alarm, doors and windows, locks and garage doors (T3: report, never act), motion, cold, low batteries, fridges losing power, problem sensors), each with exact entity ids and a reason. The editor fills a new agent's wake rules with them; the owner keeps or edits them. 422 when HA is connected and the room is not one of its areas.
-         */
-        get: operations["suggestWakeRules"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        get: operations["getAgent"];
-        /** @description 422 when HA is connected and a changed room or a newly added entity is unknown to it. */
-        put: operations["updateAgent"];
-        post?: never;
-        delete: operations["deleteAgent"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}/wake": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Manual wake (queued like any other wake); returns the run id */
-        post: operations["wakeAgent"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/{agent_id}/prompt-preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Render the prompt for a (possibly unsaved) config against the current state; no LLM call */
-        post: operations["previewPrompt"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/runs": {
         parameters: {
             query?: never;
@@ -241,44 +147,6 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getRun"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/runs/{run_id}/replay": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: components["parameters"]["run_id"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Re-run the recorded context against the current model. Replays are always shadow, whatever the mode. */
-        post: operations["replayRun"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/runs/{run_id}/testcase": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: components["parameters"]["run_id"];
-            };
-            cookie?: never;
-        };
-        /** The run as a YAML eval scenario (copy-as-test-case) */
-        get: operations["runAsTestcase"];
         put?: never;
         post?: never;
         delete?: never;
@@ -346,7 +214,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Agent reports waiting for (or handled by) the orchestrator */
+        /** The owner's inbox - the orchestrator's reports (review, first look, house manager, budget) and unusual-state notes */
         get: operations["listInbox"];
         put?: never;
         post?: never;
@@ -670,7 +538,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** House mode, ownership summary, the shared board, the daily review's state */
+        /** House mode, ownership summary, the orchestrator's wakes, the daily review's state */
         get: operations["getCouncil"];
         put?: never;
         post?: never;
@@ -689,7 +557,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** The one agent that owns an entity (`orchestrator` for entities without a room agent) */
+        /** The one actor that owns an entity (D40 - `orchestrator`, or null for network pairing switches) */
         get: operations["getOwner"];
         put?: never;
         post?: never;
@@ -844,7 +712,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Accuracy of each automation of ours and each room agent, and the house score (D28; no model) */
+        /** Accuracy of each automation of ours and each actor (orchestrator, learner), and the house score (D28; no model) */
         get: operations["getMetrics"];
         put?: never;
         post?: never;
@@ -897,58 +765,8 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** One chat turn with the orchestrator or a room agent; answers when the run finishes */
+        /** One chat turn with the orchestrator; answers when the run finishes (404 for any other target) */
         post: operations["chat"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/models/profiles": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listProfiles"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/models/active": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Ask the Jetson to make this profile the resident model; state goes `warming` until healthy */
-        put: operations["setActiveProfile"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/benchmarks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["listBenchmarks"];
-        put?: never;
-        /** Run speed + tool-call eval against the current server (low priority, one at a time) */
-        post: operations["runBenchmark"];
         delete?: never;
         options?: never;
         head?: never;
@@ -966,6 +784,23 @@ export interface paths {
         get: operations["getSettings"];
         /** Change GUI-editable settings (stored in /data/settings.yaml). Add-on options (HA Configuration tab) stay read-only here. */
         put: operations["putSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/dev": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Developer tools (D40) - one read-only snapshot of the add-on's internals: the learner and the house model as received from the Jetson, the house manager, the orchestrator's providers and last calls, the policy, the council, the store, Home Assistant and the effective configuration. Secrets are masked; no prompt or model answer is in it. */
+        get: operations["getDev"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1031,6 +866,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** All or nothing. `agents` and `active_profile` of an export from before 0.5.0 are ignored and named in `ignored`. */
         post: operations["importConfig"];
         delete?: never;
         options?: never;
@@ -1074,11 +910,9 @@ export interface components {
                 reason?: string | null;
             };
             ha: components["schemas"]["HaStatus"];
-            llm: components["schemas"]["LlmStatus"];
-            jetson: components["schemas"]["JetsonStatus"];
+            learner: components["schemas"]["LearnerBrief"];
             orchestrator: components["schemas"]["OrchestratorStatus"];
             counts: {
-                agents?: number;
                 pending_approvals?: number;
                 draft_proposals?: number;
                 deployed_automations?: number;
@@ -1098,45 +932,29 @@ export interface components {
             areas?: number;
             entities?: number;
         };
-        LlmStatus: {
-            /** @enum {string} */
-            state: "unconfigured" | "ok" | "warming" | "busy" | "unreachable" | "degraded";
-            url?: string | null;
-            active_profile?: string | null;
-            model?: string | null;
-            queue_depth?: number;
-            /** @description priority class of the request being served */
-            in_flight?: string | null;
-            /** @description how long the request being served has been running */
-            in_flight_s?: number | null;
-            last_error?: string | null;
-            /** @description rolling median */
-            decode_tps?: number | null;
-            prefill_tps?: number | null;
-            ttft_ms?: number | null;
-            requests_total?: number;
-            dropped_total?: number;
-            errors_total?: number;
-            retries_total?: number;
-        };
-        JetsonStatus: {
-            reachable: boolean;
-            configured?: boolean;
-            last_seen?: number | null;
-            /** @description schemas/jetson_metrics.schema.json */
-            metrics?: Record<string, never> | null;
+        /** @description the Jetson learner in one line (D38); details in LearnerInfo */
+        LearnerBrief: {
+            /** @description jetson_learner_url is set */
+            configured: boolean;
+            connected: boolean;
+            mode: components["schemas"]["Mode"];
+            /** @description a house model trained in the last 48 h is stored */
+            fresh: boolean;
+            error?: string | null;
         };
         OrchestratorStatus: {
-            /** @enum {string} */
-            provider: "anthropic" | "openai" | "local" | "auto";
+            /**
+             * @description the setting (`local` from before 0.5.0 reads as auto)
+             * @enum {string}
+             */
+            provider: "anthropic" | "openai" | "auto";
             /**
              * @description what a request would use right now
              * @enum {string}
              */
-            effective?: "anthropic" | "openai" | "local" | "none";
-            /** @description which models the owner can pick per request (local reachable, cloud key set) */
+            effective?: "anthropic" | "openai" | "none";
+            /** @description which cloud models the owner can pick per request (key set) */
             choices?: {
-                local?: boolean;
                 anthropic?: boolean;
                 openai?: boolean;
             };
@@ -1153,7 +971,6 @@ export interface components {
             area_id: string;
             name: string;
             entity_count: number;
-            agent_id?: string | null;
         };
         Entity: {
             entity_id: string;
@@ -1172,7 +989,7 @@ export interface components {
         FeedItem: {
             id: number;
             ts: number;
-            /** @description state | wake | gate_drop | run | action | approval | report | proposal | deploy | system | board | council */
+            /** @description state | gate_drop | action | approval | report | proposal | deploy | system | council */
             kind: string;
             summary: string;
             agent_id?: string | null;
@@ -1185,29 +1002,13 @@ export interface components {
             level: "debug" | "info" | "warning" | "error";
             data?: Record<string, never> | null;
         };
-        /** @description see schemas/agent_config.schema.json (the single source of truth) */
-        AgentConfig: Record<string, never>;
-        AgentSummary: {
-            id: string;
-            name: string;
-            room: string;
-            enabled: boolean;
-            mode: components["schemas"]["Mode"];
-            effective_mode?: components["schemas"]["Mode"];
-            /** @description entities the agent may read or use (prompt + findable) */
-            entity_count?: number;
-            /** @description plain words: which entities it sees and why (entities, entities_mode, max_entities) */
-            scope?: string;
-            last_run?: components["schemas"]["RunSummary"] | null;
-            wakes_last_hour?: number;
-        };
         RunSummary: {
             id: string;
-            /** @description agent id or `orchestrator` */
+            /** @description `orchestrator` (runs before 0.5.0 may name a room agent) */
             agent_id: string;
             status: components["schemas"]["RunStatus"];
-            /** @enum {string} */
-            wake_source?: "event" | "cron" | "poke" | "chat" | "manual" | "replay" | "schedule" | "task" | "review";
+            /** @description manual (the owner), poke (review, house manager drafts), chat, review, manage (the house manager); older runs: event, cron, schedule, task, replay */
+            wake_source?: string;
             wake_reason?: string | null;
             started: number;
             ended?: number | null;
@@ -1229,14 +1030,13 @@ export interface components {
             idx: number;
             ts: number;
             /** @enum {string} */
-            type: "context" | "llm" | "tool" | "policy" | "repair" | "error" | "final";
+            type: "context" | "origin" | "llm" | "tool" | "policy" | "repair" | "error" | "final";
             latency_ms?: number | null;
             tokens_in?: number | null;
             tokens_out?: number | null;
             /**
-             * @description context: {system, user, tools}; llm: {request_messages_added, content, tool_calls, timings, finish_reason};
-             *     tool: {name, arguments, result, ok}; policy: an Action; repair: {raw, repaired, method};
-             *     error: {message}; final: {text}
+             * @description context: {system, user}; llm: {provider, model, content, tool_calls, finish_reason, eur};
+             *     tool: {name, arguments, result}; final: {text}
              */
             data?: Record<string, never>;
         };
@@ -1244,6 +1044,7 @@ export interface components {
             id: string;
             ts: number;
             run_id?: string | null;
+            /** @description orchestrator | learner (older rows may name a room agent) */
             agent_id: string;
             domain: string;
             service: string;
@@ -1268,10 +1069,10 @@ export interface components {
             status: "new" | "seen" | "handled";
         };
         /**
-         * @description the model for this one request; absent = the add-on setting orchestrator_provider
+         * @description the model for this one request; absent (or anything else, `local` included) = the add-on setting orchestrator_provider
          * @enum {string}
          */
-        ProviderChoice: "local" | "anthropic" | "openai" | "auto";
+        ProviderChoice: "anthropic" | "openai" | "auto";
         Proposal: {
             id: string;
             created: number;
@@ -1335,17 +1136,6 @@ export interface components {
                 note?: string | null;
             }[];
         };
-        BoardEntry: {
-            id: number;
-            ts: number;
-            agent_id: string;
-            /** @enum {string} */
-            kind: "fact" | "task" | "report" | "escalation";
-            text: string;
-            expires: number;
-            target?: string | null;
-            run_id?: string | null;
-        };
         Council: {
             /** @enum {string|null} */
             mode: "home" | "away" | "night" | "guests" | "work" | null;
@@ -1355,21 +1145,18 @@ export interface components {
             modes: string[];
             auto_house_mode: boolean;
             orchestrator_mode: components["schemas"]["Mode"];
+            learner_mode: components["schemas"]["Mode"];
             night_window?: string;
             ownership: {
-                /** @description owner → number of entities */
+                /** @description owner → number of entities (`orchestrator`, `nobody` for pairing switches) */
                 counts?: {
                     [key: string]: number;
                 };
-                shared_rooms?: {
-                    [key: string]: string[];
-                };
             };
-            board: components["schemas"]["BoardEntry"][];
             /** @description The fixed rules that wake the orchestrator, with the last time each fired. */
             orchestrator_wakes: {
                 /** @enum {string} */
-                id: "house_mode" | "person" | "daily_review" | "escalation" | "manager_sweep";
+                id: "person" | "daily_review" | "manager_sweep";
                 rule: string;
                 /** @description false: the rule is switched off (auto_house_mode off, no daily_review_at) */
                 active: boolean;
@@ -1432,7 +1219,7 @@ export interface components {
             last_run_id?: string | null;
             /** @description what the deterministic prefilter would wake the model for */
             anomalies: string[];
-            /** @description entities the manager may actuate (no room agent owns them; no config/diagnostic entities, no pairing switches) */
+            /** @description entities the manager may actuate (switchable, visible; no config/diagnostic entities, no pairing switches, no device noise) */
             owned: string[];
             /** @description plain-language explanation of `owned` for the owner */
             owned_note?: string;
@@ -1470,6 +1257,7 @@ export interface components {
                 /** @description Earlier versions with outcomes in the window, each scored over its own time span (same fields, no `previous`); the program counts include them. */
                 previous?: Record<string, never>[];
             }[];
+            /** @description per actor of ours that acted live (`orchestrator`, `learner`) */
             agents: {
                 agent_id: string;
                 kept: number;
@@ -1594,21 +1382,116 @@ export interface components {
                 detail?: string;
             }[];
         };
-        ModelProfile: {
-            name: string;
-            model: string;
-            ctx_size?: number;
-            max_output_tokens?: number;
-            temperature?: number;
-            top_p?: number;
-            top_k?: number;
-            presence_penalty?: number;
-            thinking?: boolean;
-            /** @description true until an owner benchmark confirmed it */
-            provisional?: boolean;
-            experimental?: boolean;
-            active?: boolean;
-            notes?: string;
+        DevSnapshot: {
+            version: string;
+            /** Format: date-time */
+            time: string;
+            /** @description LearnerInfo plus what the Jetson came up with */
+            learner: components["schemas"]["LearnerInfo"] & {
+                /** @description devices the learner may act on now (fresh model's live targets, no helpers) */
+                targets: string[];
+                /** @description what the learner knows as short lines (the orchestrator's prompts get these) */
+                facts: string[];
+                /** @description The stored house model as received (schemas/house_model.schema.json): habits, routines, dependencies, corrections, timeouts, usual_states, event_relevance, health, modes, asks, live; null before the first training */
+                house_model: Record<string, never> | null;
+                /** @description the last 50 live suggestions and the actuator's verdict for each */
+                live_suggestions: {
+                    ts?: number;
+                    entity_id?: string;
+                    state?: string;
+                    p?: number | null;
+                    verdict?: components["schemas"]["Verdict"];
+                    action_id?: string;
+                }[];
+                tables?: {
+                    /** @description devices in the learner's usual-state table (unusual notes) */
+                    usual_states?: number;
+                    /** @description `learner` when the last scan used the learner's habits, null for the add-on's own scan */
+                    habits_source?: string | null;
+                };
+            };
+            manager: components["schemas"]["ManagerStatus"] & {
+                /** @description epoch seconds of the last sweep */
+                last_sweep?: number | null;
+                /** @description the last manager runs (traces at api/runs/{id}) */
+                runs?: {
+                    id?: string;
+                    started?: number;
+                    status?: components["schemas"]["RunStatus"];
+                    provider?: string | null;
+                    tokens_in?: number;
+                    tokens_out?: number;
+                    shadow?: boolean;
+                }[];
+            };
+            orchestrator: components["schemas"]["OrchestratorStatus"] & {
+                /** @description the order a request tries now */
+                providers: ("anthropic" | "openai")[];
+                redact_cloud?: boolean;
+                /** @description the last 20 model calls since the add-on started, newest first; never a prompt */
+                last_calls: {
+                    ts: number;
+                    /** @description draft | habit | undo | conflict | explain | chat | routine | manage */
+                    task: string;
+                    provider: string;
+                    model?: string | null;
+                    tokens_in?: number;
+                    tokens_out?: number;
+                    eur?: number;
+                    ok: boolean;
+                    error?: string | null;
+                }[];
+            };
+            policy: {
+                mode: components["schemas"]["Mode"];
+                kill_switch: Record<string, never>;
+                /** @description T0..T3 → entities in HA with that tier */
+                tiers: {
+                    [key: string]: number;
+                };
+                t3_whitelist?: string[];
+                pending_approvals?: number;
+                /** @description the last 20 policy decisions (the action log) */
+                recent: {
+                    id?: string;
+                    ts?: number;
+                    agent_id?: string;
+                    domain?: string;
+                    service?: string;
+                    entity_ids?: string[];
+                    tier?: components["schemas"]["Tier"];
+                    verdict?: components["schemas"]["Verdict"];
+                    reason?: string;
+                }[];
+            };
+            /** @description Council without review / last_scan / first_look (api/council has those) */
+            council: Record<string, never>;
+            store: {
+                path?: string;
+                /** @description rows per table */
+                rows?: {
+                    [key: string]: number;
+                };
+            };
+            ha: components["schemas"]["HaStatus"] & {
+                /** @description LearnerBrief plus the forwarder's buffer: events waiting, lost, sent */
+                forwarder?: {
+                    configured?: boolean;
+                    connected?: boolean;
+                    mode?: components["schemas"]["Mode"];
+                    fresh?: boolean;
+                    error?: string | null;
+                    buffered?: number;
+                    dropped?: number;
+                    pushed?: number;
+                };
+            };
+            config: {
+                /** @description add-on options, secrets "***", URLs without credentials */
+                options?: Record<string, never>;
+                /** @description GUI-editable settings */
+                runtime?: Record<string, never>;
+            };
         };
         Settings: {
             /** @description add-on options (read-only here) */
@@ -1630,7 +1513,6 @@ export interface components {
         };
     };
     parameters: {
-        agent_id: string;
         run_id: string;
         proposal_id: string;
         ha_id: string;
@@ -1804,215 +1686,6 @@ export interface operations {
             };
         };
     };
-    listAgents: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentSummary"][];
-                };
-            };
-        };
-    };
-    createAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentConfig"];
-            };
-        };
-        responses: {
-            /** @description created */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentConfig"];
-                };
-            };
-            409: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
-    };
-    suggestWakeRules: {
-        parameters: {
-            query: {
-                /** @description area_id */
-                room: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        room: string;
-                        /** @description items as wake_rules.events in schemas/agent_config.schema.json */
-                        rules: Record<string, never>[];
-                    };
-                };
-            };
-            422: components["responses"]["Error"];
-        };
-    };
-    getAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentConfig"];
-                };
-            };
-            404: components["responses"]["Error"];
-        };
-    };
-    updateAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AgentConfig"];
-            };
-        };
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentConfig"];
-                };
-            };
-            404: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
-    };
-    deleteAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description deleted */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    wakeAgent: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    reason?: string;
-                };
-            };
-        };
-        responses: {
-            /** @description queued */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        run_id: string;
-                    };
-                };
-            };
-        };
-    };
-    previewPrompt: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                agent_id: components["parameters"]["agent_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["AgentConfig"];
-            };
-        };
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        system: string;
-                        user: string;
-                        /** @description ≈ chars/3.5; not the model tokenizer */
-                        tokens_estimate: number;
-                        budget?: number;
-                        entities_included?: number;
-                        entities_dropped?: string[];
-                    };
-                };
-            };
-        };
-    };
     listRuns: {
         parameters: {
             query?: {
@@ -2059,52 +1732,6 @@ export interface operations {
                 };
             };
             404: components["responses"]["Error"];
-        };
-    };
-    replayRun: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: components["parameters"]["run_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description queued */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        run_id: string;
-                    };
-                };
-            };
-        };
-    };
-    runAsTestcase: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                run_id: components["parameters"]["run_id"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/yaml": string;
-                };
-            };
         };
     };
     getPolicy: {
@@ -2801,7 +2428,7 @@ export interface operations {
                 content: {
                     "application/json": {
                         entity_id: string;
-                        owner: string;
+                        owner: string | null;
                         area?: string | null;
                     };
                 };
@@ -3078,8 +2705,11 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description `orchestrator` or an agent id */
-                    target: string;
+                    /**
+                     * @default orchestrator
+                     * @enum {string}
+                     */
+                    target?: "orchestrator";
                     message: string;
                     session_id?: string;
                 };
@@ -3099,119 +2729,6 @@ export interface operations {
                     };
                 };
             };
-        };
-    };
-    listProfiles: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description ok */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelProfile"][];
-                };
-            };
-        };
-    };
-    setActiveProfile: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    profile: string;
-                };
-            };
-        };
-        responses: {
-            /** @description swapping */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LlmStatus"];
-                };
-            };
-            409: components["responses"]["Error"];
-        };
-    };
-    listBenchmarks: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description newest first; `report` follows schemas/bench_report.schema.json and is null until the run is done */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        id: string;
-                        /** Format: date-time */
-                        created: string;
-                        profile: string;
-                        source: string;
-                        /** @enum {string} */
-                        status: "running" | "done" | "error";
-                        report: Record<string, never> | null;
-                        /** @description only while running */
-                        progress?: {
-                            done?: number;
-                            total?: number;
-                            label?: string;
-                        };
-                    }[];
-                };
-            };
-        };
-    };
-    runBenchmark: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    profile?: string;
-                    /** @default false */
-                    quick?: boolean;
-                };
-            };
-        };
-        responses: {
-            /** @description started */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        id: string;
-                    };
-                };
-            };
-            409: components["responses"]["Error"];
         };
     };
     getSettings: {
@@ -3254,6 +2771,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    getDev: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ok */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevSnapshot"];
                 };
             };
         };
@@ -3315,7 +2852,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description YAML with agents, policy, profiles, settings (no secrets) */
+            /** @description YAML with the policy and the GUI settings (no secrets) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3345,7 +2882,11 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": Record<string, never>;
+                    "application/json": {
+                        policy: boolean;
+                        settings: boolean;
+                        ignored: ("agents" | "active_profile")[];
+                    };
                 };
             };
             422: components["responses"]["Error"];

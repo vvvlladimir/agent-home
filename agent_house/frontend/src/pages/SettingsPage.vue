@@ -1,11 +1,11 @@
-<!-- General settings: global mode, language, local model requests, backup, diagnostics, add-on options. -->
+<!-- General settings: global mode, language, the orchestrator and the learner, backup, diagnostics, add-on options. -->
 <script setup lang="ts">
 import { computed, onActivated, ref } from 'vue';
 import { api, type Settings } from '../api';
 import Info from '../components/Info.vue';
 import Seg from '../components/Seg.vue';
 import { fmt } from '../format';
-import { loadAgents, setLang, setMode, state, t, toast } from '../store';
+import { setLang, setMode, state, t, toast } from '../store';
 
 const settings = ref<Settings | null>(null);
 const form = ref<Record<string, string>>({});
@@ -44,10 +44,9 @@ async function importConfig(event: Event) {
   if (!file) return;
   configError.value = '';
   try {
-    const out = await api.postText<{ agents: string[]; set_to_shadow: string[] }>('api/config/import', await file.text(), 'text/yaml');
-    toast(`${t('Imported agents:')} ${out.agents.join(', ') || '—'}${out.set_to_shadow.length ? ` · ${t('set to shadow:')} ${out.set_to_shadow.join(', ')}` : ''}`);
+    const out = await api.postText<{ policy: boolean; settings: boolean; ignored: string[] }>('api/config/import', await file.text(), 'text/yaml');
+    toast(`${t('Imported.')}${out.ignored.length ? ` ${t('Ignored (room agents are gone):')} ${out.ignored.join(', ')}` : ''}`);
     load();
-    loadAgents();
   } catch (e) { configError.value = (e as Error).message; }
 }
 
@@ -55,11 +54,6 @@ const MODES = [['shadow', 'Shadow'], ['live', 'Live']] as const;
 const mode = computed({ get: () => state.status?.mode ?? 'shadow', set: (m) => setMode(m) });
 const lang = computed({ get: () => state.lang, set: (l) => setLang(l) });
 const FIELDS: { key: string; label: string; type?: string; min?: number; max?: number; step?: number; placeholder?: string }[] = [
-  { key: 'llm_timeout_s', label: 'Timeout per request (s)', min: 5, max: 900 },
-  { key: 'llm_max_retries', label: 'Retries', min: 0, max: 5 },
-  { key: 'llm_stale_after_s', label: 'Drop stale wakes (s)', min: 1, max: 3600 },
-  { key: 'llm_max_queue', label: 'Queue length', min: 1, max: 100 },
-  { key: 'llm_presence_penalty', label: 'Presence penalty', min: 0, max: 2, step: 0.1, placeholder: 'profile' },
   { key: 'daily_review_at', label: 'Daily review at', type: 'text', placeholder: '04:30' },
   { key: 'habit_days', label: 'Habits: days of history', min: 3, max: 30 },
   { key: 'habit_min_repeats', label: 'Habits: min. days', min: 3, max: 50 },
@@ -77,7 +71,7 @@ onActivated(load);
           <h2>{{ t('Mode') }}</h2>
           <div class="row">
             <Seg v-model="mode" :options="MODES" :label="t('Mode')" />
-            <Info :tip="t('Shadow: agents observe and log what they would do. Live: agents whose own mode is live may act, within their tiers.')" />
+            <Info :tip="t('Shadow: nothing is switched; the actors only log what they would do. Live: the learner and the orchestrator may act, within their tiers, when their own mode is live.')" />
           </div>
           <div class="fields">
             <label class="field"><span>{{ t('Language') }}</span><select v-model="lang"><option value="en">English</option></select></label>
@@ -85,7 +79,7 @@ onActivated(load);
         </article>
 
         <article class="card stack">
-          <h2>{{ t('Backup') }} <Info :tip="t('Agents, policy and these settings as one YAML file. No add-on options, so no secrets. Imported agents always start in shadow mode.')" /></h2>
+          <h2>{{ t('Backup') }} <Info :tip="t('Policy and these settings as one YAML file. No add-on options, so no secrets.')" /></h2>
           <div class="row">
             <a class="btn" href="api/config/export" download="agent-house-config.yaml">{{ t('Export') }}</a>
             <label class="btn"><span>{{ t('Import…') }}</span><input type="file" accept=".yaml,.yml,text/yaml" hidden @change="importConfig" /></label>
@@ -116,7 +110,7 @@ onActivated(load);
             </div>
             <div class="row">
               <Seg v-model="form.learner_mode" :options="MODES" :label="t('Learner mode')" />
-              <Info :tip="t('What the learner on the Jetson suggests live goes through the same checks as every agent, on devices no room agent owns. In shadow it only logs what it would have switched.')" />
+              <Info :tip="t('What the learner on the Jetson suggests live goes through the same safety checks as everything else. In shadow it only logs what it would have switched.')" />
             </div>
             <div class="fields">
               <label class="field"><span>{{ t('Night window') }}</span><input v-model="form.night_window" type="text" class="mono" placeholder="23:00-06:00" /></label>
@@ -124,7 +118,7 @@ onActivated(load);
             <div class="row">
               <label class="field check"><input type="checkbox" :checked="form.manager_enabled === 'true'"
                 @change="form.manager_enabled = ($event.target as HTMLInputElement).checked ? 'true' : 'false'" /> <span>{{ t('House manager') }}</span></label>
-              <Info :tip="t('Between reviews the orchestrator checks the house (lights on with nobody home, failed room runs, weak automations) and acts on entities no room agent owns. The model is called only when the check finds something. Its actions follow the orchestrator mode.')" />
+              <Info :tip="t('Between reviews the orchestrator checks the house (lights on with nobody home, weak automations) and may act on any switchable device. The model is called only when the check finds something. Its actions follow the orchestrator mode.')" />
             </div>
             <div class="fields">
               <label class="field"><span>{{ t('Check every (min, 0 = off)') }}</span><input v-model="form.manager_sweep_min" type="number" min="0" max="1440" /></label>
@@ -134,13 +128,13 @@ onActivated(load);
           </form>
         </article>
         <article class="card stack">
-          <h2>{{ t('Local model requests') }} <Info :tip="t('Stored in /data/settings.yaml. Empty = default.')" /></h2>
+          <h2>{{ t('Reviews and habits') }} <Info :tip="t('Stored in /data/settings.yaml. Empty = default.')" /></h2>
           <form class="stack" @submit.prevent="save">
             <div class="fields">
               <label v-for="f in FIELDS" :key="f.key" class="field"><span>{{ t(f.label) }}</span>
                 <input v-model="form[f.key]" :type="f.type || 'number'" :class="{ mono: f.type === 'text' }" :min="f.min" :max="f.max" :step="f.step ?? 1" :placeholder="f.placeholder && t(f.placeholder)" /></label>
               <label class="field" style="grid-column: 1 / -1"><span>{{ t('Kill switch helper') }}
-                <Info :tip="t('Optional input_boolean in Home Assistant that stops all agents when on.')" /></span>
+                <Info :tip="t('Optional input_boolean in Home Assistant that stops everything when on.')" /></span>
                 <input v-model="form.kill_switch_entity" type="text" class="mono" placeholder="input_boolean.agent_house_kill" /></label>
             </div>
             <div class="row"><button class="btn primary" type="submit">{{ t('Save') }}</button><p v-if="error" class="error">{{ error }}</p></div>
